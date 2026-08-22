@@ -23,6 +23,10 @@ export interface VideoParams {
   audioBitrateKbps?: number;
   format: string; // mp4 | mkv | webm | mov
   preset: string;
+  startTime?: number; // trim start offset, seconds
+  duration?: number; // trim length, seconds (undefined = to end)
+  extractAudio?: boolean; // extract audio track only from a video
+  extractFormat?: string; // mp3 | aac | m4a | opus | flac (used when extractAudio)
 }
 
 export interface ImageParams {

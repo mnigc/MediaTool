@@ -64,7 +64,24 @@ fn vp9_cpu_used(preset: &str) -> u32 {
 }
 
 fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) -> Vec<String> {
-    let mut a: Vec<String> = vec!["-i".into(), info.path.clone()];
+    let mut a: Vec<String> = vec![];
+
+    if let Some(start) = p.start_time {
+        if start > 0.0 {
+            a.push("-ss".into());
+            a.push(format!("{:.3}", start));
+        }
+    }
+
+    a.push("-i".into());
+    a.push(info.path.clone());
+
+    if let Some(dur) = p.duration {
+        if dur > 0.0 {
+            a.push("-t".into());
+            a.push(format!("{:.3}", dur));
+        }
+    }
 
     if let Some(vf) = resolution_vf(&p.resolution) {
         a.push("-vf".into());
@@ -245,8 +262,28 @@ fn build_audio_args(info: &MediaInfo, p: &AudioParams, out: &Path) -> Vec<String
     a
 }
 
+fn audio_ext_for(codec: &str) -> &'static str {
+    match codec {
+        "aac" | "m4a" => "m4a",
+        "opus" => "opus",
+        "flac" => "flac",
+        _ => "mp3",
+    }
+}
+
 fn extension_for(media_type: MediaType, params: &serde_json::Value) -> String {
+    let extract_audio = params
+        .get("extractAudio")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     match media_type {
+        MediaType::Video if extract_audio => {
+            let fmt = params
+                .get("extractFormat")
+                .and_then(|f| f.as_str())
+                .unwrap_or("mp3");
+            audio_ext_for(fmt).to_string()
+        }
         MediaType::Video => params
             .get("format")
             .and_then(|f| f.as_str())
@@ -280,7 +317,18 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<String> {
     let args: Vec<String> = match req.media_type {
         MediaType::Video => {
             let p: VideoParams = parse_params(&req.params)?;
-            build_video_args(&info, &p, &out)
+            if p.extract_audio.unwrap_or(false) {
+                let ap = AudioParams {
+                    format: audio_ext_for(
+                        p.extract_format.as_deref().unwrap_or("mp3"),
+                    )
+                    .to_string(),
+                    bitrate_kbps: p.audio_bitrate_kbps.unwrap_or(128),
+                };
+                build_audio_args(&info, &ap, &out)
+            } else {
+                build_video_args(&info, &p, &out)
+            }
         }
         MediaType::Image => {
             let p: ImageParams = parse_params(&req.params)?;
@@ -444,6 +492,10 @@ mod tests {
             audio_bitrate_kbps: Some(128),
             format: "mp4".into(),
             preset: "medium".into(),
+            start_time: None,
+            duration: None,
+            extract_audio: None,
+            extract_format: None,
         }
     }
 
@@ -460,6 +512,50 @@ mod tests {
         assert!(args.contains(&"-progress".to_string()));
         assert!(args.contains(&"pipe:1".to_string()));
         assert_eq!(args.last().unwrap(), "out.mp4");
+    }
+
+    #[test]
+    fn video_trim_args() {
+        let mut p = video_params();
+        p.start_time = Some(5.5);
+        p.duration = Some(10.0);
+        let args = build_video_args(&sample_info(), &p, Path::new("o.mp4"));
+        let ss_idx = args.iter().position(|a| a == "-ss").unwrap();
+        assert_eq!(args[ss_idx + 1], "5.500");
+        let i_idx = args.iter().position(|a| a == "-i").unwrap();
+        assert!(ss_idx < i_idx, "-ss must precede -i for fast seek");
+        let t_idx = args.iter().position(|a| a == "-t").unwrap();
+        assert_eq!(args[t_idx + 1], "10.000");
+        assert!(i_idx < t_idx, "-t must follow -i");
+    }
+
+    #[test]
+    fn video_extract_audio_args() {
+        let p = VideoParams {
+            video_codec: "libx264".into(),
+            quality_mode: "crf".into(),
+            crf: Some(28),
+            target_size_mb: None,
+            video_bitrate_kbps: None,
+            resolution: "original".into(),
+            audio_codec: "aac".into(),
+            audio_bitrate_kbps: Some(192),
+            format: "mp4".into(),
+            preset: "medium".into(),
+            start_time: None,
+            duration: None,
+            extract_audio: Some(true),
+            extract_format: Some("opus".into()),
+        };
+        let ap = AudioParams {
+            format: audio_ext_for(p.extract_format.as_deref().unwrap_or("mp3")).to_string(),
+            bitrate_kbps: p.audio_bitrate_kbps.unwrap_or(128),
+        };
+        let args = build_audio_args(&sample_info(), &ap, Path::new("o.opus"));
+        assert!(args.contains(&"-vn".to_string()));
+        assert!(args.contains(&"libopus".to_string()));
+        assert!(args.contains(&"192k".to_string()));
+        assert_eq!(args.last().unwrap(), "o.opus");
     }
 
     #[test]

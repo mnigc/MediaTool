@@ -21,6 +21,8 @@ import type {
 import JobCard from "./components/JobCard";
 import { CheckIcon, FolderIcon, LogoIcon, UploadIcon, XIcon } from "./components/icons";
 
+const MAX_CONCURRENT = 2;
+
 function defaultParams(info: MediaInfo): JobParams {
   switch (info.mediaType) {
     case "video":
@@ -33,6 +35,10 @@ function defaultParams(info: MediaInfo): JobParams {
         audioBitrateKbps: 128,
         format: "mp4",
         preset: "medium",
+        startTime: undefined,
+        duration: undefined,
+        extractAudio: false,
+        extractFormat: "mp3",
       } satisfies VideoParams;
     case "image":
       return { format: "webp", quality: 80 } satisfies ImageParams;
@@ -49,6 +55,10 @@ export default function App() {
   const [dragOver, setDragOver] = useState(false);
   const [outputDir, setOutputDir] = useState<string | null>(null);
   const counter = useRef(0);
+  const jobsRef = useRef<Job[]>([]);
+  const pendingQueue = useRef<string[]>([]);
+  const runningCount = useRef(0);
+  jobsRef.current = jobs;
 
   useEffect(() => {
     const unsubs: Array<Promise<() => void>> = [];
@@ -61,6 +71,7 @@ export default function App() {
     );
     unsubs.push(
       onDone((e) => {
+        runningCount.current = Math.max(0, runningCount.current - 1);
         setJobs((prev) =>
           prev.map((j) =>
             j.rustId === e.id
@@ -74,6 +85,10 @@ export default function App() {
               : j
           )
         );
+        if (pendingQueue.current.length > 0 && runningCount.current < MAX_CONCURRENT) {
+          const next = pendingQueue.current.shift()!;
+          void startOne(next);
+        }
       })
     );
 
@@ -131,8 +146,8 @@ export default function App() {
   }
 
   async function startOne(uiId: string) {
-    const job = jobs.find((j) => j.uiId === uiId);
-    if (!job) return;
+    const job = jobsRef.current.find((j) => j.uiId === uiId);
+    if (!job || job.phase !== "queued") return;
     setError(null);
     try {
       const rustId = await startJob({
@@ -141,6 +156,7 @@ export default function App() {
         params: job.params,
         outputDir: outputDir ?? undefined,
       });
+      runningCount.current += 1;
       setJobs((prev) =>
         prev.map((j) => (j.uiId === uiId ? { ...j, rustId, percent: 0, phase: "running" } : j))
       );
@@ -150,12 +166,16 @@ export default function App() {
   }
 
   async function startAll() {
-    const queued = jobs.filter((j) => j.phase === "queued");
-    for (const j of queued) await startOne(j.uiId);
+    const queued = jobsRef.current.filter((j) => j.phase === "queued");
+    pendingQueue.current = queued.map((j) => j.uiId);
+    while (runningCount.current < MAX_CONCURRENT && pendingQueue.current.length > 0) {
+      const next = pendingQueue.current.shift()!;
+      await startOne(next);
+    }
   }
 
   function cancelOne(uiId: string) {
-    const job = jobs.find((j) => j.uiId === uiId);
+    const job = jobsRef.current.find((j) => j.uiId === uiId);
     if (job?.rustId) cancelJob(job.rustId);
     setJobs((prev) => prev.map((j) => (j.uiId === uiId ? { ...j, phase: "cancelled" } : j)));
   }
@@ -168,8 +188,27 @@ export default function App() {
     setJobs((prev) => prev.map((j) => (j.uiId === uiId ? { ...j, params } : j)));
   }
 
+  function syncParamsToAll(uiId: string) {
+    const source = jobsRef.current.find((j) => j.uiId === uiId);
+    if (!source || source.phase !== "queued") return;
+    setJobs((prev) =>
+      prev.map((j) =>
+        j.phase === "queued" && j.info.mediaType === source.info.mediaType
+          ? { ...j, params: source.params }
+          : j
+      )
+    );
+  }
+
+  function clearFinished() {
+    setJobs((prev) =>
+      prev.filter((j) => j.phase !== "done" && j.phase !== "error" && j.phase !== "cancelled")
+    );
+  }
+
   const queuedCount = jobs.filter((j) => j.phase === "queued").length;
   const doneCount = jobs.filter((j) => j.phase === "done").length;
+  const runningVal = jobs.filter((j) => j.phase === "running").length;
 
   const doneJobs = jobs.filter((j) => j.phase === "done" && j.outputSize != null);
   const totalIn = doneJobs.reduce((a, j) => a + (j.info.sizeBytes || 0), 0);
@@ -257,6 +296,11 @@ export default function App() {
                   {doneCount} 已完成
                 </span>
               )}
+              {runningVal > 0 && (
+                <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-600">
+                  {runningVal} 处理中
+                </span>
+              )}
             </div>
             {queuedCount > 0 && (
               <button
@@ -264,6 +308,15 @@ export default function App() {
                 className="rounded-xl bg-slate-800 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-slate-700"
               >
                 全部开始 ({queuedCount})
+              </button>
+            )}
+            {jobs.length > doneCount && (
+              <button
+                onClick={clearFinished}
+                className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-500 transition hover:bg-slate-50"
+                title="移除已完成、失败、已取消的任务"
+              >
+                清除已完成
               </button>
             )}
           </div>
@@ -292,6 +345,7 @@ export default function App() {
               onRemove={removeOne}
               onOpenFolder={openOutputFolder}
               onChangeParams={changeParams}
+              onSyncParams={syncParamsToAll}
             />
           ))}
         </div>

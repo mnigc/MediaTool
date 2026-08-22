@@ -38,8 +38,58 @@ const sel =
 function VideoOptions({ params, onChange }: { params: VideoParams; onChange: (p: VideoParams) => void }) {
   const set = (patch: Partial<VideoParams>) => onChange({ ...params, ...patch });
 
+  if (params.extractAudio) {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-amber-100">
+          仅提取音频：将忽略视频画面，输出为纯音频文件。
+        </div>
+        <Section title="音频输出">
+          <Field label="输出格式">
+            <select
+              className={sel}
+              value={params.extractFormat ?? "mp3"}
+              onChange={(e) => set({ extractFormat: e.target.value })}
+            >
+              <option value="mp3">MP3</option>
+              <option value="aac">AAC (.m4a)</option>
+              <option value="m4a">M4A</option>
+              <option value="opus">Opus</option>
+              <option value="flac">FLAC (无损)</option>
+            </select>
+          </Field>
+          <Field label="码率 (kbps)">
+            <input
+              type="number"
+              className={sel}
+              min={32}
+              value={params.audioBitrateKbps ?? 128}
+              onChange={(e) => set({ audioBitrateKbps: Number(e.target.value) })}
+            />
+          </Field>
+        </Section>
+        <button
+          type="button"
+          onClick={() => set({ extractAudio: false })}
+          className="text-xs font-medium text-slate-400 underline-offset-2 transition hover:text-slate-600 hover:underline"
+        >
+          返回视频压缩设置
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={() => set({ extractAudio: true, extractFormat: params.extractFormat ?? "mp3" })}
+          className="text-xs font-medium text-indigo-500 underline-offset-2 transition hover:text-indigo-700 hover:underline"
+        >
+          仅提取音频 →
+        </button>
+      </div>
       <Section title="视频">
         <Field label="输出格式">
           <select className={sel} value={params.format} onChange={(e) => set({ format: e.target.value })}>
@@ -112,6 +162,31 @@ function VideoOptions({ params, onChange }: { params: VideoParams; onChange: (p:
             <option value="720p">720p</option>
             <option value="480p">480p</option>
           </select>
+        </Field>
+      </Section>
+
+      <Section title="裁剪（可选）">
+        <Field label="起始时间 (秒)">
+          <input
+            type="number"
+            className={sel}
+            min={0}
+            step={0.1}
+            placeholder="0"
+            value={params.startTime ?? ""}
+            onChange={(e) => set({ startTime: e.target.value ? Number(e.target.value) : undefined })}
+          />
+        </Field>
+        <Field label="时长 (秒, 留空到结尾)">
+          <input
+            type="number"
+            className={sel}
+            min={0.1}
+            step={0.1}
+            placeholder="到结尾"
+            value={params.duration ?? ""}
+            onChange={(e) => set({ duration: e.target.value ? Number(e.target.value) : undefined })}
+          />
         </Field>
       </Section>
 

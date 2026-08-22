@@ -19,6 +19,7 @@ type Props = {
   onRemove: (uiId: string) => void;
   onOpenFolder: (path: string) => void;
   onChangeParams: (uiId: string, params: JobParams) => void;
+  onSyncParams: (uiId: string) => void;
 };
 
 const TypeBadge: Record<string, { label: string; cls: string; Icon: typeof FilmIcon }> = {
@@ -56,6 +57,7 @@ export default function JobCard({
   onRemove,
   onOpenFolder,
   onChangeParams,
+  onSyncParams,
 }: Props) {
   const badge = TypeBadge[job.info.mediaType] ?? TypeBadge.video;
   const Icon = badge.Icon;
@@ -114,13 +116,22 @@ export default function JobCard({
               onChange={(p) => onChangeParams(job.uiId, p)}
             />
           </div>
-          <button
-            onClick={() => onStart(job.uiId)}
-            className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-indigo-200 transition hover:opacity-95"
-          >
-            <PlayIcon className="h-4 w-4" />
-            开始压缩
-          </button>
+          <div className="mt-4 flex items-center gap-2">
+            <button
+              onClick={() => onStart(job.uiId)}
+              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-indigo-200 transition hover:opacity-95"
+            >
+              <PlayIcon className="h-4 w-4" />
+              开始压缩
+            </button>
+            <button
+              onClick={() => onSyncParams(job.uiId)}
+              className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-medium text-slate-500 transition hover:bg-slate-50"
+              title="将当前参数同步到所有同类型待处理任务"
+            >
+              同步参数
+            </button>
+          </div>
         </>
       )}
 

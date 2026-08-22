@@ -42,6 +42,14 @@ pub struct VideoParams {
     pub format: String,
     /// veryfast | faster | fast | medium | slow | slower | veryslow
     pub preset: String,
+    /// trim: start offset in seconds
+    pub start_time: Option<f64>,
+    /// trim: clip length in seconds (None = to end)
+    pub duration: Option<f64>,
+    /// extract audio track only (ignore video)
+    pub extract_audio: Option<bool>,
+    /// audio output format when extract_audio is true
+    pub extract_format: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

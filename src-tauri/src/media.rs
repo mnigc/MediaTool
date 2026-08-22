@@ -69,12 +69,14 @@ fn probe_sync(app: &AppHandle, path: &str) -> Result<MediaInfo> {
         }
     }
 
-    let media_type = if has_video {
+    let media_type = if let Some(mt) = guess_image_type(path) {
+        mt
+    } else if has_video {
         MediaType::Video
     } else if has_audio {
         MediaType::Audio
     } else {
-        guess_image_type(path).unwrap_or(MediaType::Unknown)
+        MediaType::Unknown
     };
 
     Ok(MediaInfo {
