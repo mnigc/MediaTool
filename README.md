@@ -1,3 +1,7 @@
+[🇨🇳 中文](README.md) | [🇺🇸 English](README.en.md) | [🇰🇷 한국어](README.ko.md) | [🇯🇵 日本語](README.ja.md) | [🇷🇺 Русский](README.ru.md)
+
+---
+
 # MediPress
 
 本地媒体压缩与转换工具，支持视频、图片、音频的批量处理。基于 **Tauri 2 + React + TypeScript** 桌面端，底层使用 **FFmpeg** 作为处理引擎。
