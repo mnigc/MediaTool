@@ -20,7 +20,7 @@ fn probe_sync(app: &AppHandle, path: &str) -> Result<MediaInfo> {
         "-show_streams".into(),
         path.to_string(),
     ];
-    let (_child, stdout) = ffmpeg::spawn(app, "ffprobe", &args)?;
+    let (_child, stdout, _stderr_buf) = ffmpeg::spawn(app, "ffprobe", &args)?;
 
     let mut out = String::new();
     let mut reader = std::io::BufReader::new(stdout);

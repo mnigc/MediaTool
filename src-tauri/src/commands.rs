@@ -1,9 +1,10 @@
 use tauri::{AppHandle, Manager};
 
 use crate::error::Result;
+use crate::gpu;
 use crate::jobs;
 use crate::media;
-use crate::models::{JobRequest, MediaInfo};
+use crate::models::{EstimateRequest, EstimateResult, JobRequest, MediaInfo};
 use crate::state::JobManager;
 
 #[tauri::command]
@@ -17,10 +18,20 @@ pub async fn start_job(app: AppHandle, request: JobRequest) -> Result<String> {
 }
 
 #[tauri::command]
+pub async fn estimate_size(app: AppHandle, request: EstimateRequest) -> Result<EstimateResult> {
+    jobs::estimate_size(app, request).await
+}
+
+#[tauri::command]
 pub fn cancel_job(app: AppHandle, id: String) {
     let manager = app.state::<JobManager>();
     manager.mark_cancelled(&id);
     manager.kill(&id);
+}
+
+#[tauri::command]
+pub fn detect_gpu(app: AppHandle) -> Result<crate::gpu::GpuInfo> {
+    gpu::detect_gpu(&app)
 }
 
 #[tauri::command]

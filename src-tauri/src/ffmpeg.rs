@@ -1,6 +1,7 @@
-use std::io::{BufReader, Read};
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 
 use tauri::Manager;
 
@@ -50,12 +51,13 @@ pub fn resolve(app: &tauri::AppHandle, base: &str) -> Option<PathBuf> {
     None
 }
 
-/// Spawn a process, returning the child handle and its stdout pipe.
+/// Spawn a process, returning the child handle, its stdout pipe, and a shared
+/// buffer that captures stderr (used to surface FFmpeg error output on failure).
 pub fn spawn(
     app: &tauri::AppHandle,
     base: &str,
     args: &[String],
-) -> Result<(std::process::Child, std::process::ChildStdout)> {
+) -> Result<(std::process::Child, std::process::ChildStdout, Arc<Mutex<Vec<u8>>>)> {
     let bin = resolve(app, base).ok_or_else(|| {
         AppError(format!(
             "找不到 {}：请将 FFmpeg 放在程序同目录，或安装到系统 PATH 中",
@@ -73,14 +75,30 @@ pub fn spawn(
         .ok_or_else(|| AppError("无法获取子进程 stdout".into()))?;
 
     // FFmpeg writes per-frame stats to stderr by default. Drain stderr in a
-    // background thread so the pipe buffer never fills and blocks the process.
+    // background thread so the pipe buffer never fills and blocks the process,
+    // while capturing it for error reporting (capped to avoid unbounded growth).
+    let stderr_buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
     if let Some(stderr) = child.stderr.take() {
+        let buf_clone = stderr_buf.clone();
+        const CAP: usize = 200_000;
         std::thread::spawn(move || {
-            let mut r = BufReader::new(stderr);
-            let mut buf = Vec::new();
-            let _ = r.read_to_end(&mut buf);
+            let mut r = stderr;
+            let mut chunk = [0u8; 4096];
+            loop {
+                match r.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let mut guard = buf_clone.lock().unwrap();
+                        if guard.len() < CAP {
+                            let take = (CAP - guard.len()).min(n);
+                            guard.extend_from_slice(&chunk[..take]);
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
         });
     }
 
-    Ok((child, stdout))
+    Ok((child, stdout, stderr_buf))
 }

@@ -7,8 +7,8 @@ use crate::error::{AppError, Result};
 use crate::ffmpeg;
 use crate::media::probe;
 use crate::models::{
-    AudioParams, DoneEvent, ImageParams, JobRequest, MediaInfo, MediaType, ProgressEvent,
-    VideoParams,
+    AudioParams, DoneEvent, EstimateRequest, EstimateResult, ImageParams, JobRequest, MediaInfo,
+    MediaType, ProgressEvent, VideoParams,
 };
 use crate::state::JobManager;
 
@@ -63,13 +63,49 @@ fn vp9_cpu_used(preset: &str) -> u32 {
     }
 }
 
+fn gpu_plan(video_codec: &str, gpu: &Option<String>) -> (String, Option<String>) {
+    match (video_codec, gpu.as_deref()) {
+        ("libx264", Some("nvenc")) => ("h264_nvenc".to_string(), Some("cuda".to_string())),
+        ("libx264", Some("qsv")) => ("h264_qsv".to_string(), Some("qsv".to_string())),
+        ("libx264", Some("videotoolbox")) => {
+            ("h264_videotoolbox".to_string(), Some("videotoolbox".to_string()))
+        }
+        ("libx264", Some("amf")) => ("h264_amf".to_string(), Some("d3d11va".to_string())),
+        ("libx264", Some("vaapi")) => ("h264_vaapi".to_string(), None),
+        _ => (video_codec.to_string(), None),
+    }
+}
+
+/// Rough mapping from CRF (x264 18..40, lower = better) to a bitrate in kbps,
+/// used by hardware encoders that lack a CRF-style constant-quality mode.
+fn crf_to_bitrate(crf: u32) -> u32 {
+    let c = crf.clamp(18, 40) as i32;
+    let b = 9000 - (c - 18) * 230;
+    (b.max(300)) as u32
+}
+
 fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) -> Vec<String> {
+    let (vcodec, hwaccel) = gpu_plan(&p.video_codec, &p.gpu);
+    let is_vaapi = vcodec == "h264_vaapi";
     let mut a: Vec<String> = vec![];
 
     if let Some(start) = p.start_time {
         if start > 0.0 {
             a.push("-ss".into());
             a.push(format!("{:.3}", start));
+        }
+    }
+
+    if is_vaapi {
+        a.push("-vaapi_device".into());
+        a.push("/dev/dri/renderD128".into());
+    }
+    if let Some(hw) = &hwaccel {
+        a.push("-hwaccel".into());
+        a.push(hw.clone());
+        if hw == "qsv" {
+            a.push("-hwaccel_output_format".into());
+            a.push("qsv".into());
         }
     }
 
@@ -83,15 +119,22 @@ fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) -> Vec<String
         }
     }
 
-    if let Some(vf) = resolution_vf(&p.resolution) {
+    let mut vf = resolution_vf(&p.resolution);
+    if is_vaapi {
+        vf = Some(match vf {
+            Some(s) => format!("{},format=nv12,hwupload", s),
+            None => "format=nv12,hwupload".to_string(),
+        });
+    }
+    if let Some(vf) = vf {
         a.push("-vf".into());
         a.push(vf);
     }
 
     a.push("-c:v".into());
-    a.push(p.video_codec.clone());
+    a.push(vcodec.clone());
 
-    match p.video_codec.as_str() {
+    match vcodec.as_str() {
         "libx264" => {
             if p.quality_mode == "crf" {
                 a.push("-crf".into());
@@ -116,6 +159,40 @@ fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) -> Vec<String
             a.push(vp9_cpu_used(&p.preset).to_string());
             a.push("-row-mt".into());
             a.push("1".into());
+        }
+        "h264_nvenc" => {
+            if p.quality_mode == "crf" {
+                a.push("-cq".into());
+                a.push(p.crf.unwrap_or(28).to_string());
+            }
+            a.push("-preset".into());
+            a.push("p4".into());
+        }
+        "h264_qsv" => {
+            if p.quality_mode == "crf" {
+                a.push("-q:v".into());
+                a.push(p.crf.unwrap_or(28).to_string());
+            }
+        }
+        "h264_videotoolbox" => {
+            if p.quality_mode == "crf" {
+                a.push("-b:v".into());
+                a.push(format!("{}k", crf_to_bitrate(p.crf.unwrap_or(28))));
+            }
+        }
+        "h264_amf" => {
+            if p.quality_mode == "crf" {
+                a.push("-rc".into());
+                a.push("cqp".into());
+                a.push("-qp".into());
+                a.push(p.crf.unwrap_or(28).to_string());
+            }
+        }
+        "h264_vaapi" => {
+            if p.quality_mode == "crf" {
+                a.push("-b:v".into());
+                a.push(format!("{}k", crf_to_bitrate(p.crf.unwrap_or(28))));
+            }
         }
         _ => {}
     }
@@ -321,7 +398,8 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<String> {
 
     let args: Vec<String> = match req.media_type {
         MediaType::Video => {
-            let p: VideoParams = parse_params(&req.params)?;
+            let mut p: VideoParams = parse_params(&req.params)?;
+            p.gpu = req.gpu.clone();
             if p.extract_audio.unwrap_or(false) {
                 let ap = AudioParams {
                     format: audio_ext_for(
@@ -350,7 +428,7 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<String> {
 
     let mut args = args;
     args.insert(0, "-nostats".into());
-    let (child, stdout) = ffmpeg::spawn(&app, "ffmpeg", &args)?;
+    let (child, stdout, stderr_buf) = ffmpeg::spawn(&app, "ffmpeg", &args)?;
     let input_size = info.size_bytes;
     let duration = info.duration_secs.unwrap_or(0.0);
     let task_id = id.clone();
@@ -402,10 +480,23 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<String> {
             let err = if was_cancelled {
                 "已取消".to_string()
             } else {
-                format!("FFmpeg 退出码 {}", code)
+                let detail = {
+                    let buf = stderr_buf.lock().unwrap();
+                    if buf.is_empty() {
+                        String::new()
+                    } else {
+                        let s = String::from_utf8_lossy(&buf);
+                        if s.len() > 1500 {
+                            format!("\n\n{}", &s[s.len() - 1500..])
+                        } else {
+                            format!("\n\n{}", s)
+                        }
+                    }
+                };
+                format!("FFmpeg 退出码 {}{}", code, detail)
             };
             let _ = std::fs::remove_file(&out);
-            emit_done(&app, &task_id, false, None, Some(err), input_size, None);
+            emit_done(&app, &task_id, false, was_cancelled, None, Some(err), input_size, None);
         } else {
             let output_size = std::fs::metadata(&out).map(|m| m.len()).ok();
             emit_progress(&app, &task_id, 100.0, "done", last_speed.clone());
@@ -413,6 +504,7 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<String> {
                 &app,
                 &task_id,
                 true,
+                false,
                 Some(out.to_string_lossy().to_string()),
                 None,
                 input_size,
@@ -422,6 +514,139 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<String> {
     });
 
     Ok(id)
+}
+
+/// Refined size estimate via a short real encode of a sample clip.
+///
+/// Reuses the exact same argument builders as `start_job`, but encodes only a
+/// few seconds (or the whole image) to a temp file, then extrapolates the
+/// produced byte count over the (trimmed) total duration.
+pub async fn estimate_size(app: AppHandle, req: EstimateRequest) -> Result<EstimateResult> {
+    let sample_secs = req.sample_secs.unwrap_or(8.0).max(0.1);
+    let info = req.info;
+    let ext = extension_for(req.media_type, &req.params);
+    let tmp = std::env::temp_dir().join(format!("mediapress_est_{}.{}", uuid(), ext));
+
+    // Original trim window (for video / audio extraction).
+    let (base_start, clip_end): (f64, Option<f64>) = match req.media_type {
+        MediaType::Video => {
+            let p: VideoParams = parse_params(&req.params)?;
+            let s = p.start_time.unwrap_or(0.0);
+            let e = p.duration.map(|d| s + d);
+            (s, e)
+        }
+        _ => (0.0, None),
+    };
+
+    let total = info.duration_secs;
+
+    // Decide where to sample from: skip the first ~10% to avoid static
+    // intros, but keep at least a sliver of headroom.
+    let offset = match total {
+        Some(t) if t > base_start + 0.2 => {
+            let skip = ((t - base_start) * 0.1).min(t - base_start - 0.1);
+            (base_start + skip).max(0.0)
+        }
+        _ => base_start,
+    };
+
+    let max_dur = match (total, clip_end) {
+        (Some(_t), Some(e)) => (e - offset).max(0.1),
+        (Some(t), None) => (t - offset).max(0.1),
+        (None, Some(e)) => (e - offset).max(0.1),
+        (None, None) => sample_secs,
+    };
+    let sample_dur = sample_secs.min(max_dur);
+
+    // Build args from the ORIGINAL params but without their own -ss/-t (we add
+    // the sample window ourselves for uniform handling across media types).
+    let mut base_args: Vec<String> = match req.media_type {
+        MediaType::Video => {
+            let mut p: VideoParams = parse_params(&req.params)?;
+            p.start_time = None;
+            p.duration = None;
+            if p.extract_audio.unwrap_or(false) {
+                let ap = AudioParams {
+                    format: audio_ext_for(p.extract_format.as_deref().unwrap_or("mp3")).to_string(),
+                    bitrate_kbps: p.audio_bitrate_kbps.unwrap_or(128),
+                };
+                build_audio_args(&info, &ap, &tmp)
+            } else {
+                build_video_args(&info, &p, &tmp)
+            }
+        }
+        MediaType::Image => {
+            let p: ImageParams = parse_params(&req.params)?;
+            build_image_args(&info, &p, &tmp)
+        }
+        MediaType::Audio => {
+            let p: AudioParams = parse_params(&req.params)?;
+            build_audio_args(&info, &p, &tmp)
+        }
+        MediaType::Unknown => return Err(AppError("无法识别的媒体类型".into())),
+    };
+
+    // Drop the progress pipe so we don't have to drain stdout.
+    if let Some(pos) = base_args.iter().position(|a| a == "-progress") {
+        base_args.drain(pos..=pos + 1);
+    }
+
+    // Compose final args: [-nostats, -ss offset, <base>, -t sample_dur, out].
+    let out_pos = base_args.len() - 1; // last element is the output path
+    base_args.insert(out_pos, "-t".into());
+    base_args.insert(out_pos + 1, format!("{:.3}", sample_dur));
+    let mut final_args: Vec<String> = Vec::with_capacity(base_args.len() + 3);
+    final_args.push("-nostats".into());
+    final_args.push("-ss".into());
+    final_args.push(format!("{:.3}", offset));
+    final_args.extend(base_args);
+
+    let (mut child, _stdout, _stderr) = ffmpeg::spawn(&app, "ffmpeg", &final_args)?;
+    let code = child.wait().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+
+    let sampled_bytes = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
+    let _ = std::fs::remove_file(&tmp);
+
+    if code != 0 || sampled_bytes == 0 {
+        return Err(AppError("采样编码失败，无法精确估算".into()));
+    }
+
+    // Whole trimmed clip was sampled -> exact.
+    let clip_len = match (total, clip_end) {
+        (Some(_t), Some(e)) => (e - base_start).max(0.0),
+        (Some(t), None) => (t - base_start).max(0.0),
+        _ => sample_dur,
+    };
+
+    if req.media_type == MediaType::Image {
+        return Ok(EstimateResult {
+            sampled_bytes,
+            sampled_secs: 1.0,
+            total_secs: None,
+            bytes: sampled_bytes,
+            exact: true,
+        });
+    }
+
+    let exact = sample_dur >= clip_len - 1e-6;
+    let bytes = if total.is_some() {
+        let denom = sample_dur.max(1e-6);
+        (sampled_bytes as f64 / denom * (clip_len.max(0.0))).round() as u64
+    } else {
+        sampled_bytes
+    };
+
+    Ok(EstimateResult {
+        sampled_bytes,
+        sampled_secs: sample_dur,
+        total_secs: if total.is_some() {
+            Some(clip_len)
+        } else {
+            None
+        },
+        bytes,
+        exact,
+    })
 }
 
 fn emit_progress(app: &AppHandle, id: &str, percent: f64, phase: &str, speed: Option<String>) {
@@ -440,6 +665,7 @@ fn emit_done(
     app: &AppHandle,
     id: &str,
     ok: bool,
+    cancelled: bool,
     output: Option<String>,
     error: Option<String>,
     input_size: u64,
@@ -450,6 +676,7 @@ fn emit_done(
         DoneEvent {
             id: id.to_string(),
             ok,
+            cancelled,
             output,
             error,
             input_size,
@@ -501,6 +728,7 @@ mod tests {
             duration: None,
             extract_audio: None,
             extract_format: None,
+            gpu: None,
         }
     }
 
@@ -551,6 +779,7 @@ mod tests {
             duration: None,
             extract_audio: Some(true),
             extract_format: Some("opus".into()),
+            gpu: None,
         };
         let ap = AudioParams {
             format: audio_ext_for(p.extract_format.as_deref().unwrap_or("mp3")).to_string(),

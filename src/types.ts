@@ -1,5 +1,15 @@
 export type MediaType = "video" | "image" | "audio" | "unknown";
 
+export interface GpuBackend {
+  id: string;
+  name: string;
+}
+
+export interface GpuInfo {
+  available: boolean;
+  backends: GpuBackend[];
+}
+
 export interface MediaInfo {
   path: string;
   mediaType: MediaType;
@@ -27,6 +37,7 @@ export interface VideoParams {
   duration?: number; // trim length, seconds (undefined = to end)
   extractAudio?: boolean; // extract audio track only from a video
   extractFormat?: string; // mp3 | aac | m4a | opus | flac (used when extractAudio)
+  gpu?: string; // GPU backend id (nvenc/qsv/videotoolbox/amf/vaapi); "" or unset = CPU
 }
 
 export interface ImageParams {
@@ -48,6 +59,22 @@ export interface JobRequest {
   mediaType: MediaType;
   params: JobParams;
   outputSuffix?: string;
+  gpu?: string; // GPU backend id; empty/undefined = CPU
+}
+
+export interface EstimateRequest {
+  info: MediaInfo;
+  params: JobParams;
+  mediaType: MediaType;
+  sampleSecs?: number;
+}
+
+export interface EstimateResult {
+  sampledBytes: number;
+  sampledSecs: number;
+  totalSecs?: number | null;
+  bytes: number;
+  exact: boolean;
 }
 
 export interface ProgressEvent {
@@ -60,6 +87,7 @@ export interface ProgressEvent {
 export interface DoneEvent {
   id: string;
   ok: boolean;
+  cancelled?: boolean;
   output?: string | null;
   error?: string | null;
   inputSize: number;
@@ -77,4 +105,7 @@ export interface Job {
   error?: string | null;
   outputSize?: number | null;
   startedAt?: number | null;
+  speed?: string | null;
+  sizeEstimate?: { bytes: number; exact: boolean } | null;
+  estimating?: boolean;
 }

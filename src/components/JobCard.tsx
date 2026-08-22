@@ -1,7 +1,12 @@
+import { useEffect, useState } from "react";
 import type { Job, JobParams } from "../types";
 import OptionsPanel from "./OptionsPanel";
+import { getThumbnail } from "../lib/tauri";
+import { estimateOutputSize } from "../lib/estimate";
 import {
   CheckIcon,
+  CopyIcon,
+  CheckCircleIcon,
   FilmIcon,
   FolderIcon,
   ImageIcon,
@@ -11,9 +16,11 @@ import {
   XIcon,
 } from "./icons";
 import { formatBytes } from "../lib/tauri";
+import { useI18n } from "../i18n";
 
 type Props = {
   job: Job;
+  startIndex: number;
   onStart: (uiId: string) => void;
   onCancel: (uiId: string) => void;
   onRemove: (uiId: string) => void;
@@ -21,12 +28,30 @@ type Props = {
   onChangeParams: (uiId: string, params: JobParams) => void;
   onSyncParams: (uiId: string) => void;
   onRetry: (uiId: string) => void;
+  onReorderStart: (uiId: string) => void;
+  onReorderOver: (uiId: string) => void;
+  onReorderDrop: (uiId: string) => void;
 };
 
-const TypeBadge: Record<string, { label: string; cls: string; Icon: typeof FilmIcon }> = {
-  video: { label: "视频", cls: "bg-indigo-50 text-indigo-600 ring-indigo-100", Icon: FilmIcon },
-  image: { label: "图片", cls: "bg-sky-50 text-sky-600 ring-sky-100", Icon: ImageIcon },
-  audio: { label: "音频", cls: "bg-amber-50 text-amber-600 ring-amber-100", Icon: MusicIcon },
+const staggerClass = (i: number): string => {
+  const idx = i % 8;
+  return idx === 0 ? "stagger-in-1" : `stagger-in-${idx}`;
+};
+
+const TypeBadgeStyle: Record<string, { cls: string; Icon: typeof FilmIcon }> = {
+  video: { cls: "bg-brand-50 text-brand-700 ring-brand-200 dark:bg-brand-950 dark:text-brand-300 dark:ring-brand-800", Icon: FilmIcon },
+  image: { cls: "bg-brand-50 text-brand-700 ring-brand-200 dark:bg-brand-950 dark:text-brand-300 dark:ring-brand-800", Icon: ImageIcon },
+  audio: { cls: "bg-brand-50 text-brand-700 ring-brand-200 dark:bg-brand-950 dark:text-brand-300 dark:ring-brand-800", Icon: MusicIcon },
+};
+
+const statusClass = (phase: Job["phase"]): string => {
+  switch (phase) {
+    case "queued": return "status-bar-queued";
+    case "running": return "status-bar-running";
+    case "done": return "status-bar-done";
+    case "error": return "status-bar-error";
+    default: return "status-bar-cancelled";
+  }
 };
 
 function basename(p: string): string {
@@ -34,12 +59,23 @@ function basename(p: string): string {
   return norm.slice(norm.lastIndexOf("/") + 1);
 }
 
-function formatEta(seconds: number): string {
+function formatEta(seconds: number, t: (key: string, vars?: Record<string, string | number>) => string): string {
   if (!isFinite(seconds) || seconds <= 0) return "";
   const s = Math.round(seconds);
   const mm = Math.floor(s / 60);
   const ss = String(s % 60).padStart(2, "0");
-  return mm > 0 ? `约 ${mm}:${ss} 剩余` : `约 ${ss}s 剩余`;
+  return mm > 0 ? t("job.eta.min", { m: mm, s: ss }) : t("job.eta.sec", { s: ss });
+}
+
+function getProgressDetail(job: Job, t: (key: string, vars?: Record<string, string | number>) => string): string {
+  const parts: string[] = [];
+  if (job.speed) parts.push(job.speed);
+  if (job.startedAt && job.percent > 0) {
+    const elapsed = (Date.now() - job.startedAt) / 1000;
+    const eta = elapsed * (100 - job.percent) / job.percent;
+    parts.push(formatEta(eta, t));
+  }
+  return parts.join(" · ") || t("job.processing");
 }
 
 function meta(job: Job): string {
@@ -61,6 +97,7 @@ function meta(job: Job): string {
 
 export default function JobCard({
   job,
+  startIndex,
   onStart,
   onCancel,
   onRemove,
@@ -68,44 +105,147 @@ export default function JobCard({
   onChangeParams,
   onSyncParams,
   onRetry,
+  onReorderStart,
+  onReorderOver,
+  onReorderDrop,
 }: Props) {
-  const badge = TypeBadge[job.info.mediaType] ?? TypeBadge.video;
+  const { t } = useI18n();
+  const badge = TypeBadgeStyle[job.info.mediaType] ?? TypeBadgeStyle.video;
   const Icon = badge.Icon;
+  const typeLabel = t(
+    `job.type.${job.info.mediaType === "unknown" ? "other" : job.info.mediaType}`
+  );
   const isError = job.phase === "error";
   const isDone = job.phase === "done";
   const isRunning = job.phase === "running";
   const isQueued = job.phase === "queued";
+  const [over, setOver] = useState(false);
+  const draggable = isQueued;
+  const [thumb, setThumb] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyError = async () => {
+    if (!job.error) return;
+    try {
+      await navigator.clipboard.writeText(job.error);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Fallback for older browsers
+      const textarea = document.createElement("textarea");
+      textarea.value = job.error;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    if (job.info.mediaType === "image" || job.info.mediaType === "video") {
+      getThumbnail(job.info.path, job.info.mediaType)
+        .then((t) => {
+          if (!cancelled) setThumb(t);
+        })
+        .catch(() => {});
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [job.info.path, job.info.mediaType]);
 
   const savings =
     job.outputSize != null && job.info.sizeBytes && job.info.sizeBytes > 0
       ? 1 - job.outputSize / job.info.sizeBytes
       : null;
 
+  const formula = estimateOutputSize(job.info, job.params);
+  const estimate = job.sizeEstimate
+    ? {
+        bytes: job.sizeEstimate.bytes,
+        rough: !job.sizeEstimate.exact,
+        exact: job.sizeEstimate.exact,
+      }
+    : formula;
+
   return (
-    <div className="pop rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-100 dark:bg-slate-800 dark:ring-slate-700/60">
+    <div
+      draggable={draggable}
+      tabIndex={isQueued ? 0 : -1}
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = "move";
+        onReorderStart(job.uiId);
+      }}
+      onDragOver={(e) => {
+        if (!draggable) return;
+        e.preventDefault();
+        setOver(true);
+        onReorderOver(job.uiId);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setOver(false);
+        onReorderDrop(job.uiId);
+      }}
+      className={`pop stagger-in ${staggerClass(startIndex)} rounded-2xl bg-white p-5 shadow-sm ring-1 ring-neutral-200 transition-shadow ${statusClass(job.phase)} ${
+        over ? "ring-2 ring-brand-400 shadow-md" : ""
+      } ${
+        draggable ? "cursor-grab active:cursor-grabbing" : ""
+      } dark:bg-neutral-900 dark:ring-neutral-800`}
+    >
       <div className="flex items-start gap-4">
-        <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${badge.cls}`}>
-          <Icon className="h-6 w-6" />
-        </div>
+        {thumb ? (
+          <img
+            src={thumb}
+            alt=""
+            className="h-11 w-11 shrink-0 rounded-xl object-cover ring-1 ring-neutral-200 dark:ring-neutral-700"
+          />
+        ) : (
+          <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${badge.cls}`}>
+            <Icon className="h-6 w-6" />
+          </div>
+        )}
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className={`rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${badge.cls}`}>
-              {badge.label}
+              {typeLabel}
             </span>
-            <h3 className="truncate text-sm font-medium text-slate-800 dark:text-slate-100" title={job.info.path}>
+            <h3 className="truncate text-sm font-medium text-neutral-800 dark:text-neutral-100" title={job.info.path}>
               {basename(job.info.path)}
             </h3>
           </div>
-          <p className="mt-1 truncate text-xs text-slate-400 dark:text-slate-500" title={meta(job)}>
+          <p className="mt-1 truncate text-xs text-neutral-400 dark:text-neutral-500" title={meta(job)}>
             {isError ? job.error : meta(job)}
           </p>
+          {(isQueued || isRunning) && estimate && (
+            <div className="mt-1.5 flex items-center gap-1.5">
+              <span className="rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-medium text-brand-600 dark:bg-brand-950/40 dark:text-brand-300">
+                {t("job.estimate", {
+                  size: formatBytes(estimate.bytes),
+                  kind: estimate.rough
+                    ? t("job.estimate.rough")
+                    : t("job.estimate.exact"),
+                })}
+              </span>
+              {isQueued && job.estimating && (
+                <span className="flex items-center gap-1 text-[10px] text-neutral-400 dark:text-neutral-500">
+                  <SpinnerIcon className="h-3 w-3 animate-spin" />
+                  {t("job.estimating")}
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         <button
           onClick={() => onRemove(job.uiId)}
-          className="shrink-0 rounded-lg p-1.5 text-slate-300 transition hover:bg-slate-50 hover:text-slate-500 dark:text-slate-500 dark:hover:bg-slate-700 dark:hover:text-slate-300"
-          title="移除"
+          className="shrink-0 rounded-lg p-1.5 text-neutral-300 transition hover:bg-neutral-100 hover:text-neutral-600 dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-neutral-300"
+          title={t("job.remove")}
         >
           <XIcon className="h-4 w-4" />
         </button>
@@ -113,21 +253,36 @@ export default function JobCard({
 
       {isError && (
         <>
-          <div className="mt-4 rounded-xl bg-red-50 px-4 py-2.5 text-sm text-red-600 ring-1 ring-red-100 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-500/20">
-            {job.error}
+          <div className="mt-4 rounded-xl border border-error-100 bg-error-50 dark:border-error-900/50 dark:bg-error-950/30">
+            <div className="flex items-start justify-between px-4 pt-2.5">
+              <div className="flex-1 overflow-auto max-h-48 whitespace-pre-wrap text-sm text-error-600 dark:text-error-500">
+                {job.error}
+              </div>
+              <button
+                onClick={handleCopyError}
+                className="ml-2 shrink-0 rounded-lg p-1.5 text-error-400 transition hover:bg-error-100 hover:text-error-600 dark:text-error-500 dark:hover:bg-error-900/50 dark:hover:text-error-400"
+                title={copied ? t("job.copied") : t("job.copyError")}
+              >
+                {copied ? (
+                  <CheckCircleIcon className="h-4 w-4" />
+                ) : (
+                  <CopyIcon className="h-4 w-4" />
+                )}
+              </button>
+            </div>
           </div>
           <button
             onClick={() => onRetry(job.uiId)}
-            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-red-200 bg-white px-4 py-2.5 text-sm font-medium text-red-500 transition hover:bg-red-50 dark:border-red-500/30 dark:bg-slate-800 dark:text-red-300 dark:hover:bg-red-500/10"
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-brand-200 bg-brand-50 px-4 py-2.5 text-sm font-medium text-brand-700 transition hover:bg-brand-100 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-300 dark:hover:bg-brand-900"
           >
-            重试
+            {t("job.retry")}
           </button>
         </>
       )}
 
       {isQueued && (
         <>
-          <div className="mt-4 border-t border-slate-100 pt-4 dark:border-slate-700/60">
+          <div className="mt-4 border-t border-neutral-100 pt-4 dark:border-neutral-700/60">
             <OptionsPanel
               mediaType={job.info.mediaType}
               params={job.params}
@@ -135,89 +290,105 @@ export default function JobCard({
             />
           </div>
           <div className="mt-4 flex items-center gap-2">
-            <button
-              onClick={() => onStart(job.uiId)}
-              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-indigo-200 transition hover:opacity-95"
-            >
-              <PlayIcon className="h-4 w-4" />
-              开始压缩
-            </button>
-            <button
-              onClick={() => onSyncParams(job.uiId)}
-              className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-medium text-slate-500 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700"
-              title="将当前参数同步到所有同类型待处理任务"
-            >
-              同步参数
-            </button>
+              <button
+                onClick={() => onStart(job.uiId)}
+                className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:brand-gradient-hover dark:bg-brand-600"
+              >
+                <PlayIcon className="h-4 w-4" />
+                {t("job.start")}
+              </button>
+              <button
+                onClick={() => onSyncParams(job.uiId)}
+                className="rounded-xl border border-brand-200 bg-brand-50 px-3 py-2.5 text-sm font-medium text-brand-700 transition hover:bg-brand-100 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-300 dark:hover:bg-brand-900"
+                title={t("job.sync")}
+              >
+                {t("job.sync")}
+              </button>
           </div>
         </>
       )}
 
       {isRunning && (
         <div className="mt-4">
-          <div className="mb-1.5 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-            <span className="flex items-center gap-1.5 text-indigo-500">
+          <div className="mb-1.5 flex items-center justify-between text-xs text-neutral-500 dark:text-neutral-400">
+            <span className="flex items-center gap-1.5 text-brand-600 dark:text-brand-400">
               <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
-              处理中…
+              {t("job.processing")}
             </span>
-            <span className="font-medium text-slate-600">
-              {job.percent}%
+            <span className="font-medium text-neutral-600 dark:text-neutral-300">
+              {job.percent.toFixed(2)}%
               {job.startedAt
                 ? (() => {
                     const elapsed = (Date.now() - job.startedAt) / 1000;
                     const eta = elapsed * (100 - job.percent) / Math.max(job.percent, 0.5);
-                    return <span className="ml-2 text-slate-400">{formatEta(eta)}</span>;
+                    return <span className="ml-2 text-neutral-400 dark:text-neutral-500">{formatEta(eta, t)}</span>;
                   })()
                 : null}
             </span>
           </div>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700/60">
+          <div
+            className="relative h-2 w-full overflow-hidden rounded-full bg-neutral-100 progress-tooltip-trigger dark:bg-neutral-800"
+            title={job.startedAt ? getProgressDetail(job, t) : ""}
+          >
             <div
-              className="relative h-full rounded-full bg-gradient-to-r from-indigo-500 to-violet-500"
+              className="relative h-full rounded-full brand-progress transition-all duration-300"
               style={{ width: `${job.percent}%` }}
             >
-              <div className="shimmer absolute inset-0 rounded-full" />
+              <div className="absolute inset-0 rounded-full brand-shimmer" />
             </div>
+            {job.startedAt && (
+              <div className="absolute left-1/2 top-6 -translate-x-1/2 z-10 hidden rounded-lg bg-neutral-900 px-3 py-2 text-xs text-white shadow-lg whitespace-nowrap progress-tooltip dark:bg-neutral-700">
+                <div className="font-medium">{getProgressDetail(job, t)}</div>
+                <div className="mt-0.5 text-neutral-400">
+                  <span>{job.info.sizeBytes ? formatBytes(job.info.sizeBytes) : "—"}</span>
+                  {job.outputSize != null ? <span> → {formatBytes(job.outputSize)}</span> : ""}
+                </div>
+                <div className="absolute left-1/2 -top-1.5 -translate-x-1/2 h-2 w-2 rotate-45 bg-neutral-900 dark:bg-neutral-700" />
+              </div>
+            )}
           </div>
           <div className="mt-3 flex justify-end">
             <button
               onClick={() => onCancel(job.uiId)}
-              className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-500 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700"
+              className="rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
             >
-              取消
+              {t("confirm.cancel")}
             </button>
           </div>
         </div>
       )}
 
       {isDone && (
-        <div className="mt-4 flex items-center justify-between rounded-xl bg-emerald-50 px-4 py-3 ring-1 ring-emerald-100 dark:bg-emerald-500/10 dark:ring-emerald-500/20">
-          <div className="flex items-center gap-2 text-sm text-emerald-700 dark:text-emerald-300">
-            <CheckIcon className="h-4 w-4" />
+        <div className="mt-4 flex items-center justify-between rounded-xl bg-success-50 px-4 py-3 ring-1 ring-success-100 dark:bg-success-950/20 dark:ring-success-900/50">
+          <div className="flex items-center gap-2 text-sm text-neutral-800 dark:text-neutral-200">
+            <span className="flex items-center justify-center rounded-full bg-success-500 text-white">
+              <CheckIcon className="h-3 w-3" />
+            </span>
             <span>
-              完成 · 输出 {formatBytes(job.outputSize ?? 0)}
-              {savings != null && savings > 0 && (
-                <span className="ml-1 font-medium text-emerald-600 dark:text-emerald-400">
-                  (−{(savings * 100).toFixed(0)}%)
-                </span>
-              )}
+              {t("job.done", {
+                size: formatBytes(job.outputSize ?? 0),
+                saved:
+                  savings != null && savings > 0
+                    ? ` (−${(savings * 100).toFixed(0)}%)`
+                    : "",
+              })}
             </span>
           </div>
           {job.output && (
             <button
               onClick={() => onOpenFolder(job.output!)}
-              className="flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-700 dark:text-slate-200 dark:ring-slate-600 dark:hover:bg-slate-600"
+              className="flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-brand-700 shadow-sm ring-1 ring-brand-200 transition hover:bg-brand-50 dark:bg-neutral-800 dark:text-brand-300 dark:ring-neutral-700 dark:hover:bg-neutral-700"
             >
               <FolderIcon className="h-3.5 w-3.5" />
-              打开
+              {t("job.open")}
             </button>
           )}
         </div>
       )}
 
       {job.phase === "cancelled" && (
-        <div className="mt-4 rounded-xl bg-slate-50 px-4 py-2.5 text-sm text-slate-400 ring-1 ring-slate-100 dark:bg-slate-700/40 dark:text-slate-400 dark:ring-slate-700">
-          已取消
+        <div className="mt-4 rounded-xl bg-neutral-50 px-4 py-2.5 text-sm text-neutral-400 ring-1 ring-neutral-200 dark:bg-neutral-800 dark:text-neutral-500 dark:ring-neutral-700">
+          {t("job.cancelled")}
         </div>
       )}
     </div>

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { DoneEvent, JobRequest, MediaInfo, ProgressEvent } from "../types";
+import type { DoneEvent, EstimateRequest, EstimateResult, GpuInfo, JobRequest, MediaInfo, ProgressEvent } from "../types";
 
 export async function probeFile(path: string): Promise<MediaInfo> {
   return invoke<MediaInfo>("probe_file", { path });
@@ -16,6 +16,18 @@ export async function cancelJob(id: string): Promise<void> {
 
 export async function openOutputFolder(path: string): Promise<void> {
   return invoke<void>("open_output_folder", { path });
+}
+
+export async function getThumbnail(path: string, mediaType: string): Promise<string | null> {
+  return invoke<string | null>("get_thumbnail", { path, mediaType });
+}
+
+export async function detectGpu(): Promise<GpuInfo> {
+  return invoke<GpuInfo>("detect_gpu");
+}
+
+export function estimateSize(request: EstimateRequest): Promise<EstimateResult> {
+  return invoke<EstimateResult>("estimate_size", { request });
 }
 
 export function onProgress(cb: (e: ProgressEvent) => void): Promise<UnlistenFn> {
