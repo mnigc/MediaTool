@@ -1,4 +1,4 @@
-[🇨🇳 中文](README.zh.md) | [🇺🇸 English](README.md) | [🇰🇷 한국어](README.ko.md) | [🇯🇵 日本語](README.ja.md) | [🇷🇺 Русский](README.ru.md)
+[🇨🇳 中文](README.zh.md) | [🇺🇸 English](README.md) | [🇰🇷 한국어](README.ko.md) | [🇯🇵 日本語](README.ja.md)
 
 ---
 
@@ -21,7 +21,7 @@ A local media compression and conversion tool for batch processing of video, ima
 - **Output Size Estimation** — Theoretical estimation based on parameters + sample encoding for accurate prediction
 - **Real-time Progress** — Progress bar, speed, and ETA estimation
 - **Drag-and-Drop Sorting** — Reorder task list by dragging
-- **Multi-language** — 中文, English, 한국어, 日本語, Русский, Español
+- **Multi-language** — 中文, English, 한국어, 日本語
 - **Theme** — Light / Dark / System
 - **Output Suffix** — Custom output filename suffix to avoid overwriting source files
 
@@ -79,7 +79,7 @@ MediPress/
 ├── src/                    # React frontend
 │   ├── components/         # UI components (JobCard, OptionsPanel, Sidebar, etc.)
 │   ├── hooks/              # Custom hooks (useJobs, useTheme, useToasts)
-│   ├── i18n/               # Internationalization (6 languages)
+│   ├── i18n/               # Internationalization (4 languages)
 │   ├── lib/                # Utilities (preset management, output estimation, Tauri calls)
 │   ├── App.tsx             # Main app component
 │   ├── main.tsx            # Entry point

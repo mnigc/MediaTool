@@ -24,8 +24,6 @@ function detectLocale(): Locale {
   if (nav.startsWith("zh")) return "zh";
   if (nav.startsWith("ko")) return "ko";
   if (nav.startsWith("ja")) return "ja";
-  if (nav.startsWith("ru")) return "ru";
-  if (nav.startsWith("es")) return "es";
   if (nav.startsWith("en")) return "en";
   return "en";
 }
