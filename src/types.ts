@@ -47,6 +47,7 @@ export interface JobRequest {
   outputDir?: string;
   mediaType: MediaType;
   params: JobParams;
+  outputSuffix?: string;
 }
 
 export interface ProgressEvent {
@@ -75,4 +76,5 @@ export interface Job {
   output?: string | null;
   error?: string | null;
   outputSize?: number | null;
+  startedAt?: number | null;
 }

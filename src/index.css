@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 html,
 body,
 #root {
@@ -12,6 +14,11 @@ body {
     "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
   color: #1e293b;
   background: radial-gradient(1200px 600px at 50% -10%, #eef2ff 0%, #f8fafc 45%, #ffffff 100%);
+}
+
+.dark body {
+  color: #e2e8f0;
+  background: radial-gradient(1200px 600px at 50% -10%, #1e1b4b 0%, #0f172a 45%, #020617 100%);
 }
 
 /* subtle scrollbar */

@@ -54,7 +54,24 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [outputDir, setOutputDir] = useState<string | null>(null);
+  const [outputSuffix, setOutputSuffix] = useState<string>("_mediapress");
+  const [dark, setDark] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("mediapress.dark") === "1";
+    } catch {
+      return false;
+    }
+  });
   const counter = useRef(0);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", dark);
+    try {
+      localStorage.setItem("mediapress.dark", dark ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }, [dark]);
   const jobsRef = useRef<Job[]>([]);
   const pendingQueue = useRef<string[]>([]);
   const runningCount = useRef(0);
@@ -155,10 +172,15 @@ export default function App() {
         mediaType: job.info.mediaType,
         params: job.params,
         outputDir: outputDir ?? undefined,
+        outputSuffix: outputSuffix || "_mediapress",
       });
       runningCount.current += 1;
       setJobs((prev) =>
-        prev.map((j) => (j.uiId === uiId ? { ...j, rustId, percent: 0, phase: "running" } : j))
+        prev.map((j) =>
+          j.uiId === uiId
+            ? { ...j, rustId, percent: 0, phase: "running", startedAt: Date.now() }
+            : j
+        )
       );
     } catch (err) {
       setError(`启动失败: ${String(err)}`);
@@ -182,6 +204,26 @@ export default function App() {
 
   function removeOne(uiId: string) {
     setJobs((prev) => prev.filter((j) => j.uiId !== uiId));
+  }
+
+  function retryOne(uiId: string) {
+    setJobs((prev) =>
+      prev.map((j) =>
+        j.uiId === uiId && j.phase === "error"
+          ? { ...j, phase: "queued", error: null, outputSize: null, startedAt: null }
+          : j
+      )
+    );
+  }
+
+  function retryAllFailed() {
+    setJobs((prev) =>
+      prev.map((j) =>
+        j.phase === "error"
+          ? { ...j, phase: "queued", error: null, outputSize: null, startedAt: null }
+          : j
+      )
+    );
   }
 
   function changeParams(uiId: string, params: JobParams) {
@@ -208,6 +250,7 @@ export default function App() {
 
   const queuedCount = jobs.filter((j) => j.phase === "queued").length;
   const doneCount = jobs.filter((j) => j.phase === "done").length;
+  const failedCount = jobs.filter((j) => j.phase === "error").length;
   const runningVal = jobs.filter((j) => j.phase === "running").length;
 
   const doneJobs = jobs.filter((j) => j.phase === "done" && j.outputSize != null);
@@ -218,14 +261,21 @@ export default function App() {
 
   return (
     <div className="min-h-full">
-      <header className="sticky top-0 z-10 border-b border-slate-200/70 bg-white/70 backdrop-blur">
+      <header className="sticky top-0 z-10 border-b border-slate-200/70 bg-white/70 backdrop-blur dark:border-slate-700/60 dark:bg-slate-900/70">
         <div className="mx-auto flex max-w-4xl items-center gap-3 px-6 py-3.5">
           <LogoIcon className="h-9 w-9" />
           <div className="leading-tight">
-            <div className="text-base font-semibold text-slate-800">MediPress</div>
-            <div className="text-xs text-slate-400">本地媒体压缩与转换</div>
+            <div className="text-base font-semibold text-slate-800 dark:text-slate-100">MediPress</div>
+            <div className="text-xs text-slate-400 dark:text-slate-500">本地媒体压缩与转换</div>
           </div>
-          <span className="ml-auto rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-600 ring-1 ring-emerald-100">
+          <button
+            onClick={() => setDark((v) => !v)}
+            className="ml-auto rounded-full border border-slate-200 px-3 py-1 text-xs font-medium text-slate-500 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+            title="切换深色 / 浅色模式"
+          >
+            {dark ? "浅色" : "深色"}
+          </button>
+          <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-600 ring-1 ring-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:ring-emerald-500/20">
             本地处理 · 文件不上传
           </span>
         </div>
@@ -246,27 +296,27 @@ export default function App() {
           className={`flex cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed px-6 py-14 text-center transition ${
             dragOver
               ? "border-indigo-400 bg-indigo-50/60"
-              : "border-slate-300 bg-white/60 hover:border-indigo-300 hover:bg-indigo-50/30"
+              : "border-slate-300 bg-white/60 hover:border-indigo-300 hover:bg-indigo-50/30 dark:border-slate-600 dark:bg-slate-800/40 dark:hover:border-indigo-400 dark:hover:bg-slate-800/60"
           }`}
         >
           <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-500 text-white shadow-lg shadow-indigo-200">
             <UploadIcon className="h-7 w-7" />
           </div>
-          <p className="text-base font-medium text-slate-700">
+          <p className="text-base font-medium text-slate-700 dark:text-slate-100">
             点击选择文件，或将文件拖拽到此处
           </p>
-          <p className="mt-1 text-sm text-slate-400">支持视频、图片、音频 · 可批量添加</p>
+          <p className="mt-1 text-sm text-slate-400 dark:text-slate-500">支持视频、图片、音频 · 可批量添加</p>
         </div>
 
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-slate-500">
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
           <FolderIcon className="h-4 w-4 text-slate-400" />
           <span>输出到</span>
-          <span className="max-w-[260px] truncate font-medium text-slate-600">
+          <span className="max-w-[260px] truncate font-medium text-slate-600 dark:text-slate-300">
             {outputDir ?? "与源文件相同目录"}
           </span>
           <button
             onClick={chooseOutput}
-            className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-50"
+            className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
           >
             更改
           </button>
@@ -279,25 +329,32 @@ export default function App() {
               <XIcon className="h-3.5 w-3.5" />
             </button>
           )}
+          <span className="ml-1 text-slate-400 dark:text-slate-500">文件名后缀</span>
+          <input
+            value={outputSuffix}
+            onChange={(e) => setOutputSuffix(e.target.value)}
+            placeholder="_mediapress"
+            className="w-28 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 shadow-sm transition focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:focus:border-indigo-400"
+          />
         </div>
 
         {error && (
-          <div className="mt-4 rounded-xl bg-red-50 px-4 py-2.5 text-sm text-red-600 ring-1 ring-red-100">
+          <div className="mt-4 rounded-xl bg-red-50 px-4 py-2.5 text-sm text-red-600 ring-1 ring-red-100 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-500/20">
             {error}
           </div>
         )}
 
         {jobs.length > 0 && (
           <div className="mt-6 flex items-center justify-between">
-            <div className="flex items-center gap-2 text-sm text-slate-500">
-              <span className="font-medium text-slate-700">{jobs.length}</span> 个任务
+            <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+              <span className="font-medium text-slate-700 dark:text-slate-200">{jobs.length}</span> 个任务
               {doneCount > 0 && (
-                <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs text-emerald-600">
+                <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400">
                   {doneCount} 已完成
                 </span>
               )}
               {runningVal > 0 && (
-                <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-600">
+                <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-300">
                   {runningVal} 处理中
                 </span>
               )}
@@ -305,7 +362,7 @@ export default function App() {
             {queuedCount > 0 && (
               <button
                 onClick={startAll}
-                className="rounded-xl bg-slate-800 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-slate-700"
+                className="rounded-xl bg-slate-800 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-slate-700 dark:bg-slate-700 dark:hover:bg-slate-600"
               >
                 全部开始 ({queuedCount})
               </button>
@@ -313,10 +370,19 @@ export default function App() {
             {jobs.length > doneCount && (
               <button
                 onClick={clearFinished}
-                className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-500 transition hover:bg-slate-50"
+                className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-500 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
                 title="移除已完成、失败、已取消的任务"
               >
                 清除已完成
+              </button>
+            )}
+            {failedCount > 0 && (
+              <button
+                onClick={retryAllFailed}
+                className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-600 transition hover:bg-amber-100"
+                title="将所有失败任务重新加入队列"
+              >
+                重试失败 ({failedCount})
               </button>
             )}
           </div>
@@ -346,12 +412,13 @@ export default function App() {
               onOpenFolder={openOutputFolder}
               onChangeParams={changeParams}
               onSyncParams={syncParamsToAll}
+              onRetry={retryOne}
             />
           ))}
         </div>
 
         {jobs.length === 0 && (
-          <p className="mt-10 text-center text-sm text-slate-400">
+          <p className="mt-10 text-center text-sm text-slate-400 dark:text-slate-500">
             还没有任务。添加文件后，选择压缩参数即可开始。
           </p>
         )}

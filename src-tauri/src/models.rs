@@ -78,6 +78,7 @@ pub struct JobRequest {
     pub output_dir: Option<String>,
     pub media_type: MediaType,
     pub params: serde_json::Value,
+    pub output_suffix: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

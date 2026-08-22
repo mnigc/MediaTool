@@ -13,7 +13,7 @@ use crate::models::{
 use crate::state::JobManager;
 
 /// Build the output path, placing the result next to the input (or in output_dir).
-fn output_path(input: &str, output_dir: &Option<String>, ext: &str) -> Result<PathBuf> {
+fn output_path(input: &str, output_dir: &Option<String>, ext: &str, suffix: &str) -> Result<PathBuf> {
     let input_p = Path::new(input);
     let stem = input_p
         .file_stem()
@@ -28,7 +28,7 @@ fn output_path(input: &str, output_dir: &Option<String>, ext: &str) -> Result<Pa
             .unwrap_or_else(|| PathBuf::from(".")),
     };
     std::fs::create_dir_all(&dir)?;
-    Ok(dir.join(format!("{}_mediapress.{}", stem, ext)))
+    Ok(dir.join(format!("{}{}.{}", stem, suffix, ext)))
 }
 
 fn resolution_vf(res: &str) -> Option<String> {
@@ -312,7 +312,12 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<String> {
     let id = uuid();
     let info = probe(&app, &req.input).await?;
     let ext = extension_for(req.media_type, &req.params);
-    let out = output_path(&req.input, &req.output_dir, &ext)?;
+    let suffix = req
+        .output_suffix
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "_mediapress".to_string());
+    let out = output_path(&req.input, &req.output_dir, &ext, &suffix)?;
 
     let args: Vec<String> = match req.media_type {
         MediaType::Video => {

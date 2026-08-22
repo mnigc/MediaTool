@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { AudioParams, ImageParams, JobParams, VideoParams } from "../types";
+import { addPreset, loadPresets, removePreset, type Preset } from "../lib/presets";
 
 interface Props {
   mediaType: string;
@@ -8,16 +9,104 @@ interface Props {
 }
 
 export default function OptionsPanel({ mediaType, params, onChange }: Props) {
-  if (mediaType === "video") return <VideoOptions params={params as VideoParams} onChange={onChange} />;
-  if (mediaType === "image") return <ImageOptions params={params as ImageParams} onChange={onChange} />;
-  if (mediaType === "audio") return <AudioOptions params={params as AudioParams} onChange={onChange} />;
+  if (mediaType === "video")
+    return (
+      <>
+        <PresetsBar mediaType={mediaType} params={params} onChange={onChange} />
+        <VideoOptions params={params as VideoParams} onChange={onChange} />
+      </>
+    );
+  if (mediaType === "image")
+    return (
+      <>
+        <PresetsBar mediaType={mediaType} params={params} onChange={onChange} />
+        <ImageOptions params={params as ImageParams} onChange={onChange} />
+      </>
+    );
+  if (mediaType === "audio")
+    return (
+      <>
+        <PresetsBar mediaType={mediaType} params={params} onChange={onChange} />
+        <AudioOptions params={params as AudioParams} onChange={onChange} />
+      </>
+    );
   return null;
+}
+
+function PresetsBar({
+  mediaType,
+  params,
+  onChange,
+}: {
+  mediaType: string;
+  params: JobParams;
+  onChange: (p: JobParams) => void;
+}) {
+  const [presets, setPresets] = useState<Preset[]>(() => loadPresets());
+  const [selected, setSelected] = useState<string>("");
+
+  const myPresets = presets.filter((p) => p.mediaType === mediaType);
+
+  const apply = (name: string) => {
+    const p = myPresets.find((x) => x.name === name);
+    if (p) onChange(p.params);
+  };
+
+  const save = () => {
+    const name = window.prompt("预设名称", `${mediaType} 预设`);
+    if (!name) return;
+    setPresets(addPreset({ name, mediaType: mediaType as Preset["mediaType"], params }));
+    setSelected(name);
+  };
+
+  const del = (name: string) => {
+    setPresets(removePreset(mediaType as Preset["mediaType"], name));
+    if (selected === name) setSelected("");
+  };
+
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl bg-slate-50 px-3 py-2 ring-1 ring-slate-100 dark:bg-slate-900 dark:ring-slate-700/60">
+      <span className="text-xs font-medium text-slate-400 dark:text-slate-500">预设</span>
+      <select
+        value={selected}
+        onChange={(e) => {
+          setSelected(e.target.value);
+          if (e.target.value) apply(e.target.value);
+        }}
+        className="min-w-[120px] rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+      >
+        <option value="">选择预设…</option>
+        {myPresets.map((p) => (
+          <option key={p.name} value={p.name}>
+            {p.name}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        onClick={save}
+        className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 transition hover:bg-white dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+      >
+        保存当前
+      </button>
+      {selected && (
+        <button
+          type="button"
+          onClick={() => del(selected)}
+          className="rounded-lg px-1.5 py-1 text-xs font-medium text-slate-400 transition hover:text-red-500 dark:text-slate-500"
+          title="删除该预设"
+        >
+          删除
+        </button>
+      )}
+    </div>
+  );
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="flex flex-col gap-1.5">
-      <span className="text-xs font-medium uppercase tracking-wide text-slate-400">{label}</span>
+      <span className="text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">{label}</span>
       {children}
     </label>
   );
@@ -26,14 +115,14 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div>
-      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">{title}</div>
+      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">{title}</div>
       <div className="grid grid-cols-2 gap-3">{children}</div>
     </div>
   );
 }
 
 const sel =
-  "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm transition focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200";
+  "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm transition focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:focus:border-indigo-400";
 
 function VideoOptions({ params, onChange }: { params: VideoParams; onChange: (p: VideoParams) => void }) {
   const set = (patch: Partial<VideoParams>) => onChange({ ...params, ...patch });
@@ -41,7 +130,7 @@ function VideoOptions({ params, onChange }: { params: VideoParams; onChange: (p:
   if (params.extractAudio) {
     return (
       <div className="space-y-4">
-        <div className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-amber-100">
+        <div className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-amber-100 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-500/20">
           仅提取音频：将忽略视频画面，输出为纯音频文件。
         </div>
         <Section title="音频输出">
@@ -71,7 +160,7 @@ function VideoOptions({ params, onChange }: { params: VideoParams; onChange: (p:
         <button
           type="button"
           onClick={() => set({ extractAudio: false })}
-          className="text-xs font-medium text-slate-400 underline-offset-2 transition hover:text-slate-600 hover:underline"
+          className="text-xs font-medium text-slate-400 underline-offset-2 transition hover:text-slate-600 hover:underline dark:text-slate-500 dark:hover:text-slate-300"
         >
           返回视频压缩设置
         </button>
@@ -85,7 +174,7 @@ function VideoOptions({ params, onChange }: { params: VideoParams; onChange: (p:
         <button
           type="button"
           onClick={() => set({ extractAudio: true, extractFormat: params.extractFormat ?? "mp3" })}
-          className="text-xs font-medium text-indigo-500 underline-offset-2 transition hover:text-indigo-700 hover:underline"
+          className="text-xs font-medium text-indigo-500 underline-offset-2 transition hover:text-indigo-700 hover:underline dark:text-indigo-400 dark:hover:text-indigo-300"
         >
           仅提取音频 →
         </button>
