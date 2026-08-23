@@ -1,13 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { DoneEvent, EstimateRequest, EstimateResult, GpuInfo, JobRequest, MediaInfo, ProgressEvent } from "../types";
+import type { DoneEvent, EstimateRequest, EstimateResult, GpuInfo, JobRequest, MediaInfo, MediaReport, ProgressEvent, StartJobResult } from "../types";
 
 export async function probeFile(path: string): Promise<MediaInfo> {
   return invoke<MediaInfo>("probe_file", { path });
 }
 
-export async function startJob(request: JobRequest): Promise<string> {
-  return invoke<string>("start_job", { request });
+export async function startJob(request: JobRequest): Promise<StartJobResult> {
+  return invoke<StartJobResult>("start_job", { request });
+}
+
+export async function inspectMedia(path: string): Promise<MediaReport> {
+  return invoke<MediaReport>("inspect_media", { path });
 }
 
 export async function cancelJob(id: string): Promise<void> {

@@ -259,6 +259,24 @@ const sel =
 
 const range = "mp-range flex-1";
 
+function ToggleRow({ label, checked, onChange }: {
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <label className="flex w-fit cursor-pointer items-center gap-2">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="h-3.5 w-3.5 cursor-pointer rounded border-neutral-300 text-brand-600 accent-brand-600 dark:border-neutral-600"
+      />
+      <span className="text-[10px] font-medium uppercase tracking-wide text-neutral-400 transition hover:text-neutral-600 dark:text-neutral-500 dark:hover:text-neutral-300">{label}</span>
+    </label>
+  );
+}
+
 /* ── 视频参数 ───────────────────────────────────── */
 
 export function VideoOptionsCompact({
@@ -331,6 +349,7 @@ export function VideoOptionsCompact({
           <select className={sel} value={v.videoCodec} onChange={(e) => set({ videoCodec: e.target.value })}>
             <option value="libx264">H.264</option>
             <option value="libvpx-vp9">VP9</option>
+            <option value="libsvtav1">AV1</option>
             <option value="copy">{t("opt.copy")}</option>
           </select>
         </Field>
@@ -396,6 +415,22 @@ export function VideoOptionsCompact({
             </select>
           </Field>
         </FieldRow>
+        <FieldRow>
+          <Field label={t("opt.fps")}>
+            <select
+              className={sel}
+              value={v.fps ? String(v.fps) : ""}
+              onChange={(e) => set({ fps: e.target.value ? Number(e.target.value) : undefined })}
+            >
+              <option value="">{t("opt.fps.original")}</option>
+              <option value="60">60</option>
+              <option value="50">50</option>
+              <option value="30">30</option>
+              <option value="24">24</option>
+              <option value="15">15</option>
+            </select>
+          </Field>
+        </FieldRow>
       </div>
 
       <SectionDivider label={t("opt.audio")} />
@@ -424,6 +459,12 @@ export function VideoOptionsCompact({
           <input type="number" className={sel} min={0.1} step={0.1} placeholder={t("opt.toEnd")} value={v.duration ?? ""} onFocus={(e) => e.currentTarget.select()} onChange={(e) => set({ duration: e.target.value ? Number(e.target.value) : undefined })} />
         </Field>
       </FieldRow>
+
+      <ToggleRow
+        label={t("opt.stripMetadata")}
+        checked={v.stripMetadata ?? false}
+        onChange={(b) => set({ stripMetadata: b })}
+      />
     </div>
   );
 }
@@ -475,6 +516,11 @@ export function ImageOptionsCompact({ params, onChange }: {
           />
         </Field>
       </FieldRow>
+      <ToggleRow
+        label={t("opt.stripMetadata")}
+        checked={img.stripMetadata ?? false}
+        onChange={(b) => set({ stripMetadata: b })}
+      />
     </div>
   );
 }
@@ -504,6 +550,11 @@ export function AudioOptionsCompact({ params, onChange }: {
           <input type="number" className={sel} min={32} value={params.bitrateKbps ?? 192} onChange={(e) => set({ bitrateKbps: Number(e.target.value) })} />
         </Field>
       </FieldRow>
+      <ToggleRow
+        label={t("opt.stripMetadata")}
+        checked={params.stripMetadata ?? false}
+        onChange={(b) => set({ stripMetadata: b })}
+      />
     </div>
   );
 }

@@ -7,8 +7,9 @@ use crate::error::{AppError, Result};
 use crate::ffmpeg;
 use crate::media::probe;
 use crate::models::{
-    AudioParams, DoneEvent, EstimateRequest, EstimateResult, ImageParams, JobRequest, MediaInfo,
-    MediaType, ProgressEvent, VideoParams,
+    AudioParams, DoneEvent, EstimateRequest, EstimateResult, GifParams, ImageParams, JobRequest,
+    MediaInfo, MediaType, ProgressEvent, ScreenshotParams, SpeedParams, StartJobResult,
+    VideoParams, WatermarkParams,
 };
 use crate::state::JobManager;
 
@@ -29,6 +30,58 @@ fn output_path(input: &str, output_dir: &Option<String>, ext: &str, suffix: &str
     };
     std::fs::create_dir_all(&dir)?;
     Ok(dir.join(format!("{}{}.{}", stem, suffix, ext)))
+}
+
+/// Apply the overwrite policy to a computed output path.
+/// - "overwrite": keep as-is (ffmpeg runs with -y)
+/// - "skip" / others: returned untouched; caller decides based on existence
+/// - "rename": when the file exists, produce "<stem> (2).<ext>", " (3)", …
+pub(crate) fn apply_overwrite_policy(out: PathBuf, policy: &str) -> PathBuf {
+    if !out.exists() || policy == "overwrite" {
+        return out;
+    }
+    if policy != "rename" {
+        return out; // "skip" handled by the caller via existence check
+    }
+    let dir = out
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let stem = out
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("media")
+        .to_string();
+    let ext = out
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+    for n in 2..10000u32 {
+        let name = if ext.is_empty() {
+            format!("{} ({})", stem, n)
+        } else {
+            format!("{} ({}).{}", stem, n, ext)
+        };
+        let candidate = dir.join(name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    out
+}
+
+/// Strip container-level metadata (and chapters) via -map_metadata -1.
+fn metadata_strip_args(strip: bool, with_chapters: bool) -> Vec<String> {
+    if !strip {
+        return vec![];
+    }
+    let mut a = vec!["-map_metadata".to_string(), "-1".to_string()];
+    if with_chapters {
+        a.push("-map_chapters".to_string());
+        a.push("-1".to_string());
+    }
+    a
 }
 
 fn resolution_vf(res: &str) -> Option<String> {
@@ -60,6 +113,21 @@ fn vp9_cpu_used(preset: &str) -> u32 {
         "slow" => 1,
         "slower" | "veryslow" => 0,
         _ => 2,
+    }
+}
+
+/// Map the x264-style speed presets onto SVT-AV1's preset (cpu-used) scale.
+/// SVT-AV1 accepts roughly 1..=13 where higher = faster / lower quality.
+fn svt_preset(preset: &str) -> u32 {
+    match preset {
+        "veryfast" => 10,
+        "faster" => 9,
+        "fast" => 8,
+        "medium" => 7,
+        "slow" => 5,
+        "slower" => 3,
+        "veryslow" => 2,
+        _ => 7,
     }
 }
 
@@ -119,6 +187,8 @@ fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) -> Vec<String
         }
     }
 
+    a.extend(metadata_strip_args(p.strip_metadata.unwrap_or(false), true));
+
     let mut vf = resolution_vf(&p.resolution);
     if is_vaapi {
         vf = Some(match vf {
@@ -159,6 +229,20 @@ fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) -> Vec<String
             a.push(vp9_cpu_used(&p.preset).to_string());
             a.push("-row-mt".into());
             a.push("1".into());
+        }
+        "libsvtav1" => {
+            if p.quality_mode == "crf" {
+                a.push("-crf".into());
+                a.push(p.crf.unwrap_or(32).to_string());
+            } else if p.quality_mode == "target_size" {
+                // bitrate is appended by the shared target-size logic below;
+                // nothing extra needed here.
+            } else {
+                a.push("-b:v".into());
+                a.push(p.video_bitrate_kbps.unwrap_or(1000).to_string() + "k");
+            }
+            a.push("-preset".into());
+            a.push(svt_preset(&p.preset).to_string());
         }
         "h264_nvenc" => {
             if p.quality_mode == "crf" {
@@ -217,6 +301,16 @@ fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) -> Vec<String
         }
     }
 
+    // Frame-rate control; meaningless (and re-encode-forcing) with stream copy.
+    if vcodec != "copy" {
+        if let Some(fps) = p.fps {
+            if fps > 0 {
+                a.push("-r".into());
+                a.push(fps.to_string());
+            }
+        }
+    }
+
     match p.audio_codec.as_str() {
         "none" => a.push("-an".into()),
         "copy" => {
@@ -271,6 +365,8 @@ fn map_png_level(quality: u8) -> u8 {
 fn build_image_args(info: &MediaInfo, p: &ImageParams, out: &Path) -> Vec<String> {
     let mut a: Vec<String> = vec!["-i".into(), info.path.clone()];
 
+    a.extend(metadata_strip_args(p.strip_metadata.unwrap_or(false), false));
+
     if let Some(d) = p.max_dimension {
         if d > 0 {
             a.push("-vf".into());
@@ -304,6 +400,8 @@ fn build_image_args(info: &MediaInfo, p: &ImageParams, out: &Path) -> Vec<String
 fn build_audio_args(info: &MediaInfo, p: &AudioParams, out: &Path) -> Vec<String> {
     let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-vn".into()];
 
+    a.extend(metadata_strip_args(p.strip_metadata.unwrap_or(false), false));
+
     match p.format.as_str() {
         "mp3" => {
             a.push("-c:a".into());
@@ -336,6 +434,338 @@ fn build_audio_args(info: &MediaInfo, p: &AudioParams, out: &Path) -> Vec<String
     a.push("pipe:1".into());
     a.push("-y".into());
     a.push(out.to_string_lossy().to_string());
+    a
+}
+
+/* ── Toolbox tools ─────────────────────────────────────────────── */
+
+/// Build an atempo factor chain for arbitrary rates. atempo only accepts
+/// 0.5..=2.0 per instance, so chain factors whose product equals `rate`.
+pub(crate) fn atempo_chain(rate: f64) -> Vec<String> {
+    let mut rem = rate.clamp(0.25, 4.0);
+    let mut factors: Vec<f64> = Vec::new();
+    while rem > 2.0 + 1e-9 {
+        factors.push(2.0);
+        rem /= 2.0;
+    }
+    while rem < 0.5 - 1e-9 {
+        factors.push(0.5);
+        rem /= 0.5;
+    }
+    if (rem - 1.0).abs() > 1e-9 {
+        factors.push(rem);
+    }
+    factors
+        .iter()
+        .map(|f| format!("{:.6}", f))
+        .collect()
+}
+
+fn screenshot_ext(format: &str) -> &'static str {
+    if format == "jpeg" { "jpg" } else { "png" }
+}
+
+/// Turn `<stem><suffix>.<ext>` into the `%03d` sequence pattern used by
+/// interval screenshots.
+fn interval_pattern(base: PathBuf) -> PathBuf {
+    let ext = base
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png")
+        .to_string();
+    let stem = base
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("frame")
+        .to_string();
+    match base.parent() {
+        Some(dir) => dir.join(format!("{}_%03d.{}", stem, ext)),
+        None => base,
+    }
+}
+
+fn pattern_prefix(out: &Path) -> Option<String> {
+    out.file_name()?
+        .to_str()?
+        .split("%03d")
+        .next()
+        .map(String::from)
+}
+
+fn scan_pattern_outputs(out: &Path) -> Vec<PathBuf> {
+    let Some(prefix) = pattern_prefix(out) else {
+        return vec![];
+    };
+    let Some(dir) = out.parent() else {
+        return vec![];
+    };
+    let mut found = vec![];
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            if e.file_name().to_string_lossy().starts_with(&prefix) {
+                found.push(e.path());
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+fn pattern_output_size(out: &Path) -> Option<u64> {
+    Some(
+        scan_pattern_outputs(out)
+            .iter()
+            .filter_map(|p| std::fs::metadata(p).ok())
+            .map(|m| m.len())
+            .sum(),
+    )
+}
+
+fn cleanup_pattern_outputs(out: &Path) {
+    for p in scan_pattern_outputs(out) {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+/// Video -> GIF via a single-pass palettegen/paletteuse filter graph.
+fn build_gif_args(info: &MediaInfo, p: &GifParams, out: &Path) -> Vec<String> {
+    let mut a: Vec<String> = vec![];
+
+    if let Some(s) = p.start_time {
+        if s > 0.0 {
+            a.push("-ss".into());
+            a.push(format!("{:.3}", s));
+        }
+    }
+    a.push("-i".into());
+    a.push(info.path.clone());
+    if let Some(d) = p.duration {
+        if d > 0.0 {
+            a.push("-t".into());
+            a.push(format!("{:.3}", d));
+        }
+    }
+
+    let fps = p.fps.unwrap_or(12).clamp(5, 30);
+    let width = p.width.unwrap_or(480).max(16);
+    let fc = format!(
+        "[0:v]fps={f},scale={w}:-2:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5[out]",
+        f = fps,
+        w = width
+    );
+    a.push("-filter_complex".into());
+    a.push(fc);
+    a.push("-map".into());
+    a.push("[out]".into());
+
+    a.push("-threads".into());
+    a.push("0".into());
+    a.push("-progress".into());
+    a.push("pipe:1".into());
+    a.push("-y".into());
+    a.push(out.to_string_lossy().to_string());
+    a
+}
+
+fn build_screenshot_single(info: &MediaInfo, p: &ScreenshotParams, out: &Path) -> Vec<String> {
+    let mut a: Vec<String> = vec![
+        "-ss".into(),
+        format!("{:.3}", p.at_sec.unwrap_or(0.0).max(0.0)),
+        "-i".into(),
+        info.path.clone(),
+        "-frames:v".into(),
+        "1".into(),
+    ];
+
+    if let Some(w) = p.max_width {
+        if w >= 16 {
+            a.push("-vf".into());
+            a.push(format!("scale={}:-2", w));
+        }
+    }
+    if p.format == "jpeg" {
+        a.push("-q:v".into());
+        a.push("2".into());
+    }
+
+    a.push("-progress".into());
+    a.push("pipe:1".into());
+    a.push("-y".into());
+    a.push(out.to_string_lossy().to_string());
+    a
+}
+
+fn build_screenshot_interval(info: &MediaInfo, p: &ScreenshotParams, out: &Path) -> Vec<String> {
+    let start = p.start_sec.unwrap_or(0.0).max(0.0);
+    let every = p.every_sec.unwrap_or(5.0).clamp(0.1, 3600.0);
+
+    let mut a: Vec<String> = vec![
+        "-ss".into(),
+        format!("{:.3}", start),
+        "-i".into(),
+        info.path.clone(),
+    ];
+
+    if let Some(end) = p.end_sec {
+        if end > start + 0.05 {
+            a.push("-t".into());
+            a.push(format!("{:.3}", end - start));
+        }
+    }
+
+    let mut vf = format!("fps=1/{:.3}", every);
+    if let Some(w) = p.max_width {
+        if w >= 16 {
+            vf.push_str(&format!(",scale={}:-2", w));
+        }
+    }
+    a.push("-vf".into());
+    a.push(vf);
+
+    if p.format == "jpeg" {
+        a.push("-q:v".into());
+        a.push("2".into());
+    }
+
+    a.push("-progress".into());
+    a.push("pipe:1".into());
+    a.push("-y".into());
+    a.push(out.to_string_lossy().to_string());
+    a
+}
+
+/// Playback speed change: setpts for video, chained atempo for audio.
+/// Re-encodes explicitly (ffmpeg's default encoder would be mpeg4).
+fn build_speed_args(info: &MediaInfo, p: &SpeedParams, out: &Path) -> Vec<String> {
+    let rate = p.rate.clamp(0.25, 4.0);
+    let has_video_stream = info.media_type == MediaType::Video || info.video_codec.is_some();
+    let mut a: Vec<String> = vec!["-i".into(), info.path.clone()];
+
+    if info.media_type != MediaType::Audio && has_video_stream {
+        a.push("-vf".into());
+        a.push(format!("setpts=PTS/{:.6}", rate));
+        a.push("-c:v".into());
+        a.push("libx264".into());
+        a.push("-preset".into());
+        a.push("medium".into());
+        a.push("-crf".into());
+        a.push("18".into());
+    }
+
+    if p.mute_audio.unwrap_or(false) {
+        a.push("-an".into());
+    } else if info.audio_codec.is_some() || info.media_type == MediaType::Audio {
+        let chain = atempo_chain(rate);
+        if chain.is_empty() {
+            // rate == 1.0: keep audio untouched.
+            a.push("-c:a".into());
+            a.push("copy".into());
+        } else {
+            a.push("-af".into());
+            let expr = chain
+                .iter()
+                .map(|f| format!("atempo={}", f))
+                .collect::<Vec<_>>()
+                .join(",");
+            a.push(expr);
+
+            // Pick an audio codec that matches the target container.
+            let ext = out
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            match ext.as_str() {
+                "wav" => {
+                    a.push("-c:a".into());
+                    a.push("pcm_s16le".into());
+                }
+                "flac" => {
+                    a.push("-c:a".into());
+                    a.push("flac".into());
+                }
+                _ => {
+                    a.push("-c:a".into());
+                    a.push("aac".into());
+                    a.push("-b:a".into());
+                    a.push("192k".into());
+                }
+            }
+        }
+    }
+
+    a.push("-threads".into());
+    a.push("0".into());
+    a.push("-progress".into());
+    a.push("pipe:1".into());
+    a.push("-y".into());
+    a.push(out.to_string_lossy().to_string());
+    a
+}
+
+/// Image watermark overlay onto video.
+fn build_watermark_args(info: &MediaInfo, p: &WatermarkParams, wm_path: &str, out: &Path) -> Vec<String> {
+    let vw = info.width.unwrap_or(1280) as f64;
+    let vh = info.height.unwrap_or(720) as f64;
+
+    let scale_pct = p.scale_percent.clamp(1, 100) as f64 / 100.0;
+    let tw = ((vw * scale_pct) as u32).max(16);
+    let opacity = p.opacity.unwrap_or(1.0).clamp(0.0, 1.0) as f64;
+    let margin_pct = p.margin_percent.unwrap_or(3).clamp(0, 30) as f64 / 100.0;
+    let margin = ((vw.min(vh)) * margin_pct) as i64;
+
+    let pos = p.position.as_str();
+    let x = match pos {
+        "tl" | "ml" | "bl" => format!("{}", margin),
+        "tc" | "mc" | "bc" => "(main_w-overlay_w)/2".to_string(),
+        _ => format!("main_w-overlay_w-{}", margin), // tr/mr/br
+    };
+    let y = match pos {
+        "tl" | "tc" | "tr" => format!("{}", margin),
+        "ml" | "mc" | "mr" => "(main_h-overlay_h)/2".to_string(),
+        _ => format!("main_h-overlay_h-{}", margin), // bl/bc/br
+    };
+
+    let mut chain = format!("[1:v]scale={}:-2", tw);
+    if opacity < 1.0 {
+        chain.push_str(",format=rgba,colorchannelmixer=aa=");
+        chain.push_str(&format!("{:.6}", opacity));
+    }
+    let fc = format!(
+        "{c}[wm];[0:v][wm]overlay=x={x}:y={y}",
+        c = chain,
+        x = x,
+        y = y
+    );
+
+    let a: Vec<String> = vec![
+        "-i".into(),
+        info.path.clone(),
+        "-i".into(),
+        wm_path.to_string(),
+        "-filter_complex".into(),
+        fc,
+        "-map".into(),
+        "[v]".into(),
+        "-map".into(),
+        "0:a?".into(),
+        "-c:v".into(),
+        "libx264".into(),
+        "-crf".into(),
+        "20".into(),
+        "-preset".into(),
+        "medium".into(),
+        "-c:a".into(),
+        "aac".into(),
+        "-b:a".into(),
+        "192k".into(),
+        "-threads".into(),
+        "0".into(),
+        "-progress".into(),
+        "pipe:1".into(),
+        "-y".into(),
+        out.to_string_lossy().to_string(),
+    ];
     a
 }
 
@@ -384,46 +814,146 @@ fn parse_params<T: serde::de::DeserializeOwned>(params: &serde_json::Value) -> R
     serde_json::from_value(params.clone()).map_err(AppError::from)
 }
 
+/// A fully prepared job: either skipped by the overwrite policy, or ready
+/// to run with its final ffmpeg args and resolved output path.
+enum PreparedJob {
+    Skipped,
+    Run { args: Vec<String>, out: PathBuf },
+}
+
+/// Resolve an output path applying the rename/skip/overwrite policy.
+/// Returns None when the policy is "skip" and the file already exists.
+fn resolve_policy(out: PathBuf, policy: &str) -> Option<PathBuf> {
+    if !out.exists() {
+        return Some(out);
+    }
+    match policy {
+        "overwrite" => Some(out),
+        "skip" => None,
+        _ => Some(apply_overwrite_policy(out, "rename")),
+    }
+}
+
+/// Preserve the input's container extension for re-encoding tools.
+fn input_ext(info: &MediaInfo, fallback: &str) -> String {
+    Path::new(&info.path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .filter(|e| !e.is_empty() && e.len() <= 5 && e.chars().all(|c| c.is_ascii_alphanumeric()))
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+/// Build the args + output path for any tool id, or mark as skipped.
+fn prepare_job(info: &MediaInfo, req: &JobRequest, suffix: &str, policy: &str) -> Result<PreparedJob> {
+    match req.tool_id.as_str() {
+        "compress" => {
+            let ext = extension_for(info.media_type, &req.params);
+            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            let args = match info.media_type {
+                MediaType::Video => {
+                    let mut p: VideoParams = parse_params(&req.params)?;
+                    p.gpu = req.gpu.clone();
+                    if p.extract_audio.unwrap_or(false) {
+                        let ap = AudioParams {
+                            format: audio_ext_for(p.extract_format.as_deref().unwrap_or("mp3"))
+                                .to_string(),
+                            bitrate_kbps: p.audio_bitrate_kbps.unwrap_or(128),
+                            strip_metadata: p.strip_metadata,
+                        };
+                        build_audio_args(info, &ap, &out)
+                    } else {
+                        build_video_args(info, &p, &out)
+                    }
+                }
+                MediaType::Image => {
+                    let p: ImageParams = parse_params(&req.params)?;
+                    build_image_args(info, &p, &out)
+                }
+                MediaType::Audio => {
+                    let p: AudioParams = parse_params(&req.params)?;
+                    build_audio_args(info, &p, &out)
+                }
+                MediaType::Unknown => {
+                    return Err(AppError("无法识别的媒体类型".into()));
+                }
+            };
+            Ok(PreparedJob::Run { args, out })
+        }
+        "gif" => {
+            let p: GifParams = parse_params(&req.params)?;
+            let out = output_path(&info.path, &req.output_dir, "gif", suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            Ok(PreparedJob::Run { args: build_gif_args(info, &p, &out), out })
+        }
+        "screenshot" => {
+            let p: ScreenshotParams = parse_params(&req.params)?;
+            let ext = screenshot_ext(&p.format);
+            if p.mode == "interval" {
+                // Sequence outputs use a %03d pattern; the overwrite policy
+                // does not apply (ffmpeg overwrites numbered files with -y).
+                let base = output_path(&info.path, &req.output_dir, ext, suffix)?;
+                let out = interval_pattern(base);
+                Ok(PreparedJob::Run { args: build_screenshot_interval(info, &p, &out), out })
+            } else {
+                let base = output_path(&info.path, &req.output_dir, ext, suffix)?;
+                let Some(out) = resolve_policy(base, policy) else {
+                    return Ok(PreparedJob::Skipped);
+                };
+                Ok(PreparedJob::Run { args: build_screenshot_single(info, &p, &out), out })
+            }
+        }
+        "speed" => {
+            let p: SpeedParams = parse_params(&req.params)?;
+            let ext = input_ext(info, "mp4");
+            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            Ok(PreparedJob::Run { args: build_speed_args(info, &p, &out), out })
+        }
+        "watermark" => {
+            let p: WatermarkParams = parse_params(&req.params)?;
+            let ext = input_ext(info, "mp4");
+            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            let wm_path = p.image_path.clone();
+            Ok(PreparedJob::Run { args: build_watermark_args(info, &p, &wm_path, &out), out })
+        }
+        other => Err(AppError(format!("未知工具: {}", other))),
+    }
+}
+
 /// Start a conversion job. Spawns FFmpeg, streams progress, emits events.
-pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<String> {
+pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult> {
     let id = uuid();
-    let info = probe(&app, &req.input).await?;
-    let ext = extension_for(req.media_type, &req.params);
+    let input = req
+        .inputs
+        .first()
+        .cloned()
+        .ok_or_else(|| AppError("缺少输入文件".into()))?;
+    let info = probe(&app, &input).await?;
     let suffix = req
         .output_suffix
         .clone()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "_mediapress".to_string());
-    let out = output_path(&req.input, &req.output_dir, &ext, &suffix)?;
+    let policy = req.overwrite_policy.as_deref().unwrap_or("rename");
 
-    let args: Vec<String> = match req.media_type {
-        MediaType::Video => {
-            let mut p: VideoParams = parse_params(&req.params)?;
-            p.gpu = req.gpu.clone();
-            if p.extract_audio.unwrap_or(false) {
-                let ap = AudioParams {
-                    format: audio_ext_for(
-                        p.extract_format.as_deref().unwrap_or("mp3"),
-                    )
-                    .to_string(),
-                    bitrate_kbps: p.audio_bitrate_kbps.unwrap_or(128),
-                };
-                build_audio_args(&info, &ap, &out)
-            } else {
-                build_video_args(&info, &p, &out)
-            }
+    let (args, out) = match prepare_job(&info, &req, &suffix, policy)? {
+        PreparedJob::Skipped => {
+            // Nothing was started; the frontend treats this as a terminal
+            // "skipped" phase via the command's return value.
+            return Ok(StartJobResult { id, skipped: true });
         }
-        MediaType::Image => {
-            let p: ImageParams = parse_params(&req.params)?;
-            build_image_args(&info, &p, &out)
-        }
-        MediaType::Audio => {
-            let p: AudioParams = parse_params(&req.params)?;
-            build_audio_args(&info, &p, &out)
-        }
-        MediaType::Unknown => {
-            return Err(AppError("无法识别的媒体类型".into()));
-        }
+        PreparedJob::Run { args, out } => (args, out),
     };
 
     let mut args = args;
@@ -495,15 +1025,25 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<String> {
                 };
                 format!("FFmpeg 退出码 {}{}", code, detail)
             };
-            let _ = std::fs::remove_file(&out);
-            emit_done(&app, &task_id, false, was_cancelled, None, Some(err), input_size, None);
+            if out.to_string_lossy().contains("%03d") {
+                cleanup_pattern_outputs(&out);
+            } else {
+                let _ = std::fs::remove_file(&out);
+            }
+            emit_done(&app, &task_id, false, was_cancelled, false, None, Some(err), input_size, None);
         } else {
-            let output_size = std::fs::metadata(&out).map(|m| m.len()).ok();
+            let is_pattern = out.to_string_lossy().contains("%03d");
+            let output_size = if is_pattern {
+                pattern_output_size(&out)
+            } else {
+                std::fs::metadata(&out).map(|m| m.len()).ok()
+            };
             emit_progress(&app, &task_id, 100.0, "done", last_speed.clone());
             emit_done(
                 &app,
                 &task_id,
                 true,
+                false,
                 false,
                 Some(out.to_string_lossy().to_string()),
                 None,
@@ -513,7 +1053,7 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<String> {
         }
     });
 
-    Ok(id)
+    Ok(StartJobResult { id, skipped: false })
 }
 
 /// Refined size estimate via a short real encode of a sample clip.
@@ -569,6 +1109,7 @@ pub async fn estimate_size(app: AppHandle, req: EstimateRequest) -> Result<Estim
                 let ap = AudioParams {
                     format: audio_ext_for(p.extract_format.as_deref().unwrap_or("mp3")).to_string(),
                     bitrate_kbps: p.audio_bitrate_kbps.unwrap_or(128),
+                    strip_metadata: p.strip_metadata,
                 };
                 build_audio_args(&info, &ap, &tmp)
             } else {
@@ -666,6 +1207,7 @@ fn emit_done(
     id: &str,
     ok: bool,
     cancelled: bool,
+    skipped: bool,
     output: Option<String>,
     error: Option<String>,
     input_size: u64,
@@ -677,6 +1219,7 @@ fn emit_done(
             id: id.to_string(),
             ok,
             cancelled,
+            skipped: if skipped { Some(true) } else { None },
             output,
             error,
             input_size,
@@ -726,6 +1269,8 @@ mod tests {
             preset: "medium".into(),
             start_time: None,
             duration: None,
+            fps: None,
+            strip_metadata: None,
             extract_audio: None,
             extract_format: None,
             gpu: None,
@@ -777,6 +1322,8 @@ mod tests {
             preset: "medium".into(),
             start_time: None,
             duration: None,
+            fps: None,
+            strip_metadata: None,
             extract_audio: Some(true),
             extract_format: Some("opus".into()),
             gpu: None,
@@ -784,6 +1331,7 @@ mod tests {
         let ap = AudioParams {
             format: audio_ext_for(p.extract_format.as_deref().unwrap_or("mp3")).to_string(),
             bitrate_kbps: p.audio_bitrate_kbps.unwrap_or(128),
+            strip_metadata: None,
         };
         let args = build_audio_args(&sample_info(), &ap, Path::new("o.opus"));
         assert!(args.contains(&"-vn".to_string()));
@@ -824,6 +1372,7 @@ mod tests {
             format: "webp".into(),
             quality: 80,
             max_dimension: Some(1280),
+            strip_metadata: None,
         };
         let args = build_image_args(&sample_info(), &p, Path::new("o.webp"));
         assert!(args.contains(&"-quality".to_string()));
@@ -837,12 +1386,234 @@ mod tests {
         let p = AudioParams {
             format: "mp3".into(),
             bitrate_kbps: 192,
+            strip_metadata: None,
         };
         let args = build_audio_args(&sample_info(), &p, Path::new("o.mp3"));
         assert!(args.contains(&"-vn".to_string()));
         assert!(args.contains(&"libmp3lame".to_string()));
         assert!(args.contains(&"-b:a".to_string()));
         assert!(args.contains(&"192k".to_string()));
+    }
+
+    #[test]
+    fn av1_crf_and_preset() {
+        let mut p = video_params();
+        p.video_codec = "libsvtav1".into();
+        p.crf = Some(32);
+        let args = build_video_args(&sample_info(), &p, Path::new("o.mp4"));
+        assert!(args.contains(&"libsvtav1".to_string()));
+        let idx = args.iter().position(|a| a == "-crf").unwrap();
+        assert_eq!(args[idx + 1], "32");
+        let pidx = args.iter().position(|a| a == "-preset").unwrap();
+        // medium maps to SVT preset 7
+        assert_eq!(args[pidx + 1], "7");
+        // no -cpu-used / -deadline (those are VP9-only)
+        assert!(!args.contains(&"-cpu-used".to_string()));
+    }
+
+    #[test]
+    fn av1_bitrate_mode() {
+        let mut p = video_params();
+        p.video_codec = "libsvtav1".into();
+        p.quality_mode = "bitrate".into();
+        p.video_bitrate_kbps = Some(1500);
+        let args = build_video_args(&sample_info(), &p, Path::new("o.mkv"));
+        assert!(args.contains(&"1500k".to_string()));
+        assert!(!args.contains(&"-crf".to_string()));
+    }
+
+    #[test]
+    fn fps_arg_added_and_skipped_for_copy() {
+        let mut p = video_params();
+        p.fps = Some(30);
+        let args = build_video_args(&sample_info(), &p, Path::new("o.mp4"));
+        let idx = args.iter().position(|a| a == "-r").unwrap();
+        assert_eq!(args[idx + 1], "30");
+
+        p.video_codec = "copy".into();
+        let args = build_video_args(&sample_info(), &p, Path::new("o.mp4"));
+        assert!(!args.contains(&"-r".to_string()));
+
+        p.fps = Some(0);
+        let args = build_video_args(&sample_info(), &p, Path::new("o.mp4"));
+        assert!(!args.contains(&"-r".to_string()));
+    }
+
+    #[test]
+    fn strip_metadata_flags() {
+        let mut p = video_params();
+        p.strip_metadata = Some(true);
+        let args = build_video_args(&sample_info(), &p, Path::new("o.mp4"));
+        assert!(args.contains(&"-map_metadata".to_string()));
+        assert!(args.contains(&"-map_chapters".to_string()));
+
+        let ap = AudioParams { format: "mp3".into(), bitrate_kbps: 128, strip_metadata: Some(true) };
+        let args = build_audio_args(&sample_info(), &ap, Path::new("o.mp3"));
+        assert!(args.contains(&"-map_metadata".to_string()));
+        assert!(!args.contains(&"-map_chapters".to_string()));
+
+        let ip = ImageParams { format: "webp".into(), quality: 80, max_dimension: None, strip_metadata: Some(true) };
+        let args = build_image_args(&sample_info(), &ip, Path::new("o.webp"));
+        assert!(args.contains(&"-map_metadata".to_string()));
+    }
+
+    #[test]
+    fn overwrite_policy_rename() {
+        let dir = std::env::temp_dir().join(format!("mp_ov_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = dir.join("clip_mediapress.mp4");
+        std::fs::write(&base, b"x").unwrap();
+
+        let renamed = apply_overwrite_policy(base.clone(), "rename");
+        assert_ne!(renamed, base);
+        assert!(renamed.to_string_lossy().contains("(2)"));
+
+        // Existing "(2)" too -> picks "(3)"
+        std::fs::write(&renamed, b"x").unwrap();
+        let renamed2 = apply_overwrite_policy(base.clone(), "rename");
+        assert!(renamed2.to_string_lossy().contains("(3)"));
+
+        // overwrite keeps the path untouched
+        assert_eq!(apply_overwrite_policy(base.clone(), "overwrite"), base);
+        // skip keeps the path; caller checks existence
+        assert_eq!(apply_overwrite_policy(base.clone(), "skip"), base);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn gif_params() -> GifParams {
+        GifParams { start_time: None, duration: None, fps: None, width: None }
+    }
+
+    #[test]
+    fn gif_args_palette() {
+        let p = gif_params();
+        let args = build_gif_args(&sample_info(), &p, Path::new("o.gif"));
+        let fc = args.iter().position(|a| a == "-filter_complex").unwrap();
+        let fc_val = &args[fc + 1];
+        assert!(fc_val.contains("palettegen"));
+        assert!(fc_val.contains("paletteuse"));
+        assert!(fc_val.contains("fps=12"));
+        assert!(fc_val.contains("scale=480"));
+        assert_eq!(args.last().unwrap(), "o.gif");
+    }
+
+    fn shot_params(mode: &str) -> ScreenshotParams {
+        ScreenshotParams {
+            mode: mode.into(),
+            at_sec: Some(3.5),
+            every_sec: Some(5.0),
+            start_sec: Some(2.0),
+            end_sec: Some(30.0),
+            format: "png".into(),
+            max_width: Some(1280),
+        }
+    }
+
+    #[test]
+    fn screenshot_single_and_interval() {
+        let sp = shot_params("single");
+        let args = build_screenshot_single(&sample_info(), &sp, Path::new("o.png"));
+        let ss = args.iter().position(|a| a == "-ss").unwrap();
+        assert_eq!(args[ss + 1], "3.500");
+        assert!(args.contains(&"-frames:v".to_string()));
+        assert!(args.contains(&"scale=1280:-2".to_string()));
+
+        let ip = shot_params("interval");
+        let args = build_screenshot_interval(&sample_info(), &ip, Path::new("o_%03d.png"));
+        assert!(args.iter().any(|a| a.contains("fps=1/5.000")));
+        let t = args.iter().position(|a| a == "-t").unwrap();
+        assert_eq!(args[t + 1], "28.000");
+        assert_eq!(args.last().unwrap(), "o_%03d.png");
+    }
+
+    #[test]
+    fn interval_pattern_naming() {
+        let base = PathBuf::from("anywhere").join("clip_mediapress.png");
+        let pat = interval_pattern(base);
+        assert_eq!(
+            pat.file_name().and_then(|n| n.to_str()),
+            Some("clip_mediapress_%03d.png")
+        );
+    }
+
+    #[test]
+    fn atempo_chain_values() {
+        assert_eq!(atempo_chain(1.0), Vec::<String>::new());
+        assert_eq!(atempo_chain(1.5), vec!["1.500000".to_string()]);
+        assert_eq!(atempo_chain(4.0), vec!["2.000000".to_string(), "2.000000".to_string()]);
+        assert_eq!(atempo_chain(0.25), vec!["0.500000".to_string(), "0.500000".to_string()]);
+        // 0.75 -> 0.75 stays single (>= 0.5)
+        assert_eq!(atempo_chain(0.75), vec!["0.750000".to_string()]);
+    }
+
+    fn speed_params(rate: f64, mute: bool) -> SpeedParams {
+        SpeedParams { rate, mute_audio: Some(mute) }
+    }
+
+    #[test]
+    fn speed_video_args() {
+        let p = speed_params(4.0, false);
+        let args = build_speed_args(&sample_info(), &p, Path::new("o.mp4"));
+        assert!(args.contains(&"setpts=PTS/4.000000".to_string()));
+        assert!(args.iter().any(|a| a.contains("atempo=2.000000,atempo=2.000000")));
+        assert!(args.contains(&"-crf".to_string()));
+        assert!(args.contains(&"192k".to_string()));
+
+        let p = speed_params(2.0, true);
+        let args = build_speed_args(&sample_info(), &p, Path::new("o.mp4"));
+        assert!(args.contains(&"-an".to_string()));
+        assert!(!args.iter().any(|a| a.starts_with("atempo=")));
+    }
+
+    #[test]
+    fn speed_audio_only_no_setpts() {
+        let mut info = sample_info();
+        info.media_type = MediaType::Audio;
+        info.video_codec = None;
+        info.audio_codec = Some("aac".into());
+        let p = speed_params(0.5, false);
+        let args = build_speed_args(&info, &p, Path::new("o.m4a"));
+        assert!(!args.contains(&"-vf".to_string()));
+        assert!(args.contains(&"atempo=0.500000".to_string()));
+    }
+
+    fn wm_params(pos: &str, opacity: Option<f32>) -> WatermarkParams {
+        WatermarkParams {
+            image_path: "wm.png".into(),
+            position: pos.into(),
+            scale_percent: 20,
+            opacity,
+            margin_percent: Some(3),
+        }
+    }
+
+    #[test]
+    fn watermark_args_geometry() {
+        let p = wm_params("br", Some(0.5));
+        let args = build_watermark_args(&sample_info(), &p, "wm.png", Path::new("o.mp4"));
+        let fc = args.iter().position(|a| a == "-filter_complex").unwrap();
+        let fc_val = &args[fc + 1];
+        // 20% of probed 1920px -> 384px watermark width
+        assert!(fc_val.contains("scale=384:-2"));
+        assert!(fc_val.contains("aa=0.500000"));
+        // margin = 3% of min(1920,1080) = 32px
+        assert!(fc_val.contains("overlay=x=main_w-overlay_w-32"));
+        assert!(fc_val.contains("y=main_h-overlay_h-32"));
+        // two inputs and stream mapping
+        assert_eq!(args.iter().filter(|a| *a == "-i").count(), 2);
+        assert!(args.contains(&"[v]".to_string()));
+        assert!(args.contains(&"0:a?".to_string()));
+    }
+
+    #[test]
+    fn watermark_full_opacity_skips_alpha() {
+        let p = wm_params("tl", None);
+        let args = build_watermark_args(&sample_info(), &p, "wm.png", Path::new("o.mp4"));
+        let fc_idx = args.iter().position(|a| a == "-filter_complex").unwrap();
+        let fc_val = &args[fc_idx + 1];
+        assert!(!fc_val.contains("colorchannelmixer"));
+        assert!(fc_val.contains("x=32:y=32"));
     }
 }
 

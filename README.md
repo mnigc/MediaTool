@@ -4,17 +4,26 @@
 
 # MediPress
 
-A local media compression and conversion tool for batch processing of video, image, and audio files. Built on **Tauri 2 + React + TypeScript** with **FFmpeg** as the processing engine.
+A local media **toolbox** for batch processing of video, image, and audio files. Built on **Tauri 2 + React + TypeScript** with **FFmpeg** as the processing engine.
 
-> Legal compliance: Only royalty-free encoders are enabled by default (H.264/AAC patents have expired, VP9/Opus/WebP/AVIF are royalty-free). **HEVC/H.265** and other patent-encumbered encoders are **not provided**.
+> Legal compliance: Only royalty-free encoders are enabled by default (H.264/AAC patents have expired, VP9/Opus/WebP/AVIF/AV1 are royalty-free). **HEVC/H.265** and other patent-encumbered encoders are **not provided**.
 
 ## Features
 
-- **Video Compression & Conversion** — H.264, VP9 encoding with CRF/target size/fixed bitrate quality modes, custom resolution (480p ~ 2160p), encoding speed, and trim controls
-- **Image Compression & Conversion** — Convert between JPEG, PNG, WebP formats with quality adjustment and max dimension limit
-- **Audio Conversion** — Convert between MP3, AAC, M4A, Opus, FLAC formats with bitrate control
-- **Audio Extraction** — Extract audio tracks from video files (MP3/AAC/Opus/FLAC)
+- **Toolbox Layout** — categorized tool tree (common / video / audio / image / general) with a unified bottom task dock; different tools can run tasks simultaneously
+- **Compress & Convert** — H.264, VP9, AV1 (SVT-AV1) encoding with CRF/target size/fixed bitrate quality modes, custom resolution (480p ~ 2160p), frame rate, encoding speed, trim controls, and metadata stripping
+- **Video → GIF** — high-quality palette-based GIF conversion (start/duration/fps/width)
+- **Screenshot Export** — single frame or interval series export to PNG/JPEG
+- **Speed Change** — 0.25x ~ 4x video/audio speed change with chained atempo, optional mute
+- **Image Watermark** — overlay watermark on video with 9-grid positioning, scale & opacity control
+- **Media Info** — instant full codec/stream inspection report via ffprobe
+- **Audio Conversion & Extraction** — MP3/AAC/M4A/Opus/FLAC with bitrate control
 - **GPU Acceleration** — Auto-detects NVIDIA NVENC, Intel QSV, Apple VideoToolbox, AMD AMF, VAAPI backends
+- **Batch Processing** — Drag-and-drop import, concurrent task execution (1/2/4), unified task dock with progress/retry/cancel
+- **Name Conflict Policy** — auto-rename, skip, or overwrite when output files already exist
+- **Built-in & Custom Presets** — platform presets plus per-tool custom presets
+- **Output Size Estimation** — theoretical estimation + sample encoding for accurate prediction
+- **Multi-language** — 中文, English, 한국어, 日本語 | **Theme** — Light / Dark / System
 - **Batch Processing** — Drag-and-drop or file picker for batch import, concurrent processing control (1/2/4)
 - **Built-in Presets** — Optimized for YouTube, Bilibili, Douyin, Xiaohongshu, WeChat Channels
 - **Custom Presets** — Save frequently used parameters as presets for quick reuse
@@ -77,8 +86,10 @@ Output is in `src-tauri/target/release/bundle/` (Windows: `.msi` / `.exe`).
 ```
 MediPress/
 ├── src/                    # React frontend
-│   ├── components/         # UI components (JobCard, OptionsPanel, Sidebar, etc.)
-│   ├── hooks/              # Custom hooks (useJobs, useTheme, useToasts)
+│   ├── components/         # UI components (JobCard, TaskDock, ToolNav, OptionsPanel, etc.)
+│   ├── contexts/           # TaskCenter (unified task queue, events, settings)
+│   ├── tools/              # Toolbox: tool registry, workbenches, tool param panels
+│   ├── hooks/              # Custom hooks (useTheme, useToasts)
 │   ├── i18n/               # Internationalization (4 languages)
 │   ├── lib/                # Utilities (preset management, output estimation, Tauri calls)
 │   ├── App.tsx             # Main app component
@@ -88,7 +99,8 @@ MediPress/
 ├── src-tauri/              # Rust backend
 │   ├── src/                # Rust source
 │   │   ├── commands.rs     # Tauri command registration
-│   │   ├── jobs.rs         # Task queue, FFmpeg args, progress/events
+│   │   ├── jobs.rs         # Per-tool FFmpeg arg builders, task queue, progress/events
+│   │   ├── inspect.rs      # ffprobe-based full media inspection
 │   │   ├── ffmpeg.rs       # FFmpeg process lookup & spawn
 │   │   ├── media.rs        # ffprobe media detection
 │   │   ├── gpu.rs          # GPU acceleration detection

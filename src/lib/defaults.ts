@@ -21,13 +21,15 @@ export function blankParams(mediaType: MediaType): JobParams {
         preset: "medium",
         startTime: undefined,
         duration: undefined,
+        fps: undefined,
+        stripMetadata: false,
         extractAudio: false,
         extractFormat: "mp3",
       } satisfies VideoParams;
     case "image":
-      return { format: "webp", quality: 80 } satisfies ImageParams;
+      return { format: "webp", quality: 80, stripMetadata: false } satisfies ImageParams;
     case "audio":
-      return { format: "mp3", bitrateKbps: 128 } satisfies AudioParams;
+      return { format: "mp3", bitrateKbps: 128, stripMetadata: false } satisfies AudioParams;
     default:
       return { format: "mp4", quality: 80 } as JobParams;
   }

@@ -25,12 +25,12 @@ type Props = {
   onCancel: (uiId: string) => void;
   onRemove: (uiId: string) => void;
   onOpenFolder: (path: string) => void;
-  onChangeParams: (uiId: string, params: JobParams) => void;
-  onSyncParams: (uiId: string) => void;
+  onChangeParams?: (uiId: string, params: JobParams) => void;
+  onSyncParams?: (uiId: string) => void;
   onRetry: (uiId: string) => void;
-  onReorderStart: (uiId: string) => void;
-  onReorderOver: (uiId: string) => void;
-  onReorderDrop: (uiId: string) => void;
+  onReorderStart?: (uiId: string) => void;
+  onReorderOver?: (uiId: string) => void;
+  onReorderDrop?: (uiId: string) => void;
 };
 
 const staggerClass = (i: number): string => {
@@ -119,8 +119,9 @@ export default function JobCard({
   const isDone = job.phase === "done";
   const isRunning = job.phase === "running";
   const isQueued = job.phase === "queued";
+  const isCompress = job.toolId === "compress";
   const [over, setOver] = useState(false);
-  const draggable = isQueued;
+  const draggable = isQueued && isCompress && !!onReorderStart;
   const [thumb, setThumb] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -162,7 +163,10 @@ export default function JobCard({
       ? 1 - job.outputSize / job.info.sizeBytes
       : null;
 
-  const formula = estimateOutputSize(job.info, job.params);
+  const formula =
+    isCompress && job.phase !== "done"
+      ? estimateOutputSize(job.info, job.params)
+      : null;
   const estimate = job.sizeEstimate
     ? {
         bytes: job.sizeEstimate.bytes,
@@ -176,11 +180,12 @@ export default function JobCard({
       draggable={draggable}
       tabIndex={isQueued ? 0 : -1}
       onDragStart={(e) => {
+        if (!onReorderStart) return;
         e.dataTransfer.effectAllowed = "move";
         onReorderStart(job.uiId);
       }}
       onDragOver={(e) => {
-        if (!draggable) return;
+        if (!draggable || !onReorderOver) return;
         e.preventDefault();
         setOver(true);
         onReorderOver(job.uiId);
@@ -189,7 +194,7 @@ export default function JobCard({
       onDrop={(e) => {
         e.preventDefault();
         setOver(false);
-        onReorderDrop(job.uiId);
+        onReorderDrop?.(job.uiId);
       }}
       className={`pop stagger-in ${staggerClass(startIndex)} rounded-2xl bg-white p-5 shadow-sm ring-1 ring-neutral-200 transition-shadow ${statusClass(job.phase)} ${
         over ? "ring-2 ring-brand-400 shadow-md" : ""
@@ -215,6 +220,11 @@ export default function JobCard({
             <span className={`rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${badge.cls}`}>
               {typeLabel}
             </span>
+            {!isCompress && (
+              <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-medium text-neutral-500 ring-1 ring-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:ring-neutral-700">
+                {t(`tool.${job.toolId}.name`)}
+              </span>
+            )}
             <h3 className="truncate text-sm font-medium text-neutral-800 dark:text-neutral-100" title={job.info.path}>
               {basename(job.info.path)}
             </h3>
@@ -282,13 +292,15 @@ export default function JobCard({
 
       {isQueued && (
         <>
-          <div className="mt-4 border-t border-neutral-100 pt-4 dark:border-neutral-700/60">
-            <OptionsPanel
-              mediaType={job.info.mediaType}
-              params={job.params}
-              onChange={(p) => onChangeParams(job.uiId, p)}
-            />
-          </div>
+          {isCompress && onChangeParams && (
+            <div className="mt-4 border-t border-neutral-100 pt-4 dark:border-neutral-700/60">
+              <OptionsPanel
+                mediaType={job.info.mediaType}
+                params={job.params}
+                onChange={(p) => onChangeParams(job.uiId, p)}
+              />
+            </div>
+          )}
           <div className="mt-4 flex items-center gap-2">
               <button
                 onClick={() => onStart(job.uiId)}
@@ -297,13 +309,15 @@ export default function JobCard({
                 <PlayIcon className="h-4 w-4" />
                 {t("job.start")}
               </button>
-              <button
-                onClick={() => onSyncParams(job.uiId)}
-                className="rounded-xl border border-brand-200 bg-brand-50 px-3 py-2.5 text-sm font-medium text-brand-700 transition hover:bg-brand-100 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-300 dark:hover:bg-brand-900"
-                title={t("job.sync")}
-              >
-                {t("job.sync")}
-              </button>
+              {onSyncParams && (
+                <button
+                  onClick={() => onSyncParams(job.uiId)}
+                  className="rounded-xl border border-brand-200 bg-brand-50 px-3 py-2.5 text-sm font-medium text-brand-700 transition hover:bg-brand-100 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-300 dark:hover:bg-brand-900"
+                  title={t("job.sync")}
+                >
+                  {t("job.sync")}
+                </button>
+              )}
           </div>
         </>
       )}
@@ -389,6 +403,12 @@ export default function JobCard({
       {job.phase === "cancelled" && (
         <div className="mt-4 rounded-xl bg-neutral-50 px-4 py-2.5 text-sm text-neutral-400 ring-1 ring-neutral-200 dark:bg-neutral-800 dark:text-neutral-500 dark:ring-neutral-700">
           {t("job.cancelled")}
+        </div>
+      )}
+
+      {job.phase === "skipped" && (
+        <div className="mt-4 rounded-xl bg-neutral-50 px-4 py-2.5 text-sm text-neutral-500 ring-1 ring-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:ring-neutral-700">
+          {t("job.skipped")}
         </div>
       )}
     </div>

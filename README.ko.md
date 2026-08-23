@@ -6,15 +6,19 @@
 
 로컬 미디어 압축 및 변환 도구로, 비디오, 이미지, 오디오 파일을 일괄 처리할 수 있습니다. **Tauri 2 + React + TypeScript** 기반 데스크톱 애플리케이션으로, **FFmpeg**를 처리 엔진으로 사용합니다.
 
-> 법적 준수: 기본적으로 특허 위험이 없는 코덱만 활성화됩니다(H.264/AAC 특허 만료, VP9/Opus/WebP/AVIF는 로열티 프리). **HEVC/H.265** 등 특허 위험이 있는 코덱은 **제공되지 않습니다**.
+> 법적 준수: 기본적으로 특허 위험이 없는 코덱만 활성화됩니다(H.264/AAC 특허 만료, VP9/Opus/WebP/AVIF/AV1은 로열티 프리). **HEVC/H.265** 등 특허 위험이 있는 코덱은 **제공되지 않습니다**.
 
 ## 기능
 
-- **비디오 압축 및 변환** — H.264, VP9 인코딩, CRF/목표 크기/고정 비트레이트 품질 모드, 사용자 정의 해상도(480p ~ 2160p), 인코딩 속도, 트림 제어
-- **이미지 압축 및 변환** — JPEG, PNG, WebP 형식 변환, 품질 조정 및 최대 크기 제한
-- **오디오 변환** — MP3, AAC, M4A, Opus, FLAC 형식 변환, 비트레이트 제어
-- **오디오 추출** — 비디오에서 오디오 트랙 추출(MP3/AAC/Opus/FLAC)
-- **GPU 가속** — NVIDIA NVENC, Intel QSV, Apple VideoToolbox, AMD AMF, VAAPI 자동 감지
+- **도구 상자 레이아웃** — 좌측 카테고리 도구 트리 + 하단 통합 작업 독, 서로 다른 도구의 작업 동시 실행
+- **비디오 압축 및 변환** — H.264, VP9, AV1 (SVT-AV1) 인코딩, CRF/목표 크기/고정 비트레이트 품질 모드, 사용자 정의 해상도(480p ~ 2160p), 프레임 레이트, 인코딩 속도, 트림 제어
+- **GIF 변환** — 팔레트 알고리즘 기반 고품질 움짤 생성
+- **스크린샷 내보내기** — 단일 프레임 또는 일정 간격 PNG/JPEG 내보내기
+- **속도 변경** — 0.25x ~ 4x 비디오/오디오 속도 변경(체인 atempo), 음소거 선택 가능
+- **워터마크** — 비디오에 이미지 워터마크 합성, 9분할 위치·크기·불투명도 조절
+- **미디어 정보** — ffprobe 기반 전체 포맷/스트림 정보 즉시 조회
+- **메타데이터 제거** — EXIF/GPS 등 개인 정보 원클릭 삭제
+- **이름 충돌 정책** — 출력 파일 이름이 중복될 때 자동 이름 변경, 건너뛰기 또는 덮어쓰기
 - **일괄 처리** — 드래그 앤 드롭 또는 파일 선택기로 일괄 가져오기, 동시 처리 제어(1/2/4)
 - **내장 프리셋** — YouTube, Bilibili, Douyin, Xiaohongshu, WeChat Channels에 최적화
 - **사용자 정의 프리셋** — 자주 사용하는 매개변수를 프리셋으로 저장하여 빠르게 재사용
@@ -77,8 +81,10 @@ npm run tauri build
 ```
 MediPress/
 ├── src/                    # React 프론트엔드
-│   ├── components/         # UI 컴포넌트 (JobCard, OptionsPanel, Sidebar 등)
-│   ├── hooks/              # 사용자 정의 Hooks (useJobs, useTheme, useToasts)
+│   ├── components/         # UI 컴포넌트 (JobCard, TaskDock, ToolNav, OptionsPanel 등)
+│   ├── contexts/           # TaskCenter (통합 작업 대기열, 이벤트, 설정)
+│   ├── tools/              # 도구 상자: 도구 레지스트리, 워크벤치, 파라미터 패널
+│   ├── hooks/              # 사용자 정의 Hooks (useTheme, useToasts)
 │   ├── i18n/               # 국제화 (6개 언어)
 │   ├── lib/                # 유틸리티 (프리셋 관리, 출력 추정, Tauri 호출)
 │   ├── App.tsx             # 메인 앱 컴포넌트

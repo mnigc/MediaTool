@@ -136,8 +136,13 @@ export function estimateOutputSize(
       } else {
         const crf = v.crf ?? 28;
         const crfScale = Math.pow(1.4, (23 - crf) / 3);
-        const codecFactor = v.videoCodec === "libvpx-vp9" ? 0.7 : 1.0;
-        videoKbps = videoKbpsAtHeight(tH) * areaRatio * crfScale * codecFactor;
+        let codecFactor = 1.0;
+        if (v.videoCodec === "libvpx-vp9") codecFactor = 0.7;
+        else if (v.videoCodec === "libsvtav1") codecFactor = 0.6;
+        // Frame rate adjustment relative to the 30fps baseline of the table.
+        const fpsScale =
+          v.fps && v.fps > 0 ? Math.pow(v.fps / 30, 0.5) : 1.0;
+        videoKbps = videoKbpsAtHeight(tH) * areaRatio * crfScale * codecFactor * fpsScale;
       }
       exact = false;
     }

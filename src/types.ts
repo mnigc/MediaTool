@@ -23,7 +23,7 @@ export interface MediaInfo {
 }
 
 export interface VideoParams {
-  videoCodec: string; // libx264 | libvpx-vp9 | copy
+  videoCodec: string; // libx264 | libvpx-vp9 | libsvtav1 | copy
   qualityMode: string; // crf | target_size | bitrate
   crf?: number;
   targetSizeMb?: number;
@@ -35,31 +35,114 @@ export interface VideoParams {
   preset: string;
   startTime?: number; // trim start offset, seconds
   duration?: number; // trim length, seconds (undefined = to end)
+  fps?: number; // output fps (undefined/0 = follow source, ignored for copy)
+  stripMetadata?: boolean; // strip container metadata / EXIF via -map_metadata -1
   extractAudio?: boolean; // extract audio track only from a video
   extractFormat?: string; // mp3 | aac | m4a | opus | flac (used when extractAudio)
   gpu?: string; // GPU backend id (nvenc/qsv/videotoolbox/amf/vaapi); "" or unset = CPU
 }
 
 export interface ImageParams {
-  format: string; // jpeg | png | webp | avif
+  format: string; // jpeg | png | webp | avif | keep
   quality: number; // 1..100
   maxDimension?: number;
+  stripMetadata?: boolean;
 }
 
 export interface AudioParams {
   format: string; // mp3 | aac | m4a | opus | flac
   bitrateKbps: number;
+  stripMetadata?: boolean;
 }
 
-export type JobParams = VideoParams | ImageParams | AudioParams;
+/* ── Toolbox tools ─────────────────────────────────────────── */
+
+export type ToolId = "compress" | "gif" | "screenshot" | "speed" | "watermark";
+
+export interface GifParams {
+  startTime?: number;
+  duration?: number;
+  fps: number; // 5..30, default 12
+  width: number; // default 480
+}
+
+export interface ScreenshotParams {
+  mode: "single" | "interval";
+  atSec?: number; // single mode
+  everySec?: number; // interval mode
+  startSec?: number;
+  endSec?: number;
+  format: string; // png | jpeg
+  maxWidth?: number;
+}
+
+export interface SpeedParams {
+  rate: number; // 0.25..4
+  muteAudio?: boolean;
+}
+
+export interface WatermarkParams {
+  imagePath: string;
+  position: string; // tl|tc|tr|ml|mc|mr|bl|bc|br
+  scalePercent: number;
+  opacity: number; // 0..1
+  marginPercent: number;
+}
+
+export type ToolParams =
+  | VideoParams
+  | ImageParams
+  | AudioParams
+  | GifParams
+  | ScreenshotParams
+  | SpeedParams
+  | WatermarkParams;
+
+export type JobParams = ToolParams;
+
+export interface StreamReport {
+  index: number;
+  kind: string;
+  codecName?: string | null;
+  codecLong?: string | null;
+  profile?: string | null;
+  pixFmt?: string | null;
+  width?: number | null;
+  height?: number | null;
+  avgFrameRate?: string | null;
+  sampleRate?: number | null;
+  channels?: number | null;
+  channelLayout?: string | null;
+  bitrateKbps?: number | null;
+  language?: string | null;
+  tags: unknown;
+}
+
+export interface MediaReport {
+  path: string;
+  sizeBytes: number;
+  formatName?: string | null;
+  formatLong?: string | null;
+  durationSecs?: number | null;
+  bitrateKbps?: number | null;
+  tags: unknown;
+  streams: StreamReport[];
+  chapterCount: number;
+}
 
 export interface JobRequest {
-  input: string;
+  toolId: string; // compress | gif | screenshot | speed | watermark
+  inputs: string[]; // one or more input files
   outputDir?: string;
-  mediaType: MediaType;
   params: JobParams;
   outputSuffix?: string;
-  gpu?: string; // GPU backend id; empty/undefined = CPU
+  gpu?: string; // GPU backend id; empty/undefined = CPU (compress only)
+  overwritePolicy?: "overwrite" | "rename" | "skip"; // default: rename
+}
+
+export interface StartJobResult {
+  id: string;
+  skipped: boolean; // output existed and policy = skip; nothing was encoded
 }
 
 export interface EstimateRequest {
@@ -96,11 +179,12 @@ export interface DoneEvent {
 
 export interface Job {
   uiId: string;
+  toolId: string;
   info: MediaInfo;
   params: JobParams;
   rustId?: string;
   percent: number;
-  phase: "queued" | "running" | "done" | "error" | "cancelled";
+  phase: "queued" | "running" | "done" | "error" | "cancelled" | "skipped";
   output?: string | null;
   error?: string | null;
   outputSize?: number | null;

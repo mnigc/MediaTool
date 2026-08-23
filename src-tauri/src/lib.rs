@@ -2,6 +2,7 @@ mod commands;
 mod error;
 mod ffmpeg;
 mod gpu;
+mod inspect;
 mod jobs;
 mod media;
 mod models;
@@ -23,6 +24,7 @@ pub fn run() {
             commands::cancel_job,
             commands::open_output_folder,
             commands::detect_gpu,
+            commands::inspect_media,
             thumbnail::get_thumbnail
         ])
         .run(tauri::generate_context!())
