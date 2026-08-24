@@ -22,8 +22,6 @@ function detectLocale(): Locale {
     typeof navigator !== "undefined" ? navigator.language : ""
   ).toLowerCase();
   if (nav.startsWith("zh")) return "zh";
-  if (nav.startsWith("ko")) return "ko";
-  if (nav.startsWith("ja")) return "ja";
   if (nav.startsWith("en")) return "en";
   return "en";
 }

@@ -48,10 +48,11 @@ export default function FilePicker({ meta, files, onChange }: Props) {
   }, [previewPath]);
 
   const browse = async () => {
+    const filterName = meta.mediaType ? t(`dz.filter.${meta.mediaType}`) : "媒体文件";
     const sel = await open({
       multiple: true,
       title: t("opt.selectFiles"),
-      filters: [{ name: "Media", extensions: meta.accepts }],
+      filters: [{ name: filterName, extensions: meta.accepts }],
     });
     const arr = Array.isArray(sel) ? sel : sel ? [sel] : [];
     const valid = arr.filter((p) => extOk(p, meta.accepts));
@@ -68,6 +69,14 @@ export default function FilePicker({ meta, files, onChange }: Props) {
     onChange([...files, ...paths.filter((p) => !files.includes(p))]);
   };
 
+  const formatHint = meta.mediaType === "video"
+    ? `支持 ${meta.accepts.map((e) => `.${e}`).join(", ")} · 可批量添加`
+    : meta.mediaType === "audio"
+    ? `支持 ${meta.accepts.map((e) => `.${e}`).join(", ")} · 可批量添加`
+    : meta.mediaType === "image"
+    ? `支持 ${meta.accepts.map((e) => `.${e}`).join(", ")} · 可批量添加`
+    : "支持视频、图片、音频 · 可批量添加";
+
   return (
     <div className="space-y-2">
       <button
@@ -77,6 +86,9 @@ export default function FilePicker({ meta, files, onChange }: Props) {
       >
         + {t("tool.pickFile")}
       </button>
+      <p className="text-center text-xs text-neutral-400 dark:text-neutral-500">
+        {formatHint}
+      </p>
 
       {files.map((f) => (
         <div

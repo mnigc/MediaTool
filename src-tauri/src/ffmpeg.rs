@@ -16,8 +16,10 @@ pub fn binary_name(base: &str) -> String {
     }
 }
 
-/// Locate a binary: next to the running executable, then the resource dir,
-/// then the system PATH (verified by a quick `-version` probe).
+/// Locate a binary: next to the running executable, then walking up the
+/// directory tree looking for a `binaries/` folder (dev layout:
+/// `src-tauri/binaries`), then the resource dir, then the system PATH
+/// (verified by a quick `-version` probe).
 pub fn resolve(app: &tauri::AppHandle, base: &str) -> Option<PathBuf> {
     let name = binary_name(base);
 
@@ -27,11 +29,27 @@ pub fn resolve(app: &tauri::AppHandle, base: &str) -> Option<PathBuf> {
             if p.exists() {
                 return Some(p);
             }
+
+            // Walk up the directory tree looking for a `binaries` folder that
+            // holds the sidecar (e.g. src-tauri/binaries when running a dev
+            // build from src-tauri/target/debug).
+            let mut cur = Some(dir.to_path_buf());
+            while let Some(d) = cur {
+                let cand = d.join("binaries").join(&name);
+                if cand.exists() {
+                    return Some(cand);
+                }
+                cur = d.parent().map(|p| p.to_path_buf());
+            }
         }
     }
 
     if let Ok(res) = app.path().resource_dir() {
         let p = res.join(&name);
+        if p.exists() {
+            return Some(p);
+        }
+        let p = res.join("binaries").join(&name);
         if p.exists() {
             return Some(p);
         }

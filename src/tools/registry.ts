@@ -1,6 +1,6 @@
 import type { ToolId } from "../types";
 
-export type ToolCategory = "common" | "video" | "audio" | "image" | "general";
+export type ToolCategory = "video" | "audio" | "image" | "general";
 
 /** Pseudo-tool rendered as a panel but never queued as a job. */
 export type WorkbenchId = ToolId | "inspect";
@@ -11,6 +11,8 @@ export interface ToolMeta {
   /** File extensions accepted by this tool (lowercase, no dot). */
   accepts: string[];
   multiFile: boolean;
+  /** For compress tools: which media type to filter for */
+  mediaType?: "video" | "audio" | "image";
 }
 
 export const VIDEO_EXTS = [
@@ -24,16 +26,13 @@ export const IMAGE_EXTS = [
 ];
 
 export const TOOLS: ToolMeta[] = [
-  {
-    id: "compress",
-    category: "common",
-    accepts: [...VIDEO_EXTS, ...AUDIO_EXTS, ...IMAGE_EXTS],
-    multiFile: true,
-  },
+  { id: "video-compress", category: "video", accepts: VIDEO_EXTS, multiFile: true, mediaType: "video" },
   { id: "gif", category: "video", accepts: VIDEO_EXTS, multiFile: false },
   { id: "screenshot", category: "video", accepts: VIDEO_EXTS, multiFile: false },
   { id: "speed", category: "video", accepts: VIDEO_EXTS, multiFile: false },
   { id: "watermark", category: "video", accepts: VIDEO_EXTS, multiFile: false },
+  { id: "audio-compress", category: "audio", accepts: AUDIO_EXTS, multiFile: true, mediaType: "audio" },
+  { id: "image-compress", category: "image", accepts: IMAGE_EXTS, multiFile: true, mediaType: "image" },
   { id: "inspect", category: "general", accepts: [...VIDEO_EXTS, ...AUDIO_EXTS, ...IMAGE_EXTS], multiFile: false },
 ];
 
@@ -41,7 +40,7 @@ export function toolsByCategory(): Array<{
   category: ToolCategory;
   tools: ToolMeta[];
 }> {
-  const order: ToolCategory[] = ["common", "video", "audio", "image", "general"];
+  const order: ToolCategory[] = ["video", "audio", "image", "general"];
   return order
     .map((category) => ({
       category,

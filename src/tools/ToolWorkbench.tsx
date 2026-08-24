@@ -35,7 +35,7 @@ function WorkbenchHeader({ tool }: { tool: WorkbenchId }) {
 }
 
 /** Generic single-file tool workbench: picker + params panel + queue action. */
-function SimpleToolWorkbench({ tool }: { tool: Exclude<WorkbenchId, "compress" | "inspect"> }) {
+function SimpleToolWorkbench({ tool }: { tool: Exclude<WorkbenchId, "video-compress" | "audio-compress" | "image-compress" | "inspect"> }) {
   const { t } = useI18n();
   const tasks = useTasks();
   const meta = getTool(tool)!;
@@ -151,8 +151,25 @@ function InspectWorkbench() {
   );
 }
 
+function getCompressMediaType(tool: WorkbenchId): "video" | "audio" | "image" | null {
+  switch (tool) {
+    case "video-compress": return "video";
+    case "audio-compress": return "audio";
+    case "image-compress": return "image";
+    default: return null;
+  }
+}
+
+function isCompressTool(tool: WorkbenchId): tool is "video-compress" | "audio-compress" | "image-compress" {
+  return tool === "video-compress" || tool === "audio-compress" || tool === "image-compress";
+}
+
 export default function ToolWorkbench({ tool }: { tool: WorkbenchId }) {
-  if (tool === "compress") return <CompressWorkbench />;
+  if (isCompressTool(tool)) {
+    const mediaType = getCompressMediaType(tool)!;
+    return <CompressWorkbench mediaType={mediaType} toolId={tool} />;
+  }
   if (tool === "inspect") return <InspectWorkbench />;
+  // tool is now narrowed to simple tools (gif, screenshot, speed, watermark)
   return <SimpleToolWorkbench tool={tool} />;
 }

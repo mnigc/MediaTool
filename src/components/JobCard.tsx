@@ -40,8 +40,8 @@ const staggerClass = (i: number): string => {
 
 const TypeBadgeStyle: Record<string, { cls: string; Icon: typeof FilmIcon }> = {
   video: { cls: "bg-brand-50 text-brand-700 ring-brand-200 dark:bg-brand-950 dark:text-brand-300 dark:ring-brand-800", Icon: FilmIcon },
-  image: { cls: "bg-brand-50 text-brand-700 ring-brand-200 dark:bg-brand-950 dark:text-brand-300 dark:ring-brand-800", Icon: ImageIcon },
-  audio: { cls: "bg-brand-50 text-brand-700 ring-brand-200 dark:bg-brand-950 dark:text-brand-300 dark:ring-brand-800", Icon: MusicIcon },
+  image: { cls: "bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-800", Icon: ImageIcon },
+  audio: { cls: "bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800", Icon: MusicIcon },
 };
 
 const statusClass = (phase: Job["phase"]): string => {
@@ -119,7 +119,7 @@ export default function JobCard({
   const isDone = job.phase === "done";
   const isRunning = job.phase === "running";
   const isQueued = job.phase === "queued";
-  const isCompress = job.toolId === "compress";
+  const isCompress = job.toolId.endsWith("compress");
   const [over, setOver] = useState(false);
   const draggable = isQueued && isCompress && !!onReorderStart;
   const [thumb, setThumb] = useState<string | null>(null);
@@ -132,7 +132,6 @@ export default function JobCard({
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Fallback for older browsers
       const textarea = document.createElement("textarea");
       textarea.value = job.error;
       document.body.appendChild(textarea);
@@ -196,11 +195,11 @@ export default function JobCard({
         setOver(false);
         onReorderDrop?.(job.uiId);
       }}
-      className={`pop stagger-in ${staggerClass(startIndex)} rounded-2xl bg-white p-5 shadow-sm ring-1 ring-neutral-200 transition-shadow ${statusClass(job.phase)} ${
+      className={`pop stagger-in ${staggerClass(startIndex)} rounded-2xl bg-white p-5 shadow-card ring-1 ring-neutral-200 transition-all duration-200 ${statusClass(job.phase)} ${
         over ? "ring-2 ring-brand-400 shadow-md" : ""
       } ${
         draggable ? "cursor-grab active:cursor-grabbing" : ""
-      } dark:bg-neutral-900 dark:ring-neutral-800`}
+      } hover:shadow-card-hover dark:bg-neutral-900 dark:ring-neutral-800`}
     >
       <div className="flex items-start gap-4">
         {thumb ? (
@@ -225,7 +224,7 @@ export default function JobCard({
                 {t(`tool.${job.toolId}.name`)}
               </span>
             )}
-            <h3 className="truncate text-sm font-medium text-neutral-800 dark:text-neutral-100" title={job.info.path}>
+            <h3 className="truncate text-sm font-medium text-neutral-900 dark:text-neutral-100" title={job.info.path}>
               {basename(job.info.path)}
             </h3>
           </div>
@@ -256,6 +255,7 @@ export default function JobCard({
           onClick={() => onRemove(job.uiId)}
           className="shrink-0 rounded-lg p-1.5 text-neutral-300 transition hover:bg-neutral-100 hover:text-neutral-600 dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-neutral-300"
           title={t("job.remove")}
+          aria-label={t("job.remove")}
         >
           <XIcon className="h-4 w-4" />
         </button>
@@ -272,6 +272,7 @@ export default function JobCard({
                 onClick={handleCopyError}
                 className="ml-2 shrink-0 rounded-lg p-1.5 text-error-400 transition hover:bg-error-100 hover:text-error-600 dark:text-error-500 dark:hover:bg-error-900/50 dark:hover:text-error-400"
                 title={copied ? t("job.copied") : t("job.copyError")}
+                aria-label={copied ? t("job.copied") : t("job.copyError")}
               >
                 {copied ? (
                   <CheckCircleIcon className="h-4 w-4" />
@@ -302,22 +303,22 @@ export default function JobCard({
             </div>
           )}
           <div className="mt-4 flex items-center gap-2">
+            <button
+              onClick={() => onStart(job.uiId)}
+              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-brand-600 dark:bg-brand-600"
+            >
+              <PlayIcon className="h-4 w-4" />
+              {t("job.start")}
+            </button>
+            {onSyncParams && (
               <button
-                onClick={() => onStart(job.uiId)}
-                className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:brand-gradient-hover dark:bg-brand-600"
+                onClick={() => onSyncParams(job.uiId)}
+                className="rounded-xl border border-brand-200 bg-brand-50 px-3 py-2.5 text-sm font-medium text-brand-700 transition hover:bg-brand-100 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-300 dark:hover:bg-brand-900"
+                title={t("job.sync")}
               >
-                <PlayIcon className="h-4 w-4" />
-                {t("job.start")}
+                {t("job.sync")}
               </button>
-              {onSyncParams && (
-                <button
-                  onClick={() => onSyncParams(job.uiId)}
-                  className="rounded-xl border border-brand-200 bg-brand-50 px-3 py-2.5 text-sm font-medium text-brand-700 transition hover:bg-brand-100 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-300 dark:hover:bg-brand-900"
-                  title={t("job.sync")}
-                >
-                  {t("job.sync")}
-                </button>
-              )}
+            )}
           </div>
         </>
       )}
@@ -329,8 +330,8 @@ export default function JobCard({
               <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
               {t("job.processing")}
             </span>
-            <span className="font-medium text-neutral-600 dark:text-neutral-300">
-              {job.percent.toFixed(2)}%
+            <span className="font-medium text-neutral-700 dark:text-neutral-300">
+              {job.percent.toFixed(1)}%
               {job.startedAt
                 ? (() => {
                     const elapsed = (Date.now() - job.startedAt) / 1000;
@@ -375,7 +376,7 @@ export default function JobCard({
       {isDone && (
         <div className="mt-4 flex items-center justify-between rounded-xl bg-success-50 px-4 py-3 ring-1 ring-success-100 dark:bg-success-950/20 dark:ring-success-900/50">
           <div className="flex items-center gap-2 text-sm text-neutral-800 dark:text-neutral-200">
-            <span className="flex items-center justify-center rounded-full bg-success-500 text-white">
+            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-success-500 text-white">
               <CheckIcon className="h-3 w-3" />
             </span>
             <span>

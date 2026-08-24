@@ -5,6 +5,7 @@ interface DropZoneProps {
   dragOver: boolean;
   compact?: boolean;
   jobCount?: number;
+  supportHint?: string;
   onClick: () => void;
   onDragOver: (e: React.DragEvent) => void;
   onDragLeave: () => void;
@@ -15,6 +16,7 @@ export default function DropZone({
   dragOver,
   compact = false,
   jobCount = 0,
+  supportHint,
   onClick,
   onDragOver,
   onDragLeave,
@@ -53,7 +55,7 @@ export default function DropZone({
         {t("dz.click")}
       </p>
       <p className="mt-1.5 text-sm text-neutral-400 dark:text-neutral-500">
-        {t("dz.support")}
+        {supportHint ?? t("dz.support")}
       </p>
     </div>
   );

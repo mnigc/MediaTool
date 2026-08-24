@@ -3,27 +3,42 @@ import FilterTabs, { type FilterStatus } from "../components/FilterTabs";
 import JobList from "../components/JobList";
 import SkeletonJobCard from "../components/SkeletonJobCard";
 import PresetManager from "../components/PresetManager";
+import OutputSettings from "../components/OutputSettings";
 import DropZone from "../components/DropZone";
 import { useConfirm } from "../components/ConfirmDialog";
 import { openOutputFolder } from "../lib/tauri";
 import { useI18n } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
+import { extOk } from "./FilePicker";
+import { VIDEO_EXTS, AUDIO_EXTS, IMAGE_EXTS } from "./registry";
+import type { MediaType } from "../types";
 
-export default function CompressWorkbench() {
+interface CompressWorkbenchProps {
+  mediaType: MediaType;
+  toolId: "video-compress" | "audio-compress" | "image-compress";
+}
+
+export default function CompressWorkbench({ mediaType, toolId }: CompressWorkbenchProps) {
   const { t } = useI18n();
   const tasks = useTasks();
   const { confirm, dialog: confirmDialog } = useConfirm();
   const [filter, setFilter] = useState<FilterStatus>("all");
   const [presetManagerOpen, setPresetManagerOpen] = useState(false);
 
+  const accepts = mediaType === "video" ? VIDEO_EXTS : mediaType === "audio" ? AUDIO_EXTS : IMAGE_EXTS;
+
   // Window-level file drops & the sidebar-style pick button both land here.
   useEffect(() => {
-    tasks.registerDropHandler((paths) => tasks.addCompressFiles(paths));
+    tasks.registerDropHandler((paths) => {
+      const valid = paths.filter((p) => extOk(p, accepts));
+      if (valid.length === 0) return;
+      tasks.addCompressFiles(valid, mediaType);
+    });
     return () => tasks.registerDropHandler(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [mediaType]);
 
-  const jobs = tasks.jobs.filter((j) => j.toolId === "compress");
+  const jobs = tasks.jobs.filter((j) => j.toolId === toolId);
   const hasJobs = jobs.length > 0;
 
   const filteredJobs =
@@ -38,8 +53,8 @@ export default function CompressWorkbench() {
       confirmLabel: t("app.startAll.confirm"),
       cancelLabel: t("confirm.cancel"),
     });
-    if (ok) tasks.startAll("compress");
-  }, [jobs, tasks, confirm, t]);
+    if (ok) tasks.startAll(toolId);
+  }, [jobs, tasks, confirm, t, toolId]);
 
   const handleClearFinished = useCallback(async () => {
     const removable = jobs.filter(
@@ -84,35 +99,43 @@ export default function CompressWorkbench() {
     if (ok) tasks.clearAll();
   }, [jobs, tasks, confirm, t]);
 
+  // Show skeleton for the relevant media type
+  const skeletonMediaType = mediaType === "video" ? "video" : mediaType === "audio" ? "audio" : "image";
+
   return (
     <div>
-      {/* Toolbar: GPU + presets */}
+      {/* Toolbar: GPU + output settings + presets */}
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <select
-          value={tasks.settings.gpu}
-          onChange={(e) => tasks.setGpu(e.target.value)}
-          disabled={!tasks.gpuInfo.available}
-          className="rounded-lg border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-700 transition focus:border-brand-400 focus:outline-none dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-50"
-          title={t("sidebar.gpu")}
-        >
-          <option value="">{t("gpu.cpu")}</option>
-          {tasks.gpuInfo.backends.map((b) => (
-            <option key={b.id} value={b.id}>
-              {t(`gpu.${b.id}`)}
-            </option>
-          ))}
-        </select>
-        <span
-          className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-            tasks.gpuInfo.available
-              ? "bg-success-50 text-success-700 dark:bg-success-950/30 dark:text-success-400"
-              : "bg-neutral-100 text-neutral-400 dark:bg-neutral-800 dark:text-neutral-500"
-          }`}
-        >
-          {tasks.gpuInfo.available
-            ? t("sidebar.gpuAvailable", { n: tasks.gpuInfo.backends.length })
-            : t("sidebar.gpuNone")}
-        </span>
+        {mediaType === "video" && (
+          <>
+            <select
+              value={tasks.settings.gpu}
+              onChange={(e) => tasks.setGpu(e.target.value)}
+              disabled={!tasks.gpuInfo.available}
+              className="rounded-lg border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-700 transition focus:border-brand-400 focus:outline-none dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-50"
+              title={t("sidebar.gpu")}
+            >
+              <option value="">{t("gpu.cpu")}</option>
+              {tasks.gpuInfo.backends.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {t(`gpu.${b.id}`)}
+                </option>
+              ))}
+            </select>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                tasks.gpuInfo.available
+                  ? "bg-success-50 text-success-700 dark:bg-success-950/30 dark:text-success-400"
+                  : "bg-neutral-100 text-neutral-400 dark:bg-neutral-800 dark:text-neutral-500"
+              }`}
+            >
+              {tasks.gpuInfo.available
+                ? t("sidebar.gpuAvailable", { n: tasks.gpuInfo.backends.length })
+                : t("sidebar.gpuNone")}
+            </span>
+          </>
+        )}
+        <OutputSettings compact />
         <button
           onClick={() => setPresetManagerOpen(true)}
           className="ml-auto rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
@@ -132,14 +155,13 @@ export default function CompressWorkbench() {
 
       {tasks.loading && jobs.length === 0 ? (
         <div aria-label="加载中" className="space-y-4">
-          <SkeletonJobCard mediaType="video" />
-          <SkeletonJobCard mediaType="image" />
-          <SkeletonJobCard mediaType="audio" />
+          <SkeletonJobCard mediaType={skeletonMediaType} />
         </div>
       ) : !hasJobs ? (
         <DropZone
           dragOver={false}
-          onClick={tasks.pickFiles}
+          supportHint={t(`dz.support.${mediaType}`, { exts: accepts.map((e) => `.${e}`).join(", ") })}
+          onClick={() => tasks.pickFiles([{ name: t(`dz.filter.${mediaType}`), extensions: accepts }])}
           onDragOver={(e) => e.preventDefault()}
           onDragLeave={() => {}}
           onDrop={(e) => e.preventDefault()}

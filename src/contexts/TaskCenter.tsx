@@ -12,7 +12,7 @@ import {
 } from "../lib/tauri";
 import { defaultParams } from "../lib/defaults";
 import { useI18n } from "../i18n";
-import type { GpuInfo } from "../types";
+import type { GpuInfo, MediaType } from "../types";
 import type { Job, JobParams, ToolId, ToolParams } from "../types";
 
 export interface TaskSettings {
@@ -77,8 +77,8 @@ interface TaskCenterValue {
   totalIn: number;
   totalOut: number;
   registerDropHandler: (fn: ((paths: string[]) => void) | null) => void;
-  addCompressFiles: (paths: string[]) => void;
-  pickFiles: () => Promise<void>;
+  addCompressFiles: (paths: string[], mediaType?: MediaType) => void;
+  pickFiles: (filters?: Array<{ name: string; extensions: string[] }>) => Promise<void>;
   chooseOutput: () => Promise<void>;
   setOutputDir: (dir: string | null) => void;
   setOutputSuffix: (suffix: string) => void;
@@ -244,16 +244,26 @@ export function TaskCenterProvider({
     onToast?.(type, msg);
   }
 
-  async function addCompressFiles(paths: string[]) {
+  function getCompressToolId(mediaType: MediaType): "video-compress" | "audio-compress" | "image-compress" {
+    switch (mediaType) {
+      case "video": return "video-compress";
+      case "audio": return "audio-compress";
+      case "image": return "image-compress";
+      default: return "video-compress";
+    }
+  }
+
+  async function addCompressFiles(paths: string[], mediaType?: MediaType) {
     setError(null);
     for (const p of paths) {
       try {
         const info = await probeFile(p);
         const params = defaultParams(info);
         uiCounter += 1;
+        const toolId = mediaType ? getCompressToolId(mediaType) : getCompressToolId(info.mediaType);
         const job: Job = {
           uiId: `ui-${uiCounter}`,
-          toolId: "compress",
+          toolId,
           info,
           params,
           percent: 0,
@@ -295,8 +305,8 @@ export function TaskCenterProvider({
     }
   }
 
-  async function pickFiles() {
-    const selected = await open({ multiple: true, title: t("opt.selectFiles") });
+  async function pickFiles(filters?: Array<{ name: string; extensions: string[] }>) {
+    const selected = await open({ multiple: true, title: t("opt.selectFiles"), filters });
     if (selected && !Array.isArray(selected)) {
       dropHandlerRef.current?.([selected]);
     } else if (Array.isArray(selected)) {
@@ -407,7 +417,7 @@ export function TaskCenterProvider({
 
   async function runEstimate(uiId: string) {
     const job = jobsRef.current.find((j) => j.uiId === uiId);
-    if (!job || job.phase !== "queued" || job.toolId !== "compress") return;
+    if (!job || job.phase !== "queued" || !job.toolId.endsWith("compress")) return;
     const token = (estimateTokens.current[uiId] ?? 0) + 1;
     estimateTokens.current[uiId] = token;
     setJobs((prev) =>

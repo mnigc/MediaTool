@@ -84,7 +84,7 @@ function PresetsBar({
 
   return (
     <div
-      className="rounded-lg border border-neutral-200/70 bg-neutral-50/40 p-2.5 dark:border-neutral-700/70 dark:bg-neutral-800/40"
+      className="rounded-xl border border-neutral-200/70 bg-neutral-50/40 p-3 dark:border-neutral-700/70 dark:bg-neutral-800/40"
       data-od-id="presets-panel"
     >
       <div className="flex items-center justify-between">
@@ -112,29 +112,29 @@ function PresetsBar({
         }`}
       >
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            <select
-              value={selected === DEFAULT_PRESET ? "" : selected}
-              onChange={(e) => {
-                const v = e.target.value;
-                if (!v) {
-                  setSelected(DEFAULT_PRESET);
-                  apply(DEFAULT_PRESET);
-                } else {
-                  setSelected(v);
-                  apply(v);
-                }
-              }}
-              className="min-w-[110px] rounded-md border border-neutral-200 bg-white px-1.5 py-0.5 text-xs text-neutral-700 transition focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-100 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 dark:focus:border-brand-500"
-            >
-              <option value="">{t("opt.selectPreset")}</option>
-              {myPresets.map((p) => (
-                <option key={p.name} value={p.name}>{p.name}</option>
-              ))}
-            </select>
+          <select
+            value={selected === DEFAULT_PRESET ? "" : selected}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (!v) {
+                setSelected(DEFAULT_PRESET);
+                apply(DEFAULT_PRESET);
+              } else {
+                setSelected(v);
+                apply(v);
+              }
+            }}
+            className="min-w-[110px] rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs text-neutral-700 transition focus:border-brand-400 focus:ring-1 focus:ring-brand-100 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 dark:focus:border-brand-500"
+          >
+            <option value="">{t("opt.selectPreset")}</option>
+            {myPresets.map((p) => (
+              <option key={p.name} value={p.name}>{p.name}</option>
+            ))}
+          </select>
           <button
             type="button"
             onClick={save}
-            className="rounded-md border border-brand-200 bg-brand-50 px-2 py-0.5 text-[10px] font-medium text-brand-700 transition hover:bg-brand-100 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-300 dark:hover:bg-brand-900"
+            className="rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1.5 text-[10px] font-medium text-brand-700 transition hover:bg-brand-100 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-300 dark:hover:bg-brand-900"
           >
             {t("opt.saveCurrent")}
           </button>
@@ -143,7 +143,7 @@ function PresetsBar({
               type="button"
               onClick={() => del(selected)}
               disabled={selectedPreset?.builtin}
-              className="rounded px-1.5 py-0.5 text-[10px] font-medium text-neutral-400 transition hover:text-error-500 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-neutral-400 dark:text-neutral-500 dark:hover:text-error-400"
+              className="rounded-lg px-2 py-1.5 text-[10px] font-medium text-neutral-400 transition hover:text-error-500 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-neutral-400 dark:text-neutral-500 dark:hover:text-error-400"
             >
               {t("opt.delete")}
             </button>
@@ -154,9 +154,9 @@ function PresetsBar({
         <button
           type="button"
           onClick={() => { setSelected(DEFAULT_PRESET); apply(DEFAULT_PRESET); }}
-          className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition ${
+          className={`rounded-lg px-2.5 py-1.5 text-[10px] font-medium transition ${
             selected === DEFAULT_PRESET
-              ? "bg-brand-600 text-white dark:bg-brand-500"
+              ? "bg-brand-500 text-white dark:bg-brand-600"
               : "border border-neutral-200 bg-white text-neutral-600 hover:border-brand-200 hover:bg-brand-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:border-brand-800 dark:hover:bg-brand-950/40"
           }`}
         >
@@ -168,9 +168,9 @@ function PresetsBar({
               key={p.name}
               type="button"
               onClick={() => { setSelected(p.name); apply(p.name); }}
-              className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition ${
+              className={`rounded-lg px-2.5 py-1.5 text-[10px] font-medium transition ${
                 selected === p.name
-                  ? "bg-brand-600 text-white dark:bg-brand-500"
+                  ? "bg-brand-500 text-white dark:bg-brand-600"
                   : "border border-neutral-200 bg-white text-neutral-600 hover:border-brand-200 hover:bg-brand-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:border-brand-800 dark:hover:bg-brand-950/40"
               }`}
             >
@@ -181,7 +181,7 @@ function PresetsBar({
           <button
             type="button"
             onClick={save}
-            className="rounded-md border border-dashed border-neutral-300 px-2 py-0.5 text-[10px] font-medium text-neutral-500 transition hover:border-brand-300 hover:bg-brand-50 hover:text-brand-600 dark:border-neutral-600 dark:text-neutral-400 dark:hover:border-brand-700 dark:hover:bg-brand-950/30 dark:hover:text-brand-300"
+            className="rounded-lg border border-dashed border-neutral-300 px-2.5 py-1.5 text-[10px] font-medium text-neutral-500 transition hover:border-brand-300 hover:bg-brand-50 hover:text-brand-600 dark:border-neutral-600 dark:text-neutral-400 dark:hover:border-brand-700 dark:hover:bg-brand-950/30 dark:hover:text-brand-300"
           >
             + {t("opt.savePlus")}
           </button>
@@ -204,7 +204,7 @@ function SettingsCollapsible({ expanded, onToggle, children }: {
       <button
         type="button"
         onClick={onToggle}
-        className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left transition hover:bg-neutral-100 dark:hover:bg-neutral-800/60"
+        className="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left transition hover:bg-neutral-100/50 dark:hover:bg-neutral-800/50"
       >
         <span className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400 dark:text-neutral-500">
           {t("opt.settings")}
@@ -222,7 +222,7 @@ function SettingsCollapsible({ expanded, onToggle, children }: {
           expanded ? "max-h-[1200px] opacity-100" : "max-h-0 opacity-0"
         }`}
       >
-        <div className="rounded-lg border border-neutral-100 bg-white p-3 pt-2.5 dark:border-neutral-700/60 dark:bg-neutral-800/30">
+        <div className="rounded-xl border border-neutral-100 bg-white p-4 pt-3 dark:border-neutral-700/60 dark:bg-neutral-800/30">
           {children}
         </div>
       </div>
@@ -255,7 +255,7 @@ function SectionDivider({ label, action }: { label: string; action?: ReactNode }
 }
 
 const sel =
-  "w-full select-text rounded-md border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-700 transition focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-100 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 dark:focus:border-brand-500";
+  "w-full rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs text-neutral-700 transition focus:border-brand-400 focus:ring-1 focus:ring-brand-100 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 dark:focus:border-brand-500";
 
 const range = "mp-range flex-1";
 
@@ -293,7 +293,7 @@ export function VideoOptionsCompact({
   if (v.extractAudio) {
     return (
       <div className="space-y-3">
-        <div className="flex items-center justify-between rounded-md bg-brand-50 px-3 py-2 text-[11px] font-medium text-brand-700 dark:bg-brand-950/40 dark:text-brand-300">
+        <div className="flex items-center justify-between rounded-lg bg-brand-50 px-3 py-2 text-[11px] font-medium text-brand-700 dark:bg-brand-950/40 dark:text-brand-300">
           <span>{t("opt.extractAudioOnly")}</span>
           <button
             type="button"
@@ -362,7 +362,7 @@ export function VideoOptionsCompact({
         </Field>
       </FieldRow>
 
-      <div className="space-y-2 rounded-lg bg-neutral-50 p-2.5 dark:bg-neutral-800/40">
+      <div className="space-y-2 rounded-xl bg-neutral-50/50 p-3 dark:bg-neutral-800/40">
         {v.qualityMode === "crf" && (
           <div>
             <div className="text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">

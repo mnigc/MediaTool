@@ -57,7 +57,7 @@ export interface AudioParams {
 
 /* ── Toolbox tools ─────────────────────────────────────────── */
 
-export type ToolId = "compress" | "gif" | "screenshot" | "speed" | "watermark";
+export type ToolId = "video-compress" | "audio-compress" | "image-compress" | "gif" | "screenshot" | "speed" | "watermark";
 
 export interface GifParams {
   startTime?: number;

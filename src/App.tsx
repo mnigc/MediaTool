@@ -20,7 +20,7 @@ function AppShell({
   toasts: ToastItem[];
   dismissAll: () => void;
 }) {
-  const [activeTool, setActiveTool] = useState<WorkbenchId>("compress");
+  const [activeTool, setActiveTool] = useState<WorkbenchId>("video-compress");
 
   return (
     <div className="flex h-screen flex-col">
