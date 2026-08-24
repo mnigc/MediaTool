@@ -105,12 +105,6 @@ export function estimateOutputSize(
   if (info.mediaType === "video") {
     const v = params as VideoParams;
 
-    if (v.extractAudio) {
-      if (dur == null) return null;
-      const kbps = v.audioBitrateKbps ?? 128;
-      return { bytes: audioBytes(kbps, dur), exact: true, rough: false };
-    }
-
     if (dur == null) return null;
 
     if (v.qualityMode === "target_size") {

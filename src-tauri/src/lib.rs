@@ -20,6 +20,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::probe_file,
             commands::start_job,
+            commands::start_workflow,
             commands::estimate_size,
             commands::cancel_job,
             commands::open_output_folder,

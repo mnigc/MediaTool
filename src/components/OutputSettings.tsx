@@ -1,4 +1,3 @@
-import { openOutputFolder } from "../lib/tauri";
 import { useI18n } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
 import { FolderIcon, XIcon } from "./icons";

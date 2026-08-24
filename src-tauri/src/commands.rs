@@ -4,7 +4,7 @@ use crate::error::Result;
 use crate::gpu;
 use crate::jobs;
 use crate::media;
-use crate::models::{EstimateRequest, EstimateResult, JobRequest, MediaInfo, StartJobResult};
+use crate::models::{EstimateRequest, EstimateResult, JobRequest, MediaInfo, StartJobResult, WorkflowRequest};
 use crate::state::JobManager;
 
 #[tauri::command]
@@ -15,6 +15,14 @@ pub async fn probe_file(app: AppHandle, path: String) -> Result<MediaInfo> {
 #[tauri::command]
 pub async fn start_job(app: AppHandle, request: JobRequest) -> Result<StartJobResult> {
     jobs::start_job(app, request).await
+}
+
+#[tauri::command]
+pub async fn start_workflow(
+    app: AppHandle,
+    request: WorkflowRequest,
+) -> Result<crate::models::StartWorkflowResult> {
+    jobs::start_workflow(app, request).await
 }
 
 #[tauri::command]

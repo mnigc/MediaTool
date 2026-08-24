@@ -1,27 +1,27 @@
 import { useState } from "react";
-import type { AudioParams, ImageParams, JobParams, MediaType } from "../types";
+import type { AudioParams, ExtractAudioParams, ImageParams, JobParams, ToolId } from "../types";
 import {
   addPreset,
-  blankPreset,
   loadPresets,
   removePreset,
   type Preset,
 } from "../lib/presets";
+import { defaultParamsFor } from "../lib/defaults";
 import {
-  AudioOptionsCompact,
-  ImageOptionsCompact,
-  VideoOptionsCompact,
+  AudioCompressOptions,
+  ImageCompressOptions,
+  VideoCompressOptions,
 } from "./OptionsPanel";
+import ExtractAudioPanel from "../tools/panels/ExtractAudioPanel";
 import { XIcon } from "./icons";
 import { useI18n } from "../i18n";
 
-const MEDIA_TYPES: MediaType[] = ["video", "image", "audio"];
-const MEDIA_LABEL: Record<MediaType, string> = {
-  video: "video",
-  image: "image",
-  audio: "audio",
-  unknown: "other",
-};
+const PRESET_TOOLS: ToolId[] = [
+  "video-compress",
+  "audio-compress",
+  "image-compress",
+  "extract-audio",
+];
 
 interface PresetManagerProps {
   open: boolean;
@@ -37,7 +37,13 @@ export default function PresetManager({ open, onClose }: PresetManagerProps) {
   const { t } = useI18n();
 
   const startNew = () => {
-    setEditing(blankPreset("video"));
+    const toolId = PRESET_TOOLS[0];
+    setEditing({
+      name: "",
+      toolId,
+      params: defaultParamsFor(toolId),
+      builtin: false,
+    });
     setIsNew(true);
   };
 
@@ -47,7 +53,7 @@ export default function PresetManager({ open, onClose }: PresetManagerProps) {
   };
 
   const handleDelete = (p: Preset) => {
-    setPresets(removePreset(p.mediaType, p.name));
+    setPresets(removePreset(p.toolId, p.name));
   };
 
   const handleSave = () => {
@@ -58,9 +64,9 @@ export default function PresetManager({ open, onClose }: PresetManagerProps) {
     setEditing(null);
   };
 
-  const handleMediaTypeChange = (mt: MediaType) => {
+  const handleToolChange = (toolId: ToolId) => {
     if (!editing) return;
-    setEditing({ ...blankPreset(mt), name: editing.name });
+    setEditing({ ...editing, toolId, params: defaultParamsFor(toolId) });
   };
 
   const handleParamsChange = (p: JobParams) => {
@@ -78,7 +84,7 @@ export default function PresetManager({ open, onClose }: PresetManagerProps) {
           <h2 className="text-base font-semibold text-neutral-800 dark:text-neutral-100">
              {t("pm.title")}
            </h2>
-           <button
+          <button
              onClick={onClose}
              className="rounded-lg p-1.5 text-neutral-300 transition hover:bg-neutral-100 hover:text-neutral-600 dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-neutral-300"
              aria-label={t("pm.close")}
@@ -93,7 +99,7 @@ export default function PresetManager({ open, onClose }: PresetManagerProps) {
               preset={editing}
               isNew={isNew}
               onNameChange={(name) => setEditing({ ...editing, name })}
-              onMediaTypeChange={handleMediaTypeChange}
+              onToolChange={handleToolChange}
               onParamsChange={handleParamsChange}
               onSave={handleSave}
               onCancel={() => setEditing(null)}
@@ -107,18 +113,18 @@ export default function PresetManager({ open, onClose }: PresetManagerProps) {
                 {t("pm.new")}
               </button>
 
-              {MEDIA_TYPES.map((mt) => {
-                const list = presets.filter((p) => p.mediaType === mt);
+              {PRESET_TOOLS.map((toolId) => {
+                const list = presets.filter((p) => p.toolId === toolId);
                 if (list.length === 0) return null;
                 return (
-                  <div key={mt}>
+                  <div key={toolId}>
                     <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-neutral-400 dark:text-neutral-500">
-                       {t("pm.media." + MEDIA_LABEL[mt])}
+                       {t(`tool.${toolId}.name`)}
                      </div>
                     <div className="space-y-1.5">
                       {list.map((p) => (
                         <div
-                          key={p.name}
+                          key={`${p.toolId}::${p.name}`}
                           className="flex items-center justify-between rounded-lg border border-neutral-200 bg-neutral-50/40 px-3 py-2 dark:border-neutral-700/60 dark:bg-neutral-800/40"
                         >
                           <div className="min-w-0">
@@ -132,7 +138,8 @@ export default function PresetManager({ open, onClose }: PresetManagerProps) {
                           <div className="flex shrink-0 items-center gap-1.5">
                             <button
                               onClick={() => startEdit(p)}
-                              className="rounded-md border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+                              disabled={p.builtin}
+                              className="rounded-md border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
                             >
                                {t("pm.edit")}
                              </button>
@@ -163,7 +170,7 @@ interface PresetEditorProps {
   preset: Preset;
   isNew: boolean;
   onNameChange: (name: string) => void;
-  onMediaTypeChange: (mt: MediaType) => void;
+  onToolChange: (toolId: ToolId) => void;
   onParamsChange: (p: JobParams) => void;
   onSave: () => void;
   onCancel: () => void;
@@ -173,7 +180,7 @@ function PresetEditor({
   preset,
   isNew,
   onNameChange,
-  onMediaTypeChange,
+  onToolChange,
   onParamsChange,
   onSave,
   onCancel,
@@ -196,17 +203,17 @@ function PresetEditor({
         </label>
         <label className="flex flex-col gap-1">
           <span className="text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
-            {t("pm.mediaType")}
+            {t("pm.toolType")}
           </span>
           <select
-            value={preset.mediaType}
-            onChange={(e) => onMediaTypeChange(e.target.value as MediaType)}
+            value={preset.toolId}
+            onChange={(e) => onToolChange(e.target.value as ToolId)}
             disabled={!isNew}
             className="rounded-lg border border-neutral-300 bg-white px-2 py-1 text-sm text-neutral-700 shadow-sm focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-100 disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
           >
-            {MEDIA_TYPES.map((mt) => (
-              <option key={mt} value={mt}>
-                {t("pm.media." + MEDIA_LABEL[mt])}
+            {PRESET_TOOLS.map((toolId) => (
+              <option key={toolId} value={toolId}>
+                {t(`tool.${toolId}.name`)}
               </option>
             ))}
           </select>
@@ -214,18 +221,24 @@ function PresetEditor({
       </div>
 
       <div className="rounded-xl border border-neutral-100 bg-neutral-50/40 p-3 dark:border-neutral-700/60 dark:bg-neutral-800/30">
-        {preset.mediaType === "video" && (
-          <VideoOptionsCompact params={preset.params} onChange={onParamsChange} />
+        {preset.toolId === "video-compress" && (
+          <VideoCompressOptions params={preset.params} onChange={onParamsChange} />
         )}
-        {preset.mediaType === "image" && (
-          <ImageOptionsCompact
+        {preset.toolId === "image-compress" && (
+          <ImageCompressOptions
             params={preset.params as ImageParams}
             onChange={onParamsChange}
           />
         )}
-        {preset.mediaType === "audio" && (
-          <AudioOptionsCompact
+        {preset.toolId === "audio-compress" && (
+          <AudioCompressOptions
             params={preset.params as AudioParams}
+            onChange={onParamsChange}
+          />
+        )}
+        {preset.toolId === "extract-audio" && (
+          <ExtractAudioPanel
+            params={preset.params as ExtractAudioParams}
             onChange={onParamsChange}
           />
         )}

@@ -38,22 +38,12 @@ pub struct VideoParams {
     /// aac | opus | copy | none
     pub audio_codec: String,
     pub audio_bitrate_kbps: Option<u32>,
-    /// mp4 | mkv | webm | mov
+    /// source (keep input container) | mp4 | mkv | webm | mov
     pub format: String,
     /// veryfast | faster | fast | medium | slow | slower | veryslow
     pub preset: String,
-    /// trim: start offset in seconds
-    pub start_time: Option<f64>,
-    /// trim: clip length in seconds (None = to end)
-    pub duration: Option<f64>,
     /// output frame rate in fps (None/0 = follow source; ignored for stream copy)
     pub fps: Option<u32>,
-    /// strip container metadata / EXIF (e.g. GPS) via -map_metadata -1
-    pub strip_metadata: Option<bool>,
-    /// extract audio track only (ignore video)
-    pub extract_audio: Option<bool>,
-    /// audio output format when extract_audio is true
-    pub extract_format: Option<String>,
     /// GPU backend id to use for encoding (nvenc/qsv/videotoolbox/amf/vaapi);
     /// empty/None falls back to CPU encoding.
     pub gpu: Option<String>,
@@ -62,24 +52,62 @@ pub struct VideoParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageParams {
-    /// jpeg | png | webp | avif
+    /// source (keep input format) | jpeg | png | webp | avif
     pub format: String,
     /// 1..100 (higher = better quality)
     pub quality: u8,
     /// longest side in px; None = keep original
     pub max_dimension: Option<u32>,
-    /// strip container metadata / EXIF via -map_metadata -1
-    pub strip_metadata: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioParams {
+    /// source (keep input codec family) | mp3 | aac | m4a | opus | flac
+    pub format: String,
+    pub bitrate_kbps: u32,
+}
+
+/* ── Standalone toolbox tools ──────────────────────────────────── */
+
+/// Params for the metadata-stripping tool (all media types).
+/// A/V: lossless remux with -map_metadata -1; images: high-quality re-encode.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StripMetadataParams {}
+
+/// Params for the video-trim tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrimParams {
+    /// Cut start offset in seconds.
+    pub start_time: f64,
+    /// Clip length in seconds (None = to end).
+    pub duration: Option<f64>,
+    /// "copy" (lossless, keyframe-aligned) | "encode" (precise re-encode)
+    pub mode: String,
+}
+
+/// Params for the rotate/flip tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RotateParams {
+    /// "90c" | "90cc" | "180" | "hflip" | "vflip"
+    pub transform: String,
+}
+
+/// Params for the remove-audio-track tool (lossless `-an -c copy`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MuteParams {}
+
+/// Params for the extract-audio tool (video -> audio file).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractAudioParams {
     /// mp3 | aac | m4a | opus | flac
     pub format: String,
     pub bitrate_kbps: u32,
-    /// strip container metadata (e.g. ID3 tags) via -map_metadata -1
-    pub strip_metadata: Option<bool>,
 }
 
 /// Params for the "gif" tool (video -> animated GIF).
@@ -170,6 +198,42 @@ pub struct JobRequest {
 pub struct StartJobResult {
     pub id: String,
     pub skipped: bool,
+}
+
+/* ── Multi-step workflow ─────────────────────────────────────── */
+
+/// One composable step inside a multi-step workflow. Reuses the same params
+/// and tool ids as single jobs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowStepInput {
+    pub tool_id: String,
+    pub params: serde_json::Value,
+}
+
+/// Request to run a whole workflow. The backend tries to merge the steps into
+/// a single FFmpeg command; if that is impossible it signals the caller to
+/// fall back to running the steps one by one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowRequest {
+    pub input: String,
+    pub steps: Vec<WorkflowStepInput>,
+    pub output_dir: Option<String>,
+    pub output_suffix: Option<String>,
+    pub gpu: Option<String>,
+    pub overwrite_policy: Option<String>,
+}
+
+/// Result of a workflow start.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartWorkflowResult {
+    pub id: String,
+    /// true when the steps were merged into a single FFmpeg command that is now
+    /// running (progress/done report on `id`). false means nothing was started
+    /// and the caller should run the steps individually.
+    pub merged: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

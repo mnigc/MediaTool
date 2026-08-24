@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import type { Job, JobParams } from "../types";
-import OptionsPanel from "./OptionsPanel";
+import JobParamsEditor from "../tools/JobParamsEditor";
 import { getThumbnail } from "../lib/tauri";
 import { estimateOutputSize } from "../lib/estimate";
+import { friendlyError } from "../lib/errors";
 import {
   CheckIcon,
   CopyIcon,
@@ -17,6 +18,7 @@ import {
 } from "./icons";
 import { formatBytes } from "../lib/tauri";
 import { useI18n } from "../i18n";
+import { isBatchEditable } from "../tools/kinds";
 
 type Props = {
   job: Job;
@@ -119,21 +121,23 @@ export default function JobCard({
   const isDone = job.phase === "done";
   const isRunning = job.phase === "running";
   const isQueued = job.phase === "queued";
-  const isCompress = job.toolId.endsWith("compress");
+  // Compress/convert tools show a size estimate; all queued jobs are editable.
+  const isCore = isBatchEditable(job.toolId);
+  const isEditable = job.toolId !== "inspect";
   const [over, setOver] = useState(false);
-  const draggable = isQueued && isCompress && !!onReorderStart;
+  const draggable = isQueued && isEditable && !!onReorderStart;
   const [thumb, setThumb] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [showLog, setShowLog] = useState(false);
 
-  const handleCopyError = async () => {
-    if (!job.error) return;
+  const copyText = async (text: string) => {
     try {
-      await navigator.clipboard.writeText(job.error);
+      await navigator.clipboard.writeText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
       const textarea = document.createElement("textarea");
-      textarea.value = job.error;
+      textarea.value = text;
       document.body.appendChild(textarea);
       textarea.select();
       document.execCommand("copy");
@@ -141,6 +145,11 @@ export default function JobCard({
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
+  };
+
+  const handleCopyError = async () => {
+    if (!job.error) return;
+    await copyText(job.error);
   };
 
   useEffect(() => {
@@ -163,7 +172,7 @@ export default function JobCard({
       : null;
 
   const formula =
-    isCompress && job.phase !== "done"
+    isCore && job.phase !== "done"
       ? estimateOutputSize(job.info, job.params)
       : null;
   const estimate = job.sizeEstimate
@@ -219,11 +228,12 @@ export default function JobCard({
             <span className={`rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${badge.cls}`}>
               {typeLabel}
             </span>
-            {!isCompress && (
-              <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-medium text-neutral-500 ring-1 ring-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:ring-neutral-700">
-                {t(`tool.${job.toolId}.name`)}
-              </span>
-            )}
+            <span
+              className="rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-medium text-neutral-500 ring-1 ring-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:ring-neutral-700"
+              title={t(`tool.${job.toolId}.desc`)}
+            >
+              {t(`tool.${job.toolId}.name`)}
+            </span>
             <h3 className="truncate text-sm font-medium text-neutral-900 dark:text-neutral-100" title={job.info.path}>
               {basename(job.info.path)}
             </h3>
@@ -264,22 +274,36 @@ export default function JobCard({
       {isError && (
         <>
           <div className="mt-4 rounded-xl border border-error-100 bg-error-50 dark:border-error-900/50 dark:bg-error-950/30">
-            <div className="flex items-start justify-between px-4 pt-2.5">
-              <div className="flex-1 overflow-auto max-h-48 whitespace-pre-wrap text-sm text-error-600 dark:text-error-500">
-                {job.error}
+            <div className="px-4 pt-2.5">
+              <div className="text-sm font-medium text-error-700 dark:text-error-400">
+                {friendlyError(job.error)}
               </div>
-              <button
-                onClick={handleCopyError}
-                className="ml-2 shrink-0 rounded-lg p-1.5 text-error-400 transition hover:bg-error-100 hover:text-error-600 dark:text-error-500 dark:hover:bg-error-900/50 dark:hover:text-error-400"
-                title={copied ? t("job.copied") : t("job.copyError")}
-                aria-label={copied ? t("job.copied") : t("job.copyError")}
-              >
-                {copied ? (
-                  <CheckCircleIcon className="h-4 w-4" />
-                ) : (
-                  <CopyIcon className="h-4 w-4" />
-                )}
-              </button>
+              <div className="mt-1 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowLog(!showLog)}
+                  className="text-[11px] font-medium text-error-500 underline-offset-2 hover:underline dark:text-error-400"
+                >
+                  {showLog ? t("job.hideLog") : t("job.viewLog")}
+                </button>
+                <button
+                  onClick={handleCopyError}
+                  className="ml-auto flex items-center gap-1 rounded-lg p-1.5 text-error-400 transition hover:bg-error-100 hover:text-error-600 dark:text-error-500 dark:hover:bg-error-900/50 dark:hover:text-error-400"
+                  title={copied ? t("job.copied") : t("job.copyError")}
+                  aria-label={copied ? t("job.copied") : t("job.copyError")}
+                >
+                  {copied ? (
+                    <CheckCircleIcon className="h-4 w-4" />
+                  ) : (
+                    <CopyIcon className="h-4 w-4" />
+                  )}
+                </button>
+              </div>
+              {showLog && (
+                <div className="mt-2 overflow-auto max-h-48 whitespace-pre-wrap rounded-lg bg-white/60 p-2 text-xs leading-relaxed text-neutral-600 dark:bg-neutral-900/60 dark:text-neutral-300">
+                  {job.error ?? t("job.noLog")}
+                </div>
+              )}
             </div>
           </div>
           <button
@@ -293,10 +317,10 @@ export default function JobCard({
 
       {isQueued && (
         <>
-          {isCompress && onChangeParams && (
+          {isEditable && onChangeParams && (
             <div className="mt-4 border-t border-neutral-100 pt-4 dark:border-neutral-700/60">
-              <OptionsPanel
-                mediaType={job.info.mediaType}
+              <JobParamsEditor
+                toolId={job.toolId}
                 params={job.params}
                 onChange={(p) => onChangeParams(job.uiId, p)}
               />

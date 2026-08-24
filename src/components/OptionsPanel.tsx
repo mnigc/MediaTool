@@ -1,37 +1,53 @@
 import { useState, type ReactNode } from "react";
-import type { AudioParams, ImageParams, JobParams, MediaType, VideoParams } from "../types";
+import type { AudioParams, ImageParams, JobParams, ToolId, VideoParams } from "../types";
 import { addPreset, loadPresets, removePreset, type Preset } from "../lib/presets";
-import { blankParams } from "../lib/defaults";
+import { defaultParamsFor } from "../lib/defaults";
 import { useI18n } from "../i18n";
 
 const DEFAULT_PRESET = "__default__";
 
 interface Props {
-  mediaType: string;
+  toolId: string;
   params: JobParams;
   onChange: (p: JobParams) => void;
 }
 
-export default function OptionsPanel({ mediaType, params, onChange }: Props) {
+export default function OptionsPanel({ toolId, params, onChange }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [presetsExpanded, setPresetsExpanded] = useState(false);
 
   const renderContent = () => {
-    if (mediaType === "video") return <VideoOptionsCompact params={params} onChange={onChange} />;
-    if (mediaType === "image") return <ImageOptionsCompact params={params as ImageParams} onChange={onChange} />;
-    if (mediaType === "audio") return <AudioOptionsCompact params={params as AudioParams} onChange={onChange} />;
-    return null;
+    switch (toolId) {
+      case "video-compress":
+        return <VideoCompressOptions params={params} onChange={onChange} />;
+      case "video-convert":
+        return <VideoConvertOptions params={params as VideoParams} onChange={onChange} />;
+      case "image-compress":
+        return <ImageCompressOptions params={params as ImageParams} onChange={onChange} />;
+      case "image-convert":
+        return <ImageConvertOptions params={params as ImageParams} onChange={onChange} />;
+      case "audio-compress":
+        return <AudioCompressOptions params={params as AudioParams} onChange={onChange} />;
+      case "audio-convert":
+        return <AudioConvertOptions params={params as AudioParams} onChange={onChange} />;
+      default:
+        return null;
+    }
   };
+
+  const showPresets = !toolId.endsWith("-convert");
 
   return (
     <div className="flex flex-col gap-3">
-      <PresetsBar
-        mediaType={mediaType}
-        params={params}
-        onChange={onChange}
-        expanded={presetsExpanded}
-        onToggle={() => setPresetsExpanded(!presetsExpanded)}
-      />
+      {showPresets && (
+        <PresetsBar
+          toolId={toolId}
+          params={params}
+          onChange={onChange}
+          expanded={presetsExpanded}
+          onToggle={() => setPresetsExpanded(!presetsExpanded)}
+        />
+      )}
       <SettingsCollapsible expanded={expanded} onToggle={() => setExpanded(!expanded)}>
         {renderContent()}
       </SettingsCollapsible>
@@ -39,16 +55,16 @@ export default function OptionsPanel({ mediaType, params, onChange }: Props) {
   );
 }
 
-/* ── 预设面板 ─────────────────────────────────── */
+/* ── 预设面板（按工具隔离）─────────────────────── */
 
 function PresetsBar({
-  mediaType,
+  toolId,
   params,
   onChange,
   expanded,
   onToggle,
 }: {
-  mediaType: string;
+  toolId: string;
   params: JobParams;
   onChange: (p: JobParams) => void;
   expanded: boolean;
@@ -58,12 +74,12 @@ function PresetsBar({
   const [presets, setPresets] = useState<Preset[]>(() => loadPresets());
   const [selected, setSelected] = useState<string>(DEFAULT_PRESET);
 
-  const myPresets = presets.filter((p) => p.mediaType === mediaType);
+  const myPresets = presets.filter((p) => p.toolId === toolId);
   const selectedPreset = myPresets.find((p) => p.name === selected);
 
   const apply = (name: string) => {
     if (name === DEFAULT_PRESET) {
-      onChange(blankParams(mediaType as MediaType));
+      onChange(defaultParamsFor(toolId as ToolId));
       return;
     }
     const p = myPresets.find((x) => x.name === name);
@@ -71,14 +87,14 @@ function PresetsBar({
   };
 
   const save = () => {
-    const name = window.prompt(t("pm.presetName"), `${mediaType} ${t("pm.presetName")}`);
+    const name = window.prompt(t("pm.presetName"), `${t(`tool.${toolId}.name`)} ${t("pm.presetName")}`);
     if (!name) return;
-    setPresets(addPreset({ name, mediaType: mediaType as Preset["mediaType"], params }));
+    setPresets(addPreset({ name, toolId, params }));
     setSelected(name);
   };
 
   const del = (name: string) => {
-    setPresets(removePreset(mediaType as Preset["mediaType"], name));
+    setPresets(removePreset(toolId, name));
     if (selected === name) setSelected("");
   };
 
@@ -245,11 +261,10 @@ function FieldRow({ children }: { children: ReactNode }) {
   return <div className="grid grid-cols-2 gap-3">{children}</div>;
 }
 
-function SectionDivider({ label, action }: { label: string; action?: ReactNode }) {
+function SectionDivider({ label }: { label: string }) {
   return (
     <div className="flex items-center justify-between py-1.5">
       <span className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400 dark:text-neutral-500">{label}</span>
-      {action}
     </div>
   );
 }
@@ -259,27 +274,17 @@ const sel =
 
 const range = "mp-range flex-1";
 
-function ToggleRow({ label, checked, onChange }: {
-  label: string;
-  checked: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  return (
-    <label className="flex w-fit cursor-pointer items-center gap-2">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        className="h-3.5 w-3.5 cursor-pointer rounded border-neutral-300 text-brand-600 accent-brand-600 dark:border-neutral-600"
-      />
-      <span className="text-[10px] font-medium uppercase tracking-wide text-neutral-400 transition hover:text-neutral-600 dark:text-neutral-500 dark:hover:text-neutral-300">{label}</span>
-    </label>
-  );
+const sourceTag =
+  "w-full rounded-lg border border-dashed border-neutral-200 bg-neutral-50 px-2.5 py-1.5 text-xs text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800/60 dark:text-neutral-400";
+
+/** Fixed-format chip used by compress tools that keep the source container. */
+function SourceFormatChip({ label }: { label: string }) {
+  return <div className={sourceTag}>{label}</div>;
 }
 
-/* ── 视频参数 ───────────────────────────────────── */
+/* ── 视频压缩 ───────────────────────────────────── */
 
-export function VideoOptionsCompact({
+export function VideoCompressOptions({
   params,
   onChange,
 }: {
@@ -288,61 +293,18 @@ export function VideoOptionsCompact({
 }) {
   const { t } = useI18n();
   const v = params as VideoParams;
-  const set = (patch: Partial<VideoParams>) => onChange({ ...params, ...patch });
-
-  if (v.extractAudio) {
-    return (
-      <div className="space-y-3">
-        <div className="flex items-center justify-between rounded-lg bg-brand-50 px-3 py-2 text-[11px] font-medium text-brand-700 dark:bg-brand-950/40 dark:text-brand-300">
-          <span>{t("opt.extractAudioOnly")}</span>
-          <button
-            type="button"
-            onClick={() => set({ extractAudio: false })}
-            className="text-brand-500 underline-offset-2 hover:underline dark:text-brand-400"
-          >
-            {t("opt.backToVideo")}
-          </button>
-        </div>
-        <FieldRow>
-          <Field label={t("opt.format")}>
-            <select className={sel} value={v.extractFormat ?? "mp3"} onChange={(e) => set({ extractFormat: e.target.value })}>
-              <option value="mp3">MP3</option>
-              <option value="aac">AAC</option>
-              <option value="m4a">M4A</option>
-              <option value="opus">Opus</option>
-              <option value="flac">FLAC</option>
-            </select>
-          </Field>
-          <Field label={t("opt.bitrate")}>
-            <input type="number" className={sel} min={32} value={v.audioBitrateKbps ?? 128} onChange={(e) => set({ audioBitrateKbps: Number(e.target.value) })} />
-          </Field>
-        </FieldRow>
-      </div>
-    );
-  }
+  const set = (patch: Partial<VideoParams>) => onChange({ ...params, ...patch } as JobParams);
 
   return (
     <div className="space-y-3">
-      <SectionDivider
-        label={t("opt.videoOutput")}
-        action={
-          <button
-            type="button"
-            onClick={() => set({ extractAudio: true, extractFormat: v.extractFormat ?? "mp3" })}
-            className="text-[10px] font-medium text-neutral-400 underline-offset-2 hover:text-neutral-700 hover:underline dark:text-neutral-500 dark:hover:text-neutral-300"
-          >
-            {t("opt.switchExtract")}
-          </button>
-        }
-      />
+      <SectionDivider label={t("opt.videoOutput")} />
 
       <FieldRow>
         <Field label={t("opt.format")}>
           <select className={sel} value={v.format} onChange={(e) => set({ format: e.target.value })}>
+            <option value="source">{t("opt.format.source")}</option>
             <option value="mp4">MP4</option>
             <option value="mkv">MKV</option>
-            <option value="webm">WebM</option>
-            <option value="mov">MOV</option>
           </select>
         </Field>
         <Field label={t("opt.codec")}>
@@ -449,59 +411,159 @@ export function VideoOptionsCompact({
           </Field>
         )}
       </FieldRow>
-
-      <SectionDivider label={t("opt.trim")} />
-      <FieldRow>
-        <Field label={t("opt.startSec")}>
-          <input type="number" className={sel} min={0} step={0.1} placeholder={t("opt.toEnd")} value={v.startTime ?? ""} onFocus={(e) => e.currentTarget.select()} onChange={(e) => set({ startTime: e.target.value ? Number(e.target.value) : undefined })} />
-        </Field>
-        <Field label={t("opt.durationSec")}>
-          <input type="number" className={sel} min={0.1} step={0.1} placeholder={t("opt.toEnd")} value={v.duration ?? ""} onFocus={(e) => e.currentTarget.select()} onChange={(e) => set({ duration: e.target.value ? Number(e.target.value) : undefined })} />
-        </Field>
-      </FieldRow>
-
-      <ToggleRow
-        label={t("opt.stripMetadata")}
-        checked={v.stripMetadata ?? false}
-        onChange={(b) => set({ stripMetadata: b })}
-      />
     </div>
   );
 }
 
-/* ── 图片参数（紧凑） ───────────────────────────── */
+/* ── 质量档次（转换工具共用）────────────────────── */
 
-export function ImageOptionsCompact({ params, onChange }: {
+type QualityTier = "high" | "balanced" | "compact";
+
+const TIER_ORDER: QualityTier[] = ["high", "balanced", "compact"];
+
+const TIER_KEY: Record<QualityTier, string> = {
+  high: "opt.tier.high",
+  balanced: "opt.tier.balanced",
+  compact: "opt.tier.compact",
+};
+
+function TierPicker({ value, onChange }: {
+  value: QualityTier;
+  onChange: (t: QualityTier) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-1.5">
+      {TIER_ORDER.map((tier) => (
+        <button
+          key={tier}
+          type="button"
+          onClick={() => onChange(tier)}
+          className={`rounded-lg px-2.5 py-1.5 text-[10px] font-medium transition ${
+            value === tier
+              ? "bg-brand-500 text-white dark:bg-brand-600"
+              : "border border-neutral-200 bg-white text-neutral-600 hover:border-brand-200 hover:bg-brand-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:border-brand-800 dark:hover:bg-brand-950/40"
+          }`}
+        >
+          {t(TIER_KEY[tier])}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/* ── 视频转换（极简：格式 + 质量档，其余全自动）──── */
+
+/** Container → codec set + per-tier CRF. WebM strictly requires VP9+Opus. */
+const CONVERT_PRESETS: Record<string, {
+  codec: string;
+  audio: string;
+  crf: Record<QualityTier, number>;
+}> = {
+  mp4: { codec: "libx264", audio: "aac", crf: { high: 18, balanced: 22, compact: 27 } },
+  webm: { codec: "libvpx-vp9", audio: "opus", crf: { high: 26, balanced: 31, compact: 35 } },
+  mkv: { codec: "libx264", audio: "aac", crf: { high: 18, balanced: 22, compact: 27 } },
+  mov: { codec: "libx264", audio: "aac", crf: { high: 18, balanced: 22, compact: 27 } },
+};
+
+const TIER_AUDIO_KBPS: Record<QualityTier, number> = { high: 256, balanced: 192, compact: 128 };
+
+function tierOfVideo(v: VideoParams): QualityTier {
+  const d = CONVERT_PRESETS[v.format];
+  if (!d) return "balanced";
+  if (v.crf === d.crf.high) return "high";
+  if (v.crf === d.crf.compact) return "compact";
+  return "balanced";
+}
+
+export function VideoConvertOptions({
+  params,
+  onChange,
+}: {
+  params: VideoParams;
+  onChange: (p: JobParams) => void;
+}) {
+  const { t } = useI18n();
+  const v = params;
+
+  const changeFormat = (format: string) => {
+    const d = CONVERT_PRESETS[format] ?? CONVERT_PRESETS.mp4;
+    onChange({
+      ...v,
+      videoCodec: d.codec,
+      qualityMode: "crf",
+      crf: d.crf.balanced,
+      targetSizeMb: undefined,
+      videoBitrateKbps: undefined,
+      resolution: "original",
+      audioCodec: d.audio,
+      audioBitrateKbps: TIER_AUDIO_KBPS.balanced,
+      format,
+      preset: "medium",
+      fps: undefined,
+    });
+  };
+
+  const changeTier = (tier: QualityTier) => {
+    const d = CONVERT_PRESETS[v.format] ?? CONVERT_PRESETS.mp4;
+    onChange({
+      ...v,
+      videoCodec: d.codec,
+      qualityMode: "crf",
+      crf: d.crf[tier],
+      audioCodec: d.audio,
+      audioBitrateKbps: TIER_AUDIO_KBPS[tier],
+      preset: "medium",
+    });
+  };
+
+  return (
+    <div className="space-y-3">
+      <FieldRow>
+        <Field label={t("opt.format")}>
+          <select className={sel} value={v.format} onChange={(e) => changeFormat(e.target.value)}>
+            <option value="mp4">MP4</option>
+            <option value="webm">WebM</option>
+            <option value="mkv">MKV</option>
+            <option value="mov">MOV</option>
+          </select>
+        </Field>
+        <Field label={t("opt.tier")}>
+          <TierPicker value={tierOfVideo(v)} onChange={changeTier} />
+        </Field>
+      </FieldRow>
+      <p className="text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+        {t("opt.convert.autoHint")}
+      </p>
+    </div>
+  );
+}
+
+/* ── 图片压缩（保持原格式）────────────────────── */
+
+export function ImageCompressOptions({ params, onChange }: {
   params: ImageParams;
   onChange: (p: ImageParams) => void;
 }) {
   const { t } = useI18n();
-  const img = params;
   const set = (patch: Partial<ImageParams>) => onChange({ ...params, ...patch });
 
   return (
     <div className="space-y-3">
       <FieldRow>
         <Field label={t("opt.format")}>
-          <select className={sel} value={img.format} onChange={(e) => set({ format: e.target.value })}>
-            <option value="keep">保持原格式</option>
-            <option value="jpeg">JPEG</option>
-            <option value="png">PNG</option>
-            <option value="webp">WebP</option>
-          </select>
+          <SourceFormatChip label={t("opt.format.sourceKeep")} />
         </Field>
-        {img.format !== "png" && (
-          <Field label={t("opt.quality", { n: img.quality })}>
-            <input
-              type="range"
-              min={1}
-              max={100}
-              value={img.quality}
-              onChange={(e) => set({ quality: Number(e.target.value) })}
-              className={range}
-            />
-          </Field>
-        )}
+        <Field label={t("opt.quality", { n: params.quality })}>
+          <input
+            type="range"
+            min={1}
+            max={100}
+            value={params.quality}
+            onChange={(e) => set({ quality: Number(e.target.value) })}
+            className={range}
+          />
+        </Field>
       </FieldRow>
       <FieldRow>
         <Field label={t("opt.maxSide")}>
@@ -510,24 +572,71 @@ export function ImageOptionsCompact({ params, onChange }: {
             className={sel}
             min={0}
             step={10}
-            value={img.maxDimension ?? ""}
+            value={params.maxDimension ?? ""}
             onFocus={(e) => e.currentTarget.select()}
             onChange={(e) => set({ maxDimension: e.target.value === "" ? undefined : Number(e.target.value) })}
           />
         </Field>
       </FieldRow>
-      <ToggleRow
-        label={t("opt.stripMetadata")}
-        checked={img.stripMetadata ?? false}
-        onChange={(b) => set({ stripMetadata: b })}
-      />
     </div>
   );
 }
 
-/* ── 音频参数（紧凑） ───────────────────────────── */
+/* ── 图片转换（极简：格式 + 质量档）────────────── */
 
-export function AudioOptionsCompact({ params, onChange }: {
+const IMAGE_TIER_QUALITY: Record<QualityTier, number> = { high: 90, balanced: 80, compact: 60 };
+
+function tierOfImage(p: ImageParams): QualityTier {
+  if (p.quality === IMAGE_TIER_QUALITY.high) return "high";
+  if (p.quality === IMAGE_TIER_QUALITY.compact) return "compact";
+  return "balanced";
+}
+
+export function ImageConvertOptions({ params, onChange }: {
+  params: ImageParams;
+  onChange: (p: ImageParams) => void;
+}) {
+  const { t } = useI18n();
+  const isPng = params.format === "png";
+
+  const changeFormat = (format: string) =>
+    onChange({ ...params, format, quality: format === "png" ? 100 : IMAGE_TIER_QUALITY.balanced });
+
+  return (
+    <div className="space-y-3">
+      <FieldRow>
+        <Field label={t("opt.format")}>
+          <select className={sel} value={params.format} onChange={(e) => changeFormat(e.target.value)}>
+            <option value="webp">WebP</option>
+            <option value="jpeg">JPEG</option>
+            <option value="png">PNG</option>
+            <option value="avif">AVIF</option>
+          </select>
+        </Field>
+        {!isPng && (
+          <Field label={t("opt.tier")}>
+            <TierPicker
+              value={tierOfImage(params)}
+              onChange={(tier) => onChange({ ...params, quality: IMAGE_TIER_QUALITY[tier] })}
+            />
+          </Field>
+        )}
+      </FieldRow>
+      {isPng && (
+        <p className="text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+          {t("opt.image.pngLossless")}
+        </p>
+      )}
+      <p className="text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+        {t("opt.convert.autoHint")}
+      </p>
+    </div>
+  );
+}
+
+/* ── 音频压缩（保持格式降码率）────────────────── */
+
+export function AudioCompressOptions({ params, onChange }: {
   params: AudioParams;
   onChange: (p: AudioParams) => void;
 }) {
@@ -538,23 +647,43 @@ export function AudioOptionsCompact({ params, onChange }: {
     <div className="space-y-3">
       <FieldRow>
         <Field label={t("opt.format")}>
-          <select className={sel} value={params.format} onChange={(e) => set({ format: e.target.value })}>
-            <option value="mp3">MP3</option>
-            <option value="aac">AAC</option>
-            <option value="m4a">M4A</option>
-            <option value="opus">Opus</option>
-            <option value="flac">FLAC</option>
-          </select>
+          <SourceFormatChip label={t("opt.format.sourceKeep")} />
         </Field>
         <Field label={t("opt.bitrate")}>
-          <input type="number" className={sel} min={32} value={params.bitrateKbps ?? 192} onChange={(e) => set({ bitrateKbps: Number(e.target.value) })} />
+          <input type="number" className={sel} min={32} value={params.bitrateKbps ?? 128} onFocus={(e) => e.currentTarget.select()} onChange={(e) => set({ bitrateKbps: Number(e.target.value) })} />
         </Field>
       </FieldRow>
-      <ToggleRow
-        label={t("opt.stripMetadata")}
-        checked={params.stripMetadata ?? false}
-        onChange={(b) => set({ stripMetadata: b })}
-      />
+    </div>
+  );
+}
+
+/* ── 音频转换（极简：仅选格式，码率自动）────────── */
+
+const AUDIO_CONVERT_KBPS: Record<string, number> = { mp3: 192, aac: 128, m4a: 128, opus: 128 };
+
+export function AudioConvertOptions({ params, onChange }: {
+  params: AudioParams;
+  onChange: (p: AudioParams) => void;
+}) {
+  const { t } = useI18n();
+
+  const changeFormat = (format: string) =>
+    onChange({ ...params, format, bitrateKbps: AUDIO_CONVERT_KBPS[format] ?? params.bitrateKbps });
+
+  return (
+    <div className="space-y-3">
+      <Field label={t("opt.format")}>
+        <select className={sel} value={params.format} onChange={(e) => changeFormat(e.target.value)}>
+          <option value="mp3">MP3</option>
+          <option value="aac">AAC</option>
+          <option value="m4a">M4A</option>
+          <option value="opus">Opus</option>
+          <option value="flac">FLAC</option>
+        </select>
+      </Field>
+      <p className="text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+        {t("opt.audio.autoBitrate")}
+      </p>
     </div>
   );
 }

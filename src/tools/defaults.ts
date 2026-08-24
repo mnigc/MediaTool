@@ -1,8 +1,13 @@
 import type {
+  ExtractAudioParams,
   GifParams,
+  MuteParams,
+  RotateParams,
   ScreenshotParams,
   SpeedParams,
+  StripMetadataParams,
   ToolParams,
+  TrimParams,
   WatermarkParams,
 } from "../types";
 import type { WorkbenchId } from "./registry";
@@ -35,6 +40,16 @@ export function blankToolParams(tool: WorkbenchId): ToolParams | null {
         opacity: 1,
         marginPercent: 3,
       } satisfies WatermarkParams;
+    case "trim":
+      return { startTime: 0, duration: undefined, mode: "copy" } satisfies TrimParams;
+    case "rotate":
+      return { transform: "90c" } satisfies RotateParams;
+    case "mute":
+      return {} satisfies MuteParams;
+    case "extract-audio":
+      return { format: "mp3", bitrateKbps: 128 } satisfies ExtractAudioParams;
+    case "strip-metadata":
+      return {} satisfies StripMetadataParams;
     default:
       return null;
   }

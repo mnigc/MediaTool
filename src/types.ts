@@ -31,33 +31,41 @@ export interface VideoParams {
   resolution: string; // original | 720p | ...
   audioCodec: string; // aac | opus | copy | none
   audioBitrateKbps?: number;
-  format: string; // mp4 | mkv | webm | mov
+  format: string; // source | mp4 | mkv | webm | mov
   preset: string;
-  startTime?: number; // trim start offset, seconds
-  duration?: number; // trim length, seconds (undefined = to end)
   fps?: number; // output fps (undefined/0 = follow source, ignored for copy)
-  stripMetadata?: boolean; // strip container metadata / EXIF via -map_metadata -1
-  extractAudio?: boolean; // extract audio track only from a video
-  extractFormat?: string; // mp3 | aac | m4a | opus | flac (used when extractAudio)
   gpu?: string; // GPU backend id (nvenc/qsv/videotoolbox/amf/vaapi); "" or unset = CPU
 }
 
 export interface ImageParams {
-  format: string; // jpeg | png | webp | avif | keep
+  format: string; // source | jpeg | png | webp | avif
   quality: number; // 1..100
   maxDimension?: number;
-  stripMetadata?: boolean;
 }
 
 export interface AudioParams {
-  format: string; // mp3 | aac | m4a | opus | flac
+  format: string; // source | mp3 | aac | m4a | opus | flac
   bitrateKbps: number;
-  stripMetadata?: boolean;
 }
 
 /* ── Toolbox tools ─────────────────────────────────────────── */
 
-export type ToolId = "video-compress" | "audio-compress" | "image-compress" | "gif" | "screenshot" | "speed" | "watermark";
+export type ToolId =
+  | "video-compress"
+  | "video-convert"
+  | "audio-compress"
+  | "audio-convert"
+  | "image-compress"
+  | "image-convert"
+  | "gif"
+  | "screenshot"
+  | "speed"
+  | "watermark"
+  | "trim"
+  | "rotate"
+  | "mute"
+  | "extract-audio"
+  | "strip-metadata";
 
 export interface GifParams {
   startTime?: number;
@@ -89,6 +97,30 @@ export interface WatermarkParams {
   marginPercent: number;
 }
 
+/** Video trim tool: lossless keyframe-aligned cut or precise re-encode. */
+export interface TrimParams {
+  startTime: number;
+  duration?: number; // undefined = to end
+  mode: "copy" | "encode";
+}
+
+/** Rotate/flip tool (re-encodes). */
+export interface RotateParams {
+  transform: "90c" | "90cc" | "180" | "hflip" | "vflip";
+}
+
+/** Remove-audio-track tool (lossless stream copy, no params). */
+export type MuteParams = Record<string, never>;
+
+/** Video -> standalone audio file. */
+export interface ExtractAudioParams {
+  format: string; // mp3 | aac | m4a | opus | flac
+  bitrateKbps: number;
+}
+
+/** Metadata-stripping tool for any media type (no params). */
+export type StripMetadataParams = Record<string, never>;
+
 export type ToolParams =
   | VideoParams
   | ImageParams
@@ -96,7 +128,12 @@ export type ToolParams =
   | GifParams
   | ScreenshotParams
   | SpeedParams
-  | WatermarkParams;
+  | WatermarkParams
+  | TrimParams
+  | RotateParams
+  | MuteParams
+  | ExtractAudioParams
+  | StripMetadataParams;
 
 export type JobParams = ToolParams;
 
@@ -138,6 +175,29 @@ export interface JobRequest {
   outputSuffix?: string;
   gpu?: string; // GPU backend id; empty/undefined = CPU (compress only)
   overwritePolicy?: "overwrite" | "rename" | "skip"; // default: rename
+}
+
+/* ── Multi-step workflow ─────────────────────────────────────── */
+
+export interface WorkflowStepInput {
+  toolId: string;
+  params: JobParams;
+}
+
+export interface WorkflowRequest {
+  input: string;
+  steps: WorkflowStepInput[];
+  outputDir?: string;
+  outputSuffix?: string;
+  gpu?: string;
+  overwritePolicy?: "overwrite" | "rename" | "skip";
+}
+
+export interface StartWorkflowResult {
+  id: string;
+  /** true when the steps were merged into one FFmpeg command now running on
+   *  `id`; false means the caller should run the steps one by one. */
+  merged: boolean;
 }
 
 export interface StartJobResult {
@@ -189,6 +249,12 @@ export interface Job {
   error?: string | null;
   outputSize?: number | null;
   startedAt?: number | null;
+  /** Timestamp when the job was added to the queue (ms epoch). */
+  createdAt?: number | null;
+  /** Saved error/log summary retained on the task (for history/retry). */
+  logs?: string | null;
+  /** Output file paths produced by this task. */
+  resultFiles?: string[];
   speed?: string | null;
   sizeEstimate?: { bytes: number; exact: boolean } | null;
   estimating?: boolean;

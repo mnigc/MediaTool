@@ -1,42 +1,29 @@
-import type { JobParams, MediaType } from "../types";
-import { blankParams } from "./defaults";
+import type { JobParams } from "../types";
+import { defaultParamsFor } from "./defaults";
 
 export interface Preset {
   name: string;
-  mediaType: MediaType;
+  /** Tool this preset belongs to; presets are scoped per tool. */
+  toolId: string;
   params: JobParams;
   builtin?: boolean;
 }
 
 const KEY = "mediapress.presets";
 
-const keyOf = (p: { mediaType: MediaType; name: string }) =>
-  `${p.mediaType}::${p.name}`;
+const keyOf = (p: { toolId: string; name: string }) => `${p.toolId}::${p.name}`;
 
 export const BUILTIN_PRESETS: Preset[] = [
-  // 默认参数（与文件添加时的初始值一致，便于从其他预设回归）
+  // ── 视频压缩 ──────────────────────────────
   {
     name: "默认参数",
-    mediaType: "video",
+    toolId: "video-compress",
     builtin: true,
-    params: { ...blankParams("video") },
+    params: { ...defaultParamsFor("video-compress") },
   },
-  {
-    name: "默认参数",
-    mediaType: "image",
-    builtin: true,
-    params: { ...blankParams("image") },
-  },
-  {
-    name: "默认参数",
-    mediaType: "audio",
-    builtin: true,
-    params: { ...blankParams("audio") },
-  },
-  // 视频
   {
     name: "高压缩 (H.264)",
-    mediaType: "video",
+    toolId: "video-compress",
     builtin: true,
     params: {
       videoCodec: "libx264",
@@ -45,36 +32,14 @@ export const BUILTIN_PRESETS: Preset[] = [
       resolution: "original",
       audioCodec: "aac",
       audioBitrateKbps: 96,
-      format: "mp4",
+      format: "source",
       preset: "slow",
-      startTime: undefined,
-      duration: undefined,
-      extractAudio: false,
-      extractFormat: "mp3",
+      fps: undefined,
     },
   },
   {
-    name: "保持画质 (CRF 20)",
-    mediaType: "video",
-    builtin: true,
-    params: {
-      videoCodec: "libx264",
-      qualityMode: "crf",
-      crf: 20,
-      resolution: "original",
-      audioCodec: "aac",
-      audioBitrateKbps: 192,
-      format: "mp4",
-      preset: "medium",
-      startTime: undefined,
-      duration: undefined,
-      extractAudio: false,
-      extractFormat: "mp3",
-    },
-  },
-  {
-    name: "社交平台 (720p)",
-    mediaType: "video",
+    name: "社交平台 720p",
+    toolId: "video-compress",
     builtin: true,
     params: {
       videoCodec: "libx264",
@@ -85,15 +50,12 @@ export const BUILTIN_PRESETS: Preset[] = [
       audioBitrateKbps: 128,
       format: "mp4",
       preset: "medium",
-      startTime: undefined,
-      duration: undefined,
-      extractAudio: false,
-      extractFormat: "mp3",
+      fps: undefined,
     },
   },
   {
     name: "高压缩 (AV1)",
-    mediaType: "video",
+    toolId: "video-compress",
     builtin: true,
     params: {
       videoCodec: "libsvtav1",
@@ -102,178 +64,88 @@ export const BUILTIN_PRESETS: Preset[] = [
       resolution: "original",
       audioCodec: "opus",
       audioBitrateKbps: 128,
-      format: "mp4",
+      format: "source",
       preset: "medium",
-      startTime: undefined,
-      duration: undefined,
       fps: undefined,
-      stripMetadata: false,
-      extractAudio: false,
-      extractFormat: "mp3",
     },
   },
   {
-    name: "仅提取音频 (MP3)",
-    mediaType: "video",
+    name: "目标大小 10MB",
+    toolId: "video-compress",
     builtin: true,
     params: {
       videoCodec: "libx264",
-      qualityMode: "crf",
-      crf: 28,
+      qualityMode: "target_size",
+      crf: undefined,
+      targetSizeMb: 10,
       resolution: "original",
       audioCodec: "aac",
       audioBitrateKbps: 128,
-      format: "mp4",
+      format: "source",
       preset: "medium",
-      startTime: undefined,
-      duration: undefined,
-        extractAudio: true,
-        extractFormat: "mp3",
-      },
-    },
-  // 社交媒体（最高画质、最小体积）
-  {
-    name: "YouTube 上传",
-    mediaType: "video",
-    builtin: true,
-    params: {
-      videoCodec: "libx264",
-      qualityMode: "crf",
-      crf: 18,
-      resolution: "original",
-      audioCodec: "aac",
-      audioBitrateKbps: 192,
-      format: "mp4",
-      preset: "slow",
-      startTime: undefined,
-      duration: undefined,
-      extractAudio: false,
-      extractFormat: "mp3",
+      fps: undefined,
     },
   },
+  // ── 音频压缩（保持格式降码率）───────────────
   {
-    name: "哔哩哔哩 上传",
-    mediaType: "video",
+    name: "默认参数",
+    toolId: "audio-compress",
     builtin: true,
-    params: {
-      videoCodec: "libx264",
-      qualityMode: "crf",
-      crf: 20,
-      resolution: "original",
-      audioCodec: "aac",
-      audioBitrateKbps: 192,
-      format: "mp4",
-      preset: "slow",
-      startTime: undefined,
-      duration: undefined,
-      extractAudio: false,
-      extractFormat: "mp3",
-    },
+    params: { ...defaultParamsFor("audio-compress") },
   },
   {
-    name: "抖音 上传",
-    mediaType: "video",
+    name: "MP3 128k",
+    toolId: "audio-compress",
     builtin: true,
-    params: {
-      videoCodec: "libx264",
-      qualityMode: "crf",
-      crf: 22,
-      resolution: "1080p",
-      audioCodec: "aac",
-      audioBitrateKbps: 192,
-      format: "mp4",
-      preset: "slow",
-      startTime: undefined,
-      duration: undefined,
-      extractAudio: false,
-      extractFormat: "mp3",
-    },
+    params: { format: "source", bitrateKbps: 128 },
   },
   {
-    name: "小红书 上传",
-    mediaType: "video",
+    name: "MP3 96k 极限压缩",
+    toolId: "audio-compress",
     builtin: true,
-    params: {
-      videoCodec: "libx264",
-      qualityMode: "crf",
-      crf: 22,
-      resolution: "1080p",
-      audioCodec: "aac",
-      audioBitrateKbps: 192,
-      format: "mp4",
-      preset: "slow",
-      startTime: undefined,
-      duration: undefined,
-      extractAudio: false,
-      extractFormat: "mp3",
-    },
+    params: { format: "source", bitrateKbps: 96 },
+  },
+  // ── 图片压缩（保持原格式）──────────────────
+  {
+    name: "默认参数",
+    toolId: "image-compress",
+    builtin: true,
+    params: { ...defaultParamsFor("image-compress") },
   },
   {
-    name: "微信视频号 上传",
-    mediaType: "video",
+    name: "高质量 90",
+    toolId: "image-compress",
     builtin: true,
-    params: {
-      videoCodec: "libx264",
-      qualityMode: "crf",
-      crf: 21,
-      resolution: "1080p",
-      audioCodec: "aac",
-      audioBitrateKbps: 192,
-      format: "mp4",
-      preset: "slow",
-      startTime: undefined,
-      duration: undefined,
-      extractAudio: false,
-      extractFormat: "mp3",
-    },
-  },
-  // 图片
-  {
-    name: "WebP 高质量",
-    mediaType: "image",
-    builtin: true,
-    params: { format: "webp", quality: 85 },
+    params: { format: "source", quality: 90, maxDimension: undefined },
   },
   {
-    name: "WebP 压缩",
-    mediaType: "image",
+    name: "小文件 60",
+    toolId: "image-compress",
     builtin: true,
-    params: { format: "webp", quality: 60 },
-  },
-  {
-    name: "JPEG 小图",
-    mediaType: "image",
-    builtin: true,
-    params: { format: "jpeg", quality: 70 },
+    params: { format: "source", quality: 60, maxDimension: undefined },
   },
   {
     name: "限制 1920 宽",
-    mediaType: "image",
+    toolId: "image-compress",
     builtin: true,
-    params: { format: "webp", quality: 80, maxDimension: 1920 },
+    params: { format: "source", quality: 80, maxDimension: 1920 },
   },
-  // 音频
+  // ── 提取音频 ──────────────────────────────
   {
-    name: "MP3 标准",
-    mediaType: "audio",
+    name: "MP3 192k",
+    toolId: "extract-audio",
     builtin: true,
-    params: { format: "mp3", bitrateKbps: 128 },
-  },
-  {
-    name: "MP3 高质",
-    mediaType: "audio",
-    builtin: true,
-    params: { format: "mp3", bitrateKbps: 256 },
+    params: { format: "mp3", bitrateKbps: 192 },
   },
   {
-    name: "AAC 高效",
-    mediaType: "audio",
+    name: "AAC 128k",
+    toolId: "extract-audio",
     builtin: true,
-    params: { format: "aac", bitrateKbps: 96 },
+    params: { format: "aac", bitrateKbps: 128 },
   },
   {
     name: "FLAC 无损",
-    mediaType: "audio",
+    toolId: "extract-audio",
     builtin: true,
     params: { format: "flac", bitrateKbps: 128 },
   },
@@ -307,21 +179,17 @@ function saveCustoms(customs: Preset[]): void {
 
 export function addPreset(preset: Preset): Preset[] {
   const customs = loadCustoms().filter(
-    (p) => !(p.mediaType === preset.mediaType && p.name === preset.name)
+    (p) => !(p.toolId === preset.toolId && p.name === preset.name)
   );
   customs.push({ ...preset, builtin: false });
   saveCustoms(customs);
   return loadPresets();
 }
 
-export function removePreset(mediaType: MediaType, name: string): Preset[] {
+export function removePreset(toolId: string, name: string): Preset[] {
   const customs = loadCustoms().filter(
-    (p) => !(p.mediaType === mediaType && p.name === name)
+    (p) => !(p.toolId === toolId && p.name === name)
   );
   saveCustoms(customs);
   return loadPresets();
-}
-
-export function blankPreset(mediaType: MediaType): Preset {
-  return { name: "", mediaType, params: blankParams(mediaType), builtin: false };
 }

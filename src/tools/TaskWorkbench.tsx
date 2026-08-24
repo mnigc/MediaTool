@@ -10,33 +10,45 @@ import { openOutputFolder } from "../lib/tauri";
 import { useI18n } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
 import { extOk } from "./FilePicker";
-import { VIDEO_EXTS, AUDIO_EXTS, IMAGE_EXTS } from "./registry";
-import type { MediaType } from "../types";
+import { getTool, type WorkbenchId } from "./registry";
 
-interface CompressWorkbenchProps {
-  mediaType: MediaType;
-  toolId: "video-compress" | "audio-compress" | "image-compress";
+type QueuableToolId = Exclude<WorkbenchId, "inspect" | "workflow">;
+
+interface TaskWorkbenchProps {
+  toolId: QueuableToolId;
+  onBack?: () => void;
 }
 
-export default function CompressWorkbench({ mediaType, toolId }: CompressWorkbenchProps) {
+/** Unified task-center workbench used by every queued tool. Adds files to the
+ *  shared queue, then shows an editable job list with batch actions. */
+export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
   const { t } = useI18n();
   const tasks = useTasks();
   const { confirm, dialog: confirmDialog } = useConfirm();
   const [filter, setFilter] = useState<FilterStatus>("all");
   const [presetManagerOpen, setPresetManagerOpen] = useState(false);
 
-  const accepts = mediaType === "video" ? VIDEO_EXTS : mediaType === "audio" ? AUDIO_EXTS : IMAGE_EXTS;
+  const meta = getTool(toolId)!;
+  const accepts = meta.accepts;
+  const multiFile = meta.multiFile;
+  // Toolbar chrome: GPU only used by the video-compress tool; presets only by
+  // the compress tools.
+  const showGpu = toolId === "video-compress";
+  const showPresets = toolId.endsWith("-compress");
 
-  // Window-level file drops & the sidebar-style pick button both land here.
+  const displayMediaType = meta.mediaType ?? 
+    (meta.category === "audio" ? "audio" : meta.category === "image" ? "image" : undefined);
+
   useEffect(() => {
     tasks.registerDropHandler((paths) => {
       const valid = paths.filter((p) => extOk(p, accepts));
       if (valid.length === 0) return;
-      tasks.addCompressFiles(valid, mediaType);
+      const toAdd = multiFile ? valid : valid.slice(0, 1);
+      tasks.addCompressFiles(toAdd, toolId, multiFile);
     });
     return () => tasks.registerDropHandler(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mediaType]);
+  }, [toolId]);
 
   const jobs = tasks.jobs.filter((j) => j.toolId === toolId);
   const hasJobs = jobs.length > 0;
@@ -99,14 +111,42 @@ export default function CompressWorkbench({ mediaType, toolId }: CompressWorkben
     if (ok) tasks.clearAll();
   }, [jobs, tasks, confirm, t]);
 
-  // Show skeleton for the relevant media type
-  const skeletonMediaType = mediaType === "video" ? "video" : mediaType === "audio" ? "audio" : "image";
+  const supportHint = displayMediaType
+    ? t(`dz.support.${displayMediaType}`, { exts: accepts.map((e) => `.${e}`).join(", ") })
+    : t("dz.support");
+
+  const filterName = displayMediaType ? t(`dz.filter.${displayMediaType}`) : t("dz.support");
 
   return (
     <div>
+      <div className="mb-4 flex items-start justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-neutral-800 dark:text-neutral-100">
+            {t(`tool.${toolId}.name`)}
+          </h2>
+          <p className="mt-0.5 text-xs text-neutral-400 dark:text-neutral-500">
+            {t(`tool.${toolId}.desc`)}
+          </p>
+        </div>
+        {onBack && (
+          <button
+            type="button"
+            onClick={onBack}
+            className="flex items-center gap-1 rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+          >
+            <span className="h-3 w-3" aria-hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="m15 18-6-6 6-6" />
+              </svg>
+            </span>
+            {t("module.back")}
+          </button>
+        )}
+      </div>
+
       {/* Toolbar: GPU + output settings + presets */}
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        {mediaType === "video" && (
+        {showGpu && (
           <>
             <select
               value={tasks.settings.gpu}
@@ -136,12 +176,14 @@ export default function CompressWorkbench({ mediaType, toolId }: CompressWorkben
           </>
         )}
         <OutputSettings compact />
-        <button
-          onClick={() => setPresetManagerOpen(true)}
-          className="ml-auto rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
-        >
-          {t("sidebar.presets")}
-        </button>
+        {showPresets && (
+          <button
+            onClick={() => setPresetManagerOpen(true)}
+            className="ml-auto rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+          >
+            {t("sidebar.presets")}
+          </button>
+        )}
       </div>
 
       {tasks.error && (
@@ -155,13 +197,13 @@ export default function CompressWorkbench({ mediaType, toolId }: CompressWorkben
 
       {tasks.loading && jobs.length === 0 ? (
         <div aria-label="加载中" className="space-y-4">
-          <SkeletonJobCard mediaType={skeletonMediaType} />
+          <SkeletonJobCard mediaType={meta.mediaType ?? "video"} />
         </div>
       ) : !hasJobs ? (
         <DropZone
           dragOver={false}
-          supportHint={t(`dz.support.${mediaType}`, { exts: accepts.map((e) => `.${e}`).join(", ") })}
-          onClick={() => tasks.pickFiles([{ name: t(`dz.filter.${mediaType}`), extensions: accepts }])}
+          supportHint={supportHint}
+          onClick={() => tasks.pickFiles([{ name: filterName, extensions: accepts }])}
           onDragOver={(e) => e.preventDefault()}
           onDragLeave={() => {}}
           onDrop={(e) => e.preventDefault()}
@@ -260,7 +302,9 @@ export default function CompressWorkbench({ mediaType, toolId }: CompressWorkben
       )}
 
       {confirmDialog}
-      <PresetManager open={presetManagerOpen} onClose={() => setPresetManagerOpen(false)} />
+      {showPresets && (
+        <PresetManager open={presetManagerOpen} onClose={() => setPresetManagerOpen(false)} />
+      )}
     </div>
   );
 }

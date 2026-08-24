@@ -3,27 +3,30 @@ import { inspectMedia } from "../lib/tauri";
 import { useI18n } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
 import { getTool, type WorkbenchId } from "./registry";
-import { blankToolParams } from "./defaults";
 import FilePicker from "./FilePicker";
-import CompressWorkbench from "./CompressWorkbench";
-import GifPanel from "./panels/GifPanel";
-import ScreenshotPanel from "./panels/ScreenshotPanel";
-import SpeedPanel from "./panels/SpeedPanel";
-import WatermarkPanel from "./panels/WatermarkPanel";
+import TaskWorkbench from "./TaskWorkbench";
+import WorkflowPage from "./WorkflowPage";
 import InspectReport from "./panels/InspectPanel";
-import type {
-  GifParams,
-  MediaReport,
-  ScreenshotParams,
-  SpeedParams,
-  ToolParams,
-  WatermarkParams,
-} from "../types";
+import type { MediaReport } from "../types";
 
-function WorkbenchHeader({ tool }: { tool: WorkbenchId }) {
+function WorkbenchHeader({ tool, onBack }: { tool: WorkbenchId; onBack?: () => void }) {
   const { t } = useI18n();
   return (
     <div className="mb-5">
+      {onBack && (
+        <button
+          type="button"
+          onClick={onBack}
+          className="mb-3 flex items-center gap-1 rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+        >
+          <span className="h-3 w-3" aria-hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="m15 18-6-6 6-6" />
+            </svg>
+          </span>
+          {t("module.back")}
+        </button>
+      )}
       <h2 className="text-lg font-semibold text-neutral-800 dark:text-neutral-100">
         {t(`tool.${tool}.name`)}
       </h2>
@@ -34,68 +37,8 @@ function WorkbenchHeader({ tool }: { tool: WorkbenchId }) {
   );
 }
 
-/** Generic single-file tool workbench: picker + params panel + queue action. */
-function SimpleToolWorkbench({ tool }: { tool: Exclude<WorkbenchId, "video-compress" | "audio-compress" | "image-compress" | "inspect"> }) {
-  const { t } = useI18n();
-  const tasks = useTasks();
-  const meta = getTool(tool)!;
-  const [files, setFiles] = useState<string[]>([]);
-  const [params, setParams] = useState<ToolParams | null>(() => blankToolParams(tool));
-
-  useEffect(() => {
-    tasks.registerDropHandler((paths) => {
-      const valid = paths.filter((p) => meta.accepts.some((e) => p.toLowerCase().endsWith(`.${e}`)));
-      if (valid.length === 0) return;
-      setFiles(meta.multiFile ? [...new Set([...files, ...valid])] : valid.slice(0, 1));
-    });
-    return () => tasks.registerDropHandler(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files]);
-
-  const canQueue =
-    files.length > 0 && params != null && (tool !== "watermark" || !!(params as WatermarkParams).imagePath);
-
-  return (
-    <div className="mx-auto max-w-2xl">
-      <WorkbenchHeader tool={tool} />
-      <div className="space-y-4">
-        <FilePicker
-          key={tool}
-          meta={meta}
-          files={files}
-          onChange={setFiles}
-        />
-        {params && tool === "gif" && (
-          <GifPanel params={params as GifParams} onChange={(p) => setParams(p)} />
-        )}
-        {params && tool === "screenshot" && (
-          <ScreenshotPanel params={params as ScreenshotParams} onChange={(p) => setParams(p)} />
-        )}
-        {params && tool === "speed" && (
-          <SpeedPanel params={params as SpeedParams} onChange={(p) => setParams(p)} />
-        )}
-        {params && tool === "watermark" && (
-          <WatermarkPanel params={params as WatermarkParams} onChange={(p) => setParams(p)} />
-        )}
-
-        <button
-          type="button"
-          disabled={!canQueue}
-          onClick={() => {
-            void tasks.addTasks(tool, files, params!);
-            setFiles([]);
-          }}
-          className="w-full rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-brand-600 dark:hover:bg-brand-700"
-        >
-          {t("tool.addToTasks", { n: files.length })}
-        </button>
-      </div>
-    </div>
-  );
-}
-
 /** Instant ffprobe report viewer (not a queued task). */
-function InspectWorkbench() {
+function InspectWorkbench({ onBack }: { onBack?: () => void }) {
   const { t } = useI18n();
   const tasks = useTasks();
   const meta = getTool("inspect")!;
@@ -130,7 +73,7 @@ function InspectWorkbench() {
 
   return (
     <div className="mx-auto max-w-2xl">
-      <WorkbenchHeader tool="inspect" />
+      <WorkbenchHeader tool="inspect" onBack={onBack} />
       <FilePicker key="inspect" meta={meta} files={file ? [file] : []} onChange={(fs) => setFile(fs[0] ?? null)} />
 
       <div className="mt-4">
@@ -151,25 +94,8 @@ function InspectWorkbench() {
   );
 }
 
-function getCompressMediaType(tool: WorkbenchId): "video" | "audio" | "image" | null {
-  switch (tool) {
-    case "video-compress": return "video";
-    case "audio-compress": return "audio";
-    case "image-compress": return "image";
-    default: return null;
-  }
-}
-
-function isCompressTool(tool: WorkbenchId): tool is "video-compress" | "audio-compress" | "image-compress" {
-  return tool === "video-compress" || tool === "audio-compress" || tool === "image-compress";
-}
-
-export default function ToolWorkbench({ tool }: { tool: WorkbenchId }) {
-  if (isCompressTool(tool)) {
-    const mediaType = getCompressMediaType(tool)!;
-    return <CompressWorkbench mediaType={mediaType} toolId={tool} />;
-  }
-  if (tool === "inspect") return <InspectWorkbench />;
-  // tool is now narrowed to simple tools (gif, screenshot, speed, watermark)
-  return <SimpleToolWorkbench tool={tool} />;
+export default function ToolWorkbench({ tool, onBack }: { tool: WorkbenchId; onBack?: () => void }) {
+  if (tool === "inspect") return <InspectWorkbench onBack={onBack} />;
+  if (tool === "workflow") return <WorkflowPage onBack={onBack} />;
+  return <TaskWorkbench toolId={tool} onBack={onBack} />;
 }

@@ -10,9 +10,10 @@ import {
   probeFile,
   startJob,
 } from "../lib/tauri";
-import { defaultParams } from "../lib/defaults";
+import { defaultParamsFor } from "../lib/defaults";
 import { useI18n } from "../i18n";
-import type { GpuInfo, MediaType } from "../types";
+import { isBatchEditable } from "../tools/kinds";
+import type { GpuInfo } from "../types";
 import type { Job, JobParams, ToolId, ToolParams } from "../types";
 
 export interface TaskSettings {
@@ -31,6 +32,50 @@ export interface TaskStats {
 }
 
 const SETTINGS_KEY = "mediapress.settings";
+const JOBS_KEY = "mediapress.jobs";
+
+/** Drop transient runtime fields and reset in-flight jobs so a resumed
+ *  session treats them as queued (the child processes are gone). */
+function sanitizePersisted(j: Job): Job | null {
+  if (!j || typeof j.uiId !== "string" || !j.toolId || !j.info) return null;
+  return {
+    uiId: j.uiId,
+    toolId: j.toolId,
+    info: j.info,
+    params: j.params,
+    percent: 0,
+    phase: j.phase === "running" ? "queued" : j.phase,
+    output: j.output ?? null,
+    error: j.error ?? null,
+    outputSize: j.outputSize ?? null,
+    startedAt: j.startedAt ?? null,
+    createdAt: j.createdAt ?? null,
+    logs: j.logs ?? null,
+    resultFiles: j.resultFiles ?? undefined,
+    // transient fields are intentionally dropped:
+    // rustId, speed, sizeEstimate, estimating
+  };
+}
+
+function restoreJobs(): Job[] {
+  try {
+    const raw = localStorage.getItem(JOBS_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    const jobs = arr
+      .map(sanitizePersisted)
+      .filter((j): j is Job => j != null);
+    const n = jobs.reduce((max, j) => {
+      const m = /^ui-(\d+)$/.exec(j.uiId);
+      return m ? Math.max(max, Number(m[1])) : max;
+    }, 0);
+    if (n > 0) uiCounter = n;
+    return jobs;
+  } catch {
+    return [];
+  }
+}
 
 function loadSettings(): TaskSettings {
   const fallback: TaskSettings = {
@@ -77,7 +122,7 @@ interface TaskCenterValue {
   totalIn: number;
   totalOut: number;
   registerDropHandler: (fn: ((paths: string[]) => void) | null) => void;
-  addCompressFiles: (paths: string[], mediaType?: MediaType) => void;
+  addCompressFiles: (paths: string[], toolId: ToolId, multiFile?: boolean) => void;
   pickFiles: (filters?: Array<{ name: string; extensions: string[] }>) => Promise<void>;
   chooseOutput: () => Promise<void>;
   setOutputDir: (dir: string | null) => void;
@@ -119,7 +164,7 @@ export function TaskCenterProvider({
   children: ReactNode;
 }) {
   const { t } = useI18n();
-  const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobs, setJobs] = useState<Job[]>(() => restoreJobs());
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [settings, setSettings] = useState<TaskSettings>(loadSettings);
@@ -127,6 +172,22 @@ export function TaskCenterProvider({
 
   const jobsRef = useRef<Job[]>(jobs);
   jobsRef.current = jobs;
+
+  // Persist the task queue to localStorage (debounced) so history survives restarts.
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      try {
+        localStorage.setItem(JOBS_KEY, JSON.stringify(jobs.map(sanitizePersisted)));
+      } catch {
+        // ignore quota / serialization errors
+      }
+    }, 600);
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+    };
+  }, [jobs]);
 
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -180,6 +241,8 @@ export function TaskCenterProvider({
                 output: e.output ?? null,
                 error: e.error ?? null,
                 outputSize: e.outputSize ?? null,
+                logs: e.error ?? null,
+                resultFiles: e.output ? [e.output] : undefined,
               }
             : j
         )
@@ -244,23 +307,14 @@ export function TaskCenterProvider({
     onToast?.(type, msg);
   }
 
-  function getCompressToolId(mediaType: MediaType): "video-compress" | "audio-compress" | "image-compress" {
-    switch (mediaType) {
-      case "video": return "video-compress";
-      case "audio": return "audio-compress";
-      case "image": return "image-compress";
-      default: return "video-compress";
-    }
-  }
-
-  async function addCompressFiles(paths: string[], mediaType?: MediaType) {
+  async function addCompressFiles(paths: string[], toolId: ToolId, multiFile = true) {
     setError(null);
-    for (const p of paths) {
+    const list = multiFile ? paths : paths.slice(0, 1);
+    for (const p of list) {
       try {
         const info = await probeFile(p);
-        const params = defaultParams(info);
+        const params = defaultParamsFor(toolId);
         uiCounter += 1;
-        const toolId = mediaType ? getCompressToolId(mediaType) : getCompressToolId(info.mediaType);
         const job: Job = {
           uiId: `ui-${uiCounter}`,
           toolId,
@@ -270,6 +324,7 @@ export function TaskCenterProvider({
           phase: info.mediaType === "unknown" ? "error" : "queued",
           output: null,
           outputSize: null,
+          createdAt: Date.now(),
         };
         if (info.mediaType === "unknown") job.error = t("job.unknownError");
         setJobs((prev) => [...prev, job]);
@@ -296,6 +351,7 @@ export function TaskCenterProvider({
           phase: info.mediaType === "unknown" ? "error" : "queued",
           output: null,
           outputSize: null,
+          createdAt: Date.now(),
         };
         if (info.mediaType === "unknown") job.error = t("job.unknownError");
         setJobs((prev) => [...prev, job]);
@@ -417,7 +473,7 @@ export function TaskCenterProvider({
 
   async function runEstimate(uiId: string) {
     const job = jobsRef.current.find((j) => j.uiId === uiId);
-    if (!job || job.phase !== "queued" || !job.toolId.endsWith("compress")) return;
+    if (!job || job.phase !== "queued" || !isBatchEditable(job.toolId)) return;
     const token = (estimateTokens.current[uiId] ?? 0) + 1;
     estimateTokens.current[uiId] = token;
     setJobs((prev) =>

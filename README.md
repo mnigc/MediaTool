@@ -10,28 +10,28 @@ A local media **toolbox** for batch processing of video, image, and audio files.
 
 ## Features
 
-- **Toolbox Layout** — categorized tool tree (common / video / audio / image / general) with a unified bottom task dock; different tools can run tasks simultaneously
-- **Compress & Convert** — H.264, VP9, AV1 (SVT-AV1) encoding with CRF/target size/fixed bitrate quality modes, custom resolution (480p ~ 2160p), frame rate, encoding speed, trim controls, and metadata stripping
+- **Toolbox Layout** — categorized tool tree (video / audio / image / general, 15 tools in total) with a unified bottom task dock; different tools can run tasks simultaneously
+- **Video Compress** — H.264, VP9, AV1 (SVT-AV1) encoding with CRF/target size/fixed bitrate quality modes, resolution (480p ~ 2160p), frame rate and speed presets
+- **Video Convert** — free container & codec combos (MP4/WebM/MKV/MOV × H.264/VP9/AV1); switching containers auto-selects matching codecs
+- **Video Trim** — lossless quick mode (stream copy, keyframe-aligned) or precise mode (re-encode)
+- **Remove Audio** — lossless audio-track removal via stream copy
+- **Rotate & Flip** — 90° CW/CCW, 180°, horizontal/vertical mirror
 - **Video → GIF** — high-quality palette-based GIF conversion (start/duration/fps/width)
 - **Screenshot Export** — single frame or interval series export to PNG/JPEG
 - **Speed Change** — 0.25x ~ 4x video/audio speed change with chained atempo, optional mute
 - **Image Watermark** — overlay watermark on video with 9-grid positioning, scale & opacity control
+- **Audio Compress / Convert** — lower bitrate keeping the source codec, or convert between MP3/AAC/M4A/Opus/FLAC
+- **Extract Audio** — pull the audio track out of a video into its own file
+- **Image Compress / Convert** — adjust quality & size keeping the source format, or convert between WebP/JPEG/PNG/AVIF
+- **Strip Metadata** — remove EXIF/GPS and other metadata; lossless stream-copy for A/V, high-quality re-encode for images
 - **Media Info** — instant full codec/stream inspection report via ffprobe
-- **Audio Conversion & Extraction** — MP3/AAC/M4A/Opus/FLAC with bitrate control
 - **GPU Acceleration** — Auto-detects NVIDIA NVENC, Intel QSV, Apple VideoToolbox, AMD AMF, VAAPI backends
 - **Batch Processing** — Drag-and-drop import, concurrent task execution (1/2/4), unified task dock with progress/retry/cancel
 - **Name Conflict Policy** — auto-rename, skip, or overwrite when output files already exist
-- **Built-in & Custom Presets** — platform presets plus per-tool custom presets
+- **Built-in & Custom Presets** — per-tool scoped preset system for quick reuse
 - **Output Size Estimation** — theoretical estimation + sample encoding for accurate prediction
-- **Multi-language** — 中文, English, 한국어, 日本語 | **Theme** — Light / Dark / System
-- **Batch Processing** — Drag-and-drop or file picker for batch import, concurrent processing control (1/2/4)
-- **Built-in Presets** — Optimized for YouTube, Bilibili, Douyin, Xiaohongshu, WeChat Channels
-- **Custom Presets** — Save frequently used parameters as presets for quick reuse
-- **Output Size Estimation** — Theoretical estimation based on parameters + sample encoding for accurate prediction
 - **Real-time Progress** — Progress bar, speed, and ETA estimation
 - **Drag-and-Drop Sorting** — Reorder task list by dragging
-- **Multi-language** — 中文, English, 한국어, 日本語
-- **Theme** — Light / Dark / System
 - **Output Suffix** — Custom output filename suffix to avoid overwriting source files
 
 ## Screenshot
