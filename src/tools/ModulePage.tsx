@@ -7,19 +7,34 @@ import {
   type WorkbenchId,
 } from "./registry";
 import {
+  AdjustIcon,
   CameraIcon,
   ConvertIcon,
+  CropIcon,
   ExtractAudioIcon,
+  FadeIcon,
   GifIcon,
+  MergeIcon,
   MuteIcon,
+  PdfIcon,
+  PitchIcon,
+  ResizeIcon,
+  ReverseIcon,
   RotateIcon,
   ScissorsIcon,
   SearchIcon,
+  SilenceIcon,
   SlidersIcon,
   SpeedIcon,
   StripMetadataIcon,
+  SubtitleIcon,
+  AddAudioIcon,
+  VolumeIcon,
   WatermarkIcon,
   WorkflowIcon,
+  FrameStripIcon,
+  GridIcon,
+  WaveDetectIcon,
 } from "../components/icons";
 
 const TOOL_ICONS: Record<WorkbenchId, ComponentType<{ className?: string }>> = {
@@ -32,11 +47,32 @@ const TOOL_ICONS: Record<WorkbenchId, ComponentType<{ className?: string }>> = {
   screenshot: CameraIcon,
   speed: SpeedIcon,
   watermark: WatermarkIcon,
+  "video-crop": CropIcon,
+  "video-volume": VolumeIcon,
+  "video-reverse": ReverseIcon,
+  "video-subtitle": SubtitleIcon,
+  "video-addaudio": AddAudioIcon,
+  "video-merge": MergeIcon,
+  "video-frames": FrameStripIcon,
+  "video-contact": GridIcon,
+  "video-silence": WaveDetectIcon,
   "audio-compress": SlidersIcon,
   "audio-convert": ConvertIcon,
   "extract-audio": ExtractAudioIcon,
+  "audio-trim": ScissorsIcon,
+  "audio-fade": FadeIcon,
+  "audio-volume": VolumeIcon,
+  "audio-pitch": PitchIcon,
+  "audio-silence": SilenceIcon,
+  "audio-merge": MergeIcon,
   "image-compress": SlidersIcon,
   "image-convert": ConvertIcon,
+  "image-resize": ResizeIcon,
+  "image-rotate": RotateIcon,
+  "image-crop": CropIcon,
+  "image-watermark": WatermarkIcon,
+  "image-pdf": PdfIcon,
+  "image-adjust": AdjustIcon,
   "strip-metadata": StripMetadataIcon,
   inspect: SearchIcon,
   workflow: WorkflowIcon,
@@ -69,12 +105,12 @@ function ToolCard({ tool, onOpen }: { tool: ToolMeta; onOpen: (id: WorkbenchId) 
     <button
       type="button"
       onClick={() => onOpen(tool.id)}
-      className="group flex flex-col gap-3 rounded-2xl bg-white p-4 text-left shadow-card ring-1 ring-neutral-200 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-card-hover hover:ring-brand-200 dark:bg-neutral-900 dark:ring-neutral-800 dark:hover:ring-brand-800"
+      className="group flex items-center gap-3 rounded-2xl bg-white p-4 text-left shadow-card ring-1 ring-neutral-200 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-card-hover hover:ring-brand-200 dark:bg-neutral-900 dark:ring-neutral-800 dark:hover:ring-brand-800"
     >
-      <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-50 text-brand-600 transition-colors group-hover:bg-brand-100 dark:bg-brand-950/40 dark:text-brand-400 dark:group-hover:bg-brand-900/50">
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-600 transition-colors group-hover:bg-brand-100 dark:bg-brand-950/40 dark:text-brand-400 dark:group-hover:bg-brand-900/50">
         {Icon ? <Icon className="h-5 w-5" /> : <SearchIcon className="h-5 w-5" />}
       </span>
-      <span className="flex-1">
+      <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium text-neutral-900 dark:text-neutral-100">
           {t(`tool.${tool.id}.name`)}
         </span>

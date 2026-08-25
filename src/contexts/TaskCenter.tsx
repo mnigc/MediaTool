@@ -13,6 +13,8 @@ import {
 import { defaultParamsFor } from "../lib/defaults";
 import { useI18n } from "../i18n";
 import { isBatchEditable } from "../tools/kinds";
+import { extOk } from "../tools/FilePicker";
+import { getTool } from "../tools/registry";
 import type { GpuInfo } from "../types";
 import type { Job, JobParams, ToolId, ToolParams } from "../types";
 
@@ -123,6 +125,7 @@ interface TaskCenterValue {
   totalOut: number;
   registerDropHandler: (fn: ((paths: string[]) => void) | null) => void;
   addCompressFiles: (paths: string[], toolId: ToolId, multiFile?: boolean) => void;
+  mergeAndStart: (toolId: ToolId, paths: string[]) => void;
   pickFiles: (filters?: Array<{ name: string; extensions: string[] }>) => Promise<void>;
   chooseOutput: () => Promise<void>;
   setOutputDir: (dir: string | null) => void;
@@ -370,6 +373,37 @@ export function TaskCenterProvider({
     }
   }
 
+  /** Create a single merge job from multiple input files and start it. */
+  async function mergeAndStart(toolId: ToolId, paths: string[]) {
+    setError(null);
+    const valid = paths.filter((p) => extOk(p, getTool(toolId)?.accepts ?? []));
+    if (valid.length < 2) {
+      setError(t("err.mergeMin"));
+      return;
+    }
+    try {
+      const info = await probeFile(valid[0]);
+      uiCounter += 1;
+      const params = defaultParamsFor(toolId) as Record<string, unknown> & { mergeInputs?: string[] };
+      params.mergeInputs = valid;
+      const job: Job = {
+        uiId: `ui-${uiCounter}`,
+        toolId,
+        info,
+        params: params as JobParams,
+        percent: 0,
+        phase: "queued",
+        output: null,
+        outputSize: null,
+        createdAt: Date.now(),
+      };
+      setJobs((prev) => [...prev, job]);
+      await startOne(job.uiId);
+    } catch (err) {
+      setError(t("err.read", { error: String(err) }));
+    }
+  }
+
   async function chooseOutput() {
     const d = await open({ directory: true, title: t("sidebar.changeOutput") });
     if (d && !Array.isArray(d)) {
@@ -382,9 +416,11 @@ export function TaskCenterProvider({
     if (!job || job.phase !== "queued") return;
     setError(null);
       try {
+        const extra = (job.params as unknown as { mergeInputs?: string[] }).mergeInputs;
+        const inputs = extra && extra.length > 0 ? extra : [job.info.path];
         const res = await startJob({
           toolId: job.toolId,
-          inputs: [job.info.path],
+          inputs,
           params: job.params,
           outputDir: settingsRef.current.outputDir ?? undefined,
           outputSuffix: settingsRef.current.outputSuffix || "_mediapress",
@@ -617,6 +653,7 @@ export function TaskCenterProvider({
     totalOut,
     registerDropHandler,
     addCompressFiles,
+    mergeAndStart,
     pickFiles,
     chooseOutput,
     setOutputDir: (dir) => setSettings((s) => ({ ...s, outputDir: dir })),

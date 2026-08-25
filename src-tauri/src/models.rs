@@ -170,6 +170,247 @@ pub struct WatermarkParams {
     pub margin_percent: Option<u32>,
 }
 
+/* ── New toolbox tools (video / audio / image) ──────────────── */
+
+/// Params for the "video-crop" tool (visual crop to an aspect ratio or a
+/// custom rectangle). Re-encodes with H.264+AAC.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CropParams {
+    /// "center" (fit an aspect ratio, centered) | "custom" (explicit rect)
+    pub mode: String,
+    /// target aspect ratio for center mode: "1:1" | "16:9" | "9:16" | "4:3" | "3:2" | "original"
+    pub aspect: Option<String>,
+    /// custom rect (mode == "custom"); all in pixels
+    pub x: Option<u32>,
+    pub y: Option<u32>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
+
+/// Params for the "video-volume" tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoVolumeParams {
+    /// "normalize" (loudnorm) | "gain" (linear dB boost)
+    pub mode: String,
+    /// gain in dB for "gain" mode; clamped -20..20
+    pub gain: Option<f32>,
+}
+
+/// Params for the "video-reverse" tool (no options).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoReverseParams {}
+
+/// Params for the "video-subtitle" tool (burn-in subtitles).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubtitleParams {
+    /// path to .srt / .ass / .vtt subtitle file
+    pub path: String,
+    /// burn into the video (true) vs. mux as a soft stream (false, mkv only)
+    pub burn: Option<bool>,
+}
+
+/// Params for the "video-addaudio" tool (replace or mix a background track).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddAudioParams {
+    /// path to the replacement / background audio file (inputs[1])
+    pub audio_path: String,
+    /// "replace" (swap the audio track) | "mix" (overlay under original)
+    pub mode: String,
+    /// mix level 0..1 applied to the added track (mix mode only)
+    pub volume: Option<f32>,
+}
+
+/// Params for the "video-merge" tool (concatenate multiple clips).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoMergeParams {
+    /// "concat" (sequential join) — currently the only layout
+    pub mode: String,
+}
+
+/// Params for the "audio-trim" tool (lossless stream copy).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioTrimParams {
+    pub start_time: f64,
+    pub duration: Option<f64>,
+}
+
+/// Params for the "audio-fade" tool (fade in / out).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FadeParams {
+    /// fade-in length in seconds
+    pub in_sec: f64,
+    /// fade-out length in seconds
+    pub out_sec: f64,
+}
+
+/// Params for the "audio-volume" tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioVolumeParams {
+    /// "normalize" (loudnorm) | "gain" (linear dB boost)
+    pub mode: String,
+    pub gain: Option<f32>,
+}
+
+/// Params for the "audio-pitch" tool (speed + pitch shift).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PitchParams {
+    /// playback speed multiplier 0.5..2.0 (atempo)
+    pub speed: f64,
+    /// pitch shift in semitones, -12..12 (asetrate + aresample)
+    pub pitch: f64,
+}
+
+/// Params for the "audio-silence" tool (remove silent passages).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SilenceParams {
+    /// "remove" (cut silence) | "detect" (annotate, passthrough)
+    pub mode: String,
+    /// silence threshold in dB (negative), default -35
+    pub threshold_db: Option<f32>,
+    /// minimum silence length in seconds, default 0.5
+    pub min_len: Option<f32>,
+}
+
+/// Params for the "image-resize" tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageResizeParams {
+    /// "longest" (fit longest side) | "exact" (force WxH) | "percent" (scale %)
+    pub mode: String,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub percent: Option<u32>,
+}
+
+/// Params for the "image-rotate" tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageRotateParams {
+    /// "90c" | "90cc" | "180" | "hflip" | "vflip"
+    pub transform: String,
+}
+
+/// Params for the "image-crop" tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageCropParams {
+    pub mode: String,
+    pub aspect: Option<String>,
+    pub x: Option<u32>,
+    pub y: Option<u32>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
+
+/// Params for the "image-watermark" tool (text or image overlay).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageWatermarkParams {
+    /// "text" | "image"
+    pub mode: String,
+    /// text content for text mode
+    pub text: Option<String>,
+    /// path to overlay image for image mode (inputs[1])
+    pub image_path: Option<String>,
+    /// nine-grid position tl|tc|tr|ml|mc|mr|bl|bc|br
+    pub position: String,
+    /// overlay width as % of main width; default 25
+    pub scale_percent: u32,
+    pub opacity: Option<f32>,
+    pub margin_percent: Option<u32>,
+    /// font size for text mode, default 36
+    pub font_size: Option<u32>,
+    /// text color for text mode, default "white"
+    pub color: Option<String>,
+}
+
+/// Params for the "image-pdf" tool (image -> PDF, single image).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImagePdfParams {}
+
+/// Params for the "image-adjust" tool (brightness/contrast/saturation).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageAdjustParams {
+    /// -1.0..1.0
+    pub brightness: Option<f32>,
+    /// -2.0..2.0
+    pub contrast: Option<f32>,
+    /// 0.0..3.0
+    pub saturation: Option<f32>,
+}
+
+/// Params for the "video-frames" tool (sample frames then re-encode into a video).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameSampleParams {
+    /// seconds between sampled frames
+    pub interval: f64,
+    /// output frame rate after re-timing
+    pub fps: f64,
+    /// width of the sampled frames (px)
+    pub width: u32,
+}
+
+/// Params for the "video-contact" tool (contact sheet / sprite grid).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactSheetParams {
+    /// seconds between captured thumbnails
+    pub interval: f64,
+    pub cols: u32,
+    pub rows: u32,
+    /// width of each thumbnail (px)
+    pub thumb_w: u32,
+}
+
+/// Params for the "video-silence" tool (detect silent segments, write a report).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoSilenceParams {
+    /// silence threshold in dB (negative)
+    pub threshold: f32,
+    /// minimum silence length in seconds
+    pub min_len: f32,
+}
+
+impl Default for FrameSampleParams {
+    fn default() -> Self {
+        Self { interval: 2.0, fps: 12.0, width: 480 }
+    }
+}
+
+impl Default for ContactSheetParams {
+    fn default() -> Self {
+        Self { interval: 5.0, cols: 4, rows: 4, thumb_w: 160 }
+    }
+}
+
+impl Default for VideoSilenceParams {
+    fn default() -> Self {
+        Self { threshold: -35.0, min_len: 2.0 }
+    }
+}
+
+/// Params for the "audio-merge" tool (concatenate audio files).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioMergeParams {
+    pub mode: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobRequest {

@@ -65,7 +65,28 @@ export type ToolId =
   | "rotate"
   | "mute"
   | "extract-audio"
-  | "strip-metadata";
+  | "strip-metadata"
+  | "video-crop"
+  | "video-volume"
+  | "video-reverse"
+  | "video-subtitle"
+  | "video-addaudio"
+  | "video-merge"
+  | "video-frames"
+  | "video-contact"
+  | "video-silence"
+  | "audio-trim"
+  | "audio-fade"
+  | "audio-volume"
+  | "audio-pitch"
+  | "audio-silence"
+  | "audio-merge"
+  | "image-resize"
+  | "image-rotate"
+  | "image-crop"
+  | "image-watermark"
+  | "image-pdf"
+  | "image-adjust";
 
 export interface GifParams {
   startTime?: number;
@@ -109,6 +130,154 @@ export interface RotateParams {
   transform: "90c" | "90cc" | "180" | "hflip" | "vflip";
 }
 
+/* ── New video tools ───────────────────────────────────────── */
+
+/** Crop a video to an aspect ratio (centered) or a custom rectangle. */
+export interface CropParams {
+  mode: "center" | "custom";
+  aspect?: "1:1" | "16:9" | "9:16" | "4:3" | "3:2" | "original";
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+}
+
+/** Adjust the audio level of a video. */
+export interface VideoVolumeParams {
+  mode: "normalize" | "gain";
+  gain?: number; // dB, -20..20
+}
+
+/** Reverse a video (no options). */
+export type VideoReverseParams = Record<string, never>;
+
+/** Burn-in (or soft-mux) subtitles from an external file. */
+export interface SubtitleParams {
+  path: string;
+  burn?: boolean;
+}
+
+/** Replace or mix an audio track from an external file. */
+export interface AddAudioParams {
+  audioPath: string;
+  mode: "replace" | "mix";
+  volume?: number; // 0..1 applied to the added track in mix mode
+}
+
+/** Concatenate multiple video clips. */
+export interface VideoMergeParams {
+  mode: "concat";
+  mergeInputs?: string[];
+}
+
+/* ── New audio tools ───────────────────────────────────────── */
+
+/** Lossless audio trim. */
+export interface AudioTrimParams {
+  startTime: number;
+  duration?: number;
+}
+
+/** Fade audio in / out. */
+export interface FadeParams {
+  inSec: number;
+  outSec: number;
+}
+
+/** Adjust the audio level of an audio file. */
+export interface AudioVolumeParams {
+  mode: "normalize" | "gain";
+  gain?: number;
+}
+
+/** Change speed and/or pitch of an audio file. */
+export interface PitchParams {
+  speed: number; // 0.5..2.0
+  pitch: number; // semitones, -12..12
+}
+
+/** Remove (or detect) silent passages. */
+export interface SilenceParams {
+  mode: "remove" | "detect";
+  thresholdDb?: number;
+  minLen?: number; // seconds
+}
+
+/** Concatenate multiple audio files. */
+export interface AudioMergeParams {
+  mode: "concat";
+  mergeInputs?: string[];
+}
+
+/* ── New image tools ───────────────────────────────────────── */
+
+/** Resize an image. */
+export interface ImageResizeParams {
+  mode: "longest" | "exact" | "percent";
+  width?: number;
+  height?: number;
+  percent?: number;
+}
+
+/** Rotate/flip an image. */
+export interface ImageRotateParams {
+  transform: "90c" | "90cc" | "180" | "hflip" | "vflip";
+}
+
+/** Crop an image. */
+export interface ImageCropParams {
+  mode: "center" | "custom";
+  aspect?: "1:1" | "16:9" | "9:16" | "4:3" | "3:2" | "original";
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+}
+
+/** Add a text or image watermark to an image. */
+export interface ImageWatermarkParams {
+  mode: "text" | "image";
+  text?: string;
+  imagePath?: string;
+  position: "tl" | "tc" | "tr" | "ml" | "mc" | "mr" | "bl" | "bc" | "br";
+  scalePercent: number;
+  opacity?: number;
+  marginPercent?: number;
+  fontSize?: number;
+  color?: string;
+}
+
+/** Convert a single image to PDF. */
+export type ImagePdfParams = Record<string, never>;
+
+/** Adjust brightness / contrast / saturation of an image. */
+export interface ImageAdjustParams {
+  brightness?: number; // -1..1
+  contrast?: number; // -2..2
+  saturation?: number; // 0..3
+}
+
+/** Sample frames at an interval and re-encode them into a (sped-up) video. */
+export interface FrameSampleParams {
+  interval: number; // seconds between sampled frames
+  fps: number; // output frame rate
+  width: number; // sampled frame width (px)
+}
+
+/** Build a contact sheet / sprite grid of thumbnails from the video. */
+export interface ContactSheetParams {
+  interval: number; // seconds between thumbnails
+  cols: number;
+  rows: number;
+  thumbW: number; // thumbnail width (px)
+}
+
+/** Detect silent segments in a video's audio track (writes a text report). */
+export interface VideoSilenceParams {
+  threshold: number; // dB (negative)
+  minLen: number; // minimum silence length (seconds)
+}
+
 /** Remove-audio-track tool (lossless stream copy, no params). */
 export type MuteParams = Record<string, never>;
 
@@ -133,7 +302,28 @@ export type ToolParams =
   | RotateParams
   | MuteParams
   | ExtractAudioParams
-  | StripMetadataParams;
+  | StripMetadataParams
+  | CropParams
+  | VideoVolumeParams
+  | VideoReverseParams
+  | SubtitleParams
+  | AddAudioParams
+  | VideoMergeParams
+  | AudioTrimParams
+  | FadeParams
+  | AudioVolumeParams
+  | PitchParams
+  | SilenceParams
+  | AudioMergeParams
+  | ImageResizeParams
+  | ImageRotateParams
+  | ImageCropParams
+  | ImageWatermarkParams
+  | ImagePdfParams
+  | ImageAdjustParams
+  | FrameSampleParams
+  | ContactSheetParams
+  | VideoSilenceParams;
 
 export type JobParams = ToolParams;
 

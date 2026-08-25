@@ -9,14 +9,50 @@ import TrimPanel from "./panels/TrimPanel";
 import RotatePanel from "./panels/RotatePanel";
 import ExtractAudioPanel from "./panels/ExtractAudioPanel";
 import type {
+  AddAudioParams,
+  AudioTrimParams,
+  AudioVolumeParams,
+  ContactSheetParams,
+  CropParams,
   ExtractAudioParams,
+  FadeParams,
+  FrameSampleParams,
   GifParams,
+  ImageAdjustParams,
+  ImageCropParams,
+  ImageResizeParams,
+  ImageRotateParams,
+  ImageWatermarkParams,
+  PitchParams,
   RotateParams,
   ScreenshotParams,
+  SilenceParams,
   SpeedParams,
+  SubtitleParams,
   TrimParams,
+  VideoSilenceParams,
+  VideoVolumeParams,
   WatermarkParams,
 } from "../types";
+import AudioFadePanel from "./panels/AudioFadePanel";
+import AudioPitchPanel from "./panels/AudioPitchPanel";
+import AudioSilencePanel from "./panels/AudioSilencePanel";
+import AudioTrimPanel from "./panels/AudioTrimPanel";
+import AudioVolumePanel from "./panels/AudioVolumePanel";
+import ImageAdjustPanel from "./panels/ImageAdjustPanel";
+import ImageCropPanel from "./panels/ImageCropPanel";
+import ImagePdfPanel from "./panels/ImagePdfPanel";
+import ImageResizePanel from "./panels/ImageResizePanel";
+import ImageRotatePanel from "./panels/ImageRotatePanel";
+import ImageWatermarkPanel from "./panels/ImageWatermarkPanel";
+import VideoAddAudioPanel from "./panels/VideoAddAudioPanel";
+import VideoCropPanel from "./panels/VideoCropPanel";
+import VideoReversePanel from "./panels/VideoReversePanel";
+import VideoSubtitlePanel from "./panels/VideoSubtitlePanel";
+import VideoVolumePanel from "./panels/VideoVolumePanel";
+import VideoFramesPanel from "./panels/VideoFramesPanel";
+import VideoContactPanel from "./panels/VideoContactPanel";
+import VideoSilencePanel from "./panels/VideoSilencePanel";
 
 /** Single editor that dispatches to the right params panel for any tool.
  *  Compress/convert tools use OptionsPanel; toolbox tools use their own
@@ -49,6 +85,47 @@ export default function JobParamsEditor({
       return <RotatePanel params={params as RotateParams} onChange={(p) => onChange(p)} />;
     case "extract-audio":
       return <ExtractAudioPanel params={params as ExtractAudioParams} onChange={(p) => onChange(p)} />;
+    /* ── New video tools ── */
+    case "video-crop":
+      return <VideoCropPanel params={params as CropParams} onChange={(p) => onChange(p)} />;
+    case "video-volume":
+      return <VideoVolumePanel params={params as VideoVolumeParams} onChange={(p) => onChange(p)} />;
+    case "video-reverse":
+      return <VideoReversePanel />;
+    case "video-subtitle":
+      return <VideoSubtitlePanel params={params as SubtitleParams} onChange={(p) => onChange(p)} />;
+    case "video-addaudio":
+      return <VideoAddAudioPanel params={params as AddAudioParams} onChange={(p) => onChange(p)} />;
+    case "video-frames":
+      return <VideoFramesPanel params={params as FrameSampleParams} onChange={(p) => onChange(p)} />;
+    case "video-contact":
+      return <VideoContactPanel params={params as ContactSheetParams} onChange={(p) => onChange(p)} />;
+    case "video-silence":
+      return <VideoSilencePanel params={params as VideoSilenceParams} onChange={(p) => onChange(p)} />;
+    /* ── New audio tools ── */
+    case "audio-trim":
+      return <AudioTrimPanel params={params as AudioTrimParams} onChange={(p) => onChange(p)} />;
+    case "audio-fade":
+      return <AudioFadePanel params={params as FadeParams} onChange={(p) => onChange(p)} />;
+    case "audio-volume":
+      return <AudioVolumePanel params={params as AudioVolumeParams} onChange={(p) => onChange(p)} />;
+    case "audio-pitch":
+      return <AudioPitchPanel params={params as PitchParams} onChange={(p) => onChange(p)} />;
+    case "audio-silence":
+      return <AudioSilencePanel params={params as SilenceParams} onChange={(p) => onChange(p)} />;
+    /* ── New image tools ── */
+    case "image-resize":
+      return <ImageResizePanel params={params as ImageResizeParams} onChange={(p) => onChange(p)} />;
+    case "image-rotate":
+      return <ImageRotatePanel params={params as ImageRotateParams} onChange={(p) => onChange(p)} />;
+    case "image-crop":
+      return <ImageCropPanel params={params as ImageCropParams} onChange={(p) => onChange(p)} />;
+    case "image-watermark":
+      return <ImageWatermarkPanel params={params as ImageWatermarkParams} onChange={(p) => onChange(p)} />;
+    case "image-pdf":
+      return <ImagePdfPanel />;
+    case "image-adjust":
+      return <ImageAdjustPanel params={params as ImageAdjustParams} onChange={(p) => onChange(p)} />;
     default:
       return null;
   }

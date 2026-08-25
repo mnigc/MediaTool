@@ -7,10 +7,15 @@ use crate::error::{AppError, Result};
 use crate::ffmpeg;
 use crate::media::probe;
 use crate::models::{
-    AudioParams, DoneEvent, EstimateRequest, EstimateResult, ExtractAudioParams, GifParams,
-    ImageParams, JobRequest, MediaInfo, MediaType, MuteParams, ProgressEvent, RotateParams,
-    ScreenshotParams, SpeedParams, StartJobResult, StartWorkflowResult, StripMetadataParams,
-    TrimParams, VideoParams, WatermarkParams, WorkflowRequest, WorkflowStepInput,
+    AddAudioParams, AudioMergeParams, AudioParams, AudioTrimParams, AudioVolumeParams, CropParams,
+    DoneEvent, EstimateRequest, EstimateResult, ExtractAudioParams, FadeParams, GifParams,
+    ImageAdjustParams, ImageCropParams, ImageParams, ImagePdfParams, ImageResizeParams,
+    ImageRotateParams, ImageWatermarkParams, JobRequest, MediaInfo, MediaType, MuteParams,
+    PitchParams, ProgressEvent, RotateParams, ScreenshotParams, SilenceParams, SpeedParams,
+    StartJobResult, StartWorkflowResult, StripMetadataParams, SubtitleParams, TrimParams,
+    VideoMergeParams, VideoParams, VideoReverseParams, VideoVolumeParams, WatermarkParams,
+    ContactSheetParams, FrameSampleParams, VideoSilenceParams,
+    WorkflowRequest, WorkflowStepInput,
 };
 use crate::state::JobManager;
 
@@ -953,6 +958,657 @@ fn build_watermark_args(info: &MediaInfo, p: &WatermarkParams, wm_path: &str, ou
     a
 }
 
+/* ── New toolbox tools (video / audio / image) ──────────────── */
+
+fn even(v: i64) -> i64 {
+    if v % 2 == 0 {
+        v
+    } else {
+        v - 1
+    }
+}
+
+fn parse_aspect(aspect: &str, _iw: u32, _ih: u32) -> Option<(u32, u32)> {
+    if aspect == "original" || aspect.is_empty() {
+        return None;
+    }
+    let mut it = aspect.splitn(2, ':');
+    let w = it.next()?.parse::<u32>().ok()?;
+    let h = it.next()?.parse::<u32>().ok()?;
+    if w == 0 || h == 0 {
+        None
+    } else {
+        Some((w, h))
+    }
+}
+
+/// Compute a crop rectangle (w, h, x, y) — centered to an aspect ratio, or an
+/// explicit custom rectangle. All values are coerced to even integers.
+fn crop_rect(
+    mode: &str,
+    aspect: &Option<String>,
+    custom: Option<(u32, u32, u32, u32)>,
+    iw: u32,
+    ih: u32,
+) -> (i64, i64, i64, i64) {
+    let (cw, ch, x, y) = if mode == "custom" {
+        match custom {
+            Some((cx, cy, cwv, chv)) => (cwv as i64, chv as i64, cx as i64, cy as i64),
+            None => (iw as i64, ih as i64, 0, 0),
+        }
+    } else {
+        let (aw, ah) = match aspect.as_deref().and_then(|a| parse_aspect(a, iw, ih)) {
+            Some(p) => p,
+            None => return (iw as i64, ih as i64, 0, 0),
+        };
+        let w = iw as f64;
+        let h = ih as f64;
+        let src_ar = w / h;
+        let tgt_ar = aw as f64 / ah as f64;
+        let (cw, ch) = if src_ar > tgt_ar {
+            (h * tgt_ar, h)
+        } else {
+            (w, w / tgt_ar)
+        };
+        (
+            cw as i64,
+            ch as i64,
+            ((w as i64 - cw as i64) / 2),
+            ((h as i64 - ch as i64) / 2),
+        )
+    };
+    let cw = cw.clamp(2, iw as i64);
+    let ch = ch.clamp(2, ih as i64);
+    let x = x.clamp(0, (iw as i64 - cw).max(0));
+    let y = y.clamp(0, (ih as i64 - ch).max(0));
+    (even(cw), even(ch), even(x), even(y))
+}
+
+/// Quote a filesystem path for use inside an ffmpeg filtergraph value.
+fn filter_quote_path(p: &str) -> String {
+    format!("'{}'", p.replace('\\', "/").replace('\'', "'\\''"))
+}
+
+fn video_encode_tail(a: &mut Vec<String>) {
+    a.push("-c:v".into());
+    a.push("libx264".into());
+    a.push("-crf".into());
+    a.push("18".into());
+    a.push("-preset".into());
+    a.push("medium".into());
+    a.push("-c:a".into());
+    a.push("aac".into());
+    a.push("-b:a".into());
+    a.push("192k".into());
+    a.push("-threads".into());
+    a.push("0".into());
+    a.push("-progress".into());
+    a.push("pipe:1".into());
+    a.push("-y".into());
+}
+
+fn build_video_crop_args(info: &MediaInfo, p: &CropParams, out: &Path) -> Vec<String> {
+    let iw = info.width.unwrap_or(1920);
+    let ih = info.height.unwrap_or(1080);
+    let (w, h, x, y) = crop_rect(
+        &p.mode,
+        &p.aspect,
+        match (p.x, p.y, p.width, p.height) {
+            (Some(x), Some(y), Some(w), Some(h)) => Some((x, y, w, h)),
+            _ => None,
+        },
+        iw,
+        ih,
+    );
+    let vf = format!("crop={}:{}:{}:{}", w, h, x, y);
+    let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-vf".into(), vf];
+    video_encode_tail(&mut a);
+    a.push(out.to_string_lossy().to_string());
+    a
+}
+
+fn build_video_volume_args(info: &MediaInfo, p: &VideoVolumeParams, out: &Path) -> Vec<String> {
+    let af = if p.mode == "normalize" {
+        "loudnorm".to_string()
+    } else {
+        let db = p.gain.unwrap_or(0.0).clamp(-20.0, 20.0);
+        format!("volume=volume={:.1}dB", db)
+    };
+    let mut a: Vec<String> = vec![
+        "-i".into(),
+        info.path.clone(),
+        "-af".into(),
+        af,
+        "-c:v".into(),
+        "copy".into(),
+    ];
+    video_encode_tail(&mut a);
+    a.push(out.to_string_lossy().to_string());
+    a
+}
+
+fn build_video_reverse_args(info: &MediaInfo, _p: &VideoReverseParams, out: &Path) -> Vec<String> {
+    let mut a: Vec<String> = vec![
+        "-i".into(),
+        info.path.clone(),
+        "-vf".into(),
+        "reverse".into(),
+        "-af".into(),
+        "areverse".into(),
+    ];
+    video_encode_tail(&mut a);
+    a.push(out.to_string_lossy().to_string());
+    a
+}
+
+fn build_video_subtitle_args(info: &MediaInfo, p: &SubtitleParams, out: &Path) -> Vec<String> {
+    let burn = p.burn.unwrap_or(true);
+    let quoted = filter_quote_path(&p.path);
+    if !burn {
+        // Soft mux subtitles into an mkv container.
+        let mut a: Vec<String> = vec![
+            "-i".into(),
+            info.path.clone(),
+            "-i".into(),
+            p.path.clone(),
+            "-map".into(),
+            "0:v?".into(),
+            "-map".into(),
+            "0:a?".into(),
+            "-map".into(),
+            "1:s?".into(),
+            "-c".into(),
+            "copy".into(),
+            "-c:s".into(),
+            "srt".into(),
+            "-progress".into(),
+            "pipe:1".into(),
+            "-y".into(),
+        ];
+        a.push(out.to_string_lossy().to_string());
+        a
+    } else {
+        let vf = format!("subtitles=filename={}", quoted);
+        let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-vf".into(), vf];
+        video_encode_tail(&mut a);
+        a.push(out.to_string_lossy().to_string());
+        a
+    }
+}
+
+fn build_video_addaudio_args(info: &MediaInfo, p: &AddAudioParams, out: &Path) -> Vec<String> {
+    let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-i".into(), p.audio_path.clone()];
+    if p.mode == "mix" {
+        let vol = p.volume.unwrap_or(1.0).clamp(0.0, 1.0);
+        let fc = format!(
+            "[1:a]volume={:.3}[bg];[0:a][bg]amix=inputs=2:duration=longest:dropout_transition=0[a]",
+            vol
+        );
+        a.push("-filter_complex".into());
+        a.push(fc);
+        a.push("-map".into());
+        a.push("0:v:0".into());
+        a.push("-map".into());
+        a.push("[a]".into());
+        a.push("-c:v".into());
+        a.push("copy".into());
+        a.push("-c:a".into());
+        a.push("aac".into());
+        a.push("-b:a".into());
+        a.push("192k".into());
+    } else {
+        a.push("-map".into());
+        a.push("0:v:0".into());
+        a.push("-map".into());
+        a.push("1:a:0".into());
+        a.push("-c:v".into());
+        a.push("copy".into());
+        a.push("-c:a".into());
+        a.push("aac".into());
+        a.push("-b:a".into());
+        a.push("192k".into());
+    }
+    a.push("-threads".into());
+    a.push("0".into());
+    a.push("-progress".into());
+    a.push("pipe:1".into());
+    a.push("-y".into());
+    a.push(out.to_string_lossy().to_string());
+    a
+}
+
+fn build_video_merge_args(inputs: &[String], out: &Path) -> Vec<String> {
+    let n = inputs.len();
+    let mut a: Vec<String> = Vec::new();
+    for i in inputs {
+        a.push("-i".into());
+        a.push(i.clone());
+    }
+    let mut fc = String::new();
+    for (idx, _) in inputs.iter().enumerate() {
+        fc.push_str(&format!("[{}:v][{}:a]", idx, idx));
+    }
+    fc.push_str(&format!("concat=n={}:v=1:a=1[outv][outa]", n));
+    a.push("-filter_complex".into());
+    a.push(fc);
+    a.push("-map".into());
+    a.push("[outv]".into());
+    a.push("-map".into());
+    a.push("[outa]".into());
+    a.push("-c:v".into());
+    a.push("libx264".into());
+    a.push("-crf".into());
+    a.push("20".into());
+    a.push("-preset".into());
+    a.push("medium".into());
+    a.push("-c:a".into());
+    a.push("aac".into());
+    a.push("-b:a".into());
+    a.push("192k".into());
+    a.push("-threads".into());
+    a.push("0".into());
+    a.push("-progress".into());
+    a.push("pipe:1".into());
+    a.push("-y".into());
+    a.push(out.to_string_lossy().to_string());
+    a
+}
+
+fn build_audio_trim_args(info: &MediaInfo, p: &AudioTrimParams, out: &Path) -> Vec<String> {
+    let mut a: Vec<String> = vec![
+        "-ss".into(),
+        format!("{:.3}", p.start_time.max(0.0)),
+        "-i".into(),
+        info.path.clone(),
+    ];
+    if let Some(d) = p.duration {
+        if d > 0.0 {
+            a.push("-t".into());
+            a.push(format!("{:.3}", d));
+        }
+    }
+    a.push("-c".into());
+    a.push("copy".into());
+    a.push("-progress".into());
+    a.push("pipe:1".into());
+    a.push("-y".into());
+    a.push(out.to_string_lossy().to_string());
+    a
+}
+
+fn build_audio_fade_args(info: &MediaInfo, p: &FadeParams, out: &Path) -> Vec<String> {
+    let dur = info.duration_secs.unwrap_or(0.0);
+    let in_d = p.in_sec.max(0.0);
+    let out_d = p.out_sec.max(0.0);
+    let mut expr = format!("afade=t=in:st=0:d={:.3}", in_d);
+    if out_d > 0.0 && dur > out_d {
+        expr.push_str(&format!(
+            ",afade=t=out:st={:.3}:d={:.3}",
+            (dur - out_d).max(0.0),
+            out_d
+        ));
+    }
+    let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-af".into(), expr];
+    a.push("-c:a".into());
+    a.push("aac".into());
+    a.push("-b:a".into());
+    a.push("192k".into());
+    a.push("-progress".into());
+    a.push("pipe:1".into());
+    a.push("-y".into());
+    a.push(out.to_string_lossy().to_string());
+    a
+}
+
+fn build_audio_volume_args(info: &MediaInfo, p: &AudioVolumeParams, out: &Path) -> Vec<String> {
+    let af = if p.mode == "normalize" {
+        "loudnorm".to_string()
+    } else {
+        let db = p.gain.unwrap_or(0.0).clamp(-20.0, 20.0);
+        format!("volume=volume={:.1}dB", db)
+    };
+    let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-af".into(), af];
+    a.push("-c:a".into());
+    a.push("aac".into());
+    a.push("-b:a".into());
+    a.push("192k".into());
+    a.push("-progress".into());
+    a.push("pipe:1".into());
+    a.push("-y".into());
+    a.push(out.to_string_lossy().to_string());
+    a
+}
+
+fn build_audio_pitch_args(info: &MediaInfo, p: &PitchParams, out: &Path) -> Vec<String> {
+    let speed = p.speed.clamp(0.5, 2.0);
+    let pitch = p.pitch.clamp(-12.0, 12.0);
+    let mut chain: Vec<String> = Vec::new();
+    if (pitch.abs()) > 1e-6 {
+        let rate = 48000.0 * 2f64.powf(pitch / 12.0);
+        chain.push(format!("asetrate={:.0}", rate));
+        chain.push("aresample=48000".into());
+    }
+    if (speed - 1.0).abs() > 1e-6 {
+        for f in atempo_chain(speed) {
+            chain.push(format!("atempo={}", f));
+        }
+    }
+    let af = if chain.is_empty() {
+        "anull".to_string()
+    } else {
+        chain.join(",")
+    };
+    let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-af".into(), af];
+    a.push("-c:a".into());
+    a.push("aac".into());
+    a.push("-b:a".into());
+    a.push("192k".into());
+    a.push("-progress".into());
+    a.push("pipe:1".into());
+    a.push("-y".into());
+    a.push(out.to_string_lossy().to_string());
+    a
+}
+
+fn build_audio_silence_args(info: &MediaInfo, p: &SilenceParams, out: &Path) -> Vec<String> {
+    let th = p.threshold_db.unwrap_or(-35.0);
+    let min = p.min_len.unwrap_or(0.5).max(0.05);
+    let af = if p.mode == "detect" {
+        format!("silencedetect=n={:.1}dB:d={:.3}", th, min)
+    } else {
+        format!(
+            "silenceremove=start_periods=-1:start_threshold={:.1}dB:start_duration={:.3}:stop_threshold={:.1}dB:stop_duration={:.3}",
+            th, min, th, min
+        )
+    };
+    let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-af".into(), af];
+    if p.mode == "detect" {
+        a.push("-c".into());
+        a.push("copy".into());
+    } else {
+        a.push("-c:a".into());
+        a.push("aac".into());
+        a.push("-b:a".into());
+        a.push("192k".into());
+    }
+    a.push("-progress".into());
+    a.push("pipe:1".into());
+    a.push("-y".into());
+    a.push(out.to_string_lossy().to_string());
+    a
+}
+
+fn build_audio_merge_args(inputs: &[String], out: &Path) -> Vec<String> {
+    let n = inputs.len();
+    let mut a: Vec<String> = Vec::new();
+    for i in inputs {
+        a.push("-i".into());
+        a.push(i.clone());
+    }
+    let mut fc = String::new();
+    for (idx, _) in inputs.iter().enumerate() {
+        fc.push_str(&format!("[{}:a]", idx));
+    }
+    fc.push_str(&format!("concat=n={}:v=0:a=1[outa]", n));
+    a.push("-filter_complex".into());
+    a.push(fc);
+    a.push("-map".into());
+    a.push("[outa]".into());
+    a.push("-c:a".into());
+    a.push("aac".into());
+    a.push("-b:a".into());
+    a.push("192k".into());
+    a.push("-threads".into());
+    a.push("0".into());
+    a.push("-progress".into());
+    a.push("pipe:1".into());
+    a.push("-y".into());
+    a.push(out.to_string_lossy().to_string());
+    a
+}
+
+fn build_image_resize_args(info: &MediaInfo, p: &ImageResizeParams, out: &Path) -> Vec<String> {
+    let vf: String;
+    match p.mode.as_str() {
+        "exact" => {
+            let w = p.width.unwrap_or(1280).max(1);
+            let h = p.height.unwrap_or(720).max(1);
+            vf = format!("scale={}:{}", w, h);
+        }
+        "percent" => {
+            let pct = p.percent.unwrap_or(100).clamp(1, 1000) as f64 / 100.0;
+            vf = format!(
+                "scale=trunc(iw*{:.4}):trunc(ih*{:.4})",
+                pct, pct
+            );
+        }
+        _ => {
+            // "longest": fit longest side to width
+            let w = p.width.unwrap_or(1280).max(1);
+            vf = format!(
+                "scale='if(gt(iw,ih),{},-2)':'if(gt(iw,ih),-2,{})'",
+                w, w
+            );
+        }
+    }
+    let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-vf".into(), vf];
+    // keep source format via encoder defaults; quality handled by extension logic in caller
+    a.push("-progress".into());
+    a.push("pipe:1".into());
+    a.push("-y".into());
+    a.push(out.to_string_lossy().to_string());
+    a
+}
+
+fn build_image_rotate_args(info: &MediaInfo, p: &ImageRotateParams, out: &Path) -> Vec<String> {
+    let vf = match p.transform.as_str() {
+        "90cc" => "transpose=2",
+        "180" => "transpose=1,transpose=1",
+        "hflip" => "hflip",
+        "vflip" => "vflip",
+        _ => "transpose=1",
+    };
+    let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-vf".into(), vf.to_string()];
+    a.push("-progress".into());
+    a.push("pipe:1".into());
+    a.push("-y".into());
+    a.push(out.to_string_lossy().to_string());
+    a
+}
+
+fn build_image_crop_args(info: &MediaInfo, p: &ImageCropParams, out: &Path) -> Vec<String> {
+    let iw = info.width.unwrap_or(1920);
+    let ih = info.height.unwrap_or(1080);
+    let (w, h, x, y) = crop_rect(
+        &p.mode,
+        &p.aspect,
+        match (p.x, p.y, p.width, p.height) {
+            (Some(x), Some(y), Some(w), Some(h)) => Some((x, y, w, h)),
+            _ => None,
+        },
+        iw,
+        ih,
+    );
+    let vf = format!("crop={}:{}:{}:{}", w, h, x, y);
+    let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-vf".into(), vf];
+    a.push("-progress".into());
+    a.push("pipe:1".into());
+    a.push("-y".into());
+    a.push(out.to_string_lossy().to_string());
+    a
+}
+
+fn image_watermark_position(pos: &str, margin_px: i64) -> (String, String) {
+    let x = match pos {
+        "tl" | "ml" | "bl" => format!("{}", margin_px),
+        "tc" | "mc" | "bc" => "(main_w-overlay_w)/2".to_string(),
+        _ => format!("main_w-overlay_w-{}", margin_px),
+    };
+    let y = match pos {
+        "tl" | "tc" | "tr" => format!("{}", margin_px),
+        "ml" | "mc" | "mr" => "(main_h-overlay_h)/2".to_string(),
+        _ => format!("main_h-overlay_h-{}", margin_px),
+    };
+    (x, y)
+}
+
+fn build_image_watermark_args(
+    info: &MediaInfo,
+    p: &ImageWatermarkParams,
+    overlay_path: &str,
+    out: &Path,
+) -> Vec<String> {
+    let iw = info.width.unwrap_or(1280) as f64;
+    let ih = info.height.unwrap_or(720) as f64;
+    let scale_pct = p.scale_percent.clamp(1, 100) as f64 / 100.0;
+    let tw = ((iw * scale_pct) as u32).max(8);
+    let margin_pct = p.margin_percent.unwrap_or(3).clamp(0, 30) as f64 / 100.0;
+    let margin = ((iw.min(ih)) * margin_pct) as i64;
+    let (x, y) = image_watermark_position(&p.position, margin);
+    let opacity = p.opacity.unwrap_or(1.0).clamp(0.0, 1.0) as f64;
+
+    if p.mode == "text" {
+        let text = p.text.clone().unwrap_or_default();
+        let color = p.color.clone().unwrap_or_else(|| "white".into());
+        let fs = p.font_size.unwrap_or(36).clamp(8, 400);
+        let quoted = format!("'{}'", text.replace('\'', "'\\''"));
+        let mut chain = format!(
+            "drawtext=text={}:fontcolor={}:fontsize={}:x={}:y={}",
+            quoted, color, fs, x, y
+        );
+        if opacity < 1.0 {
+            chain.push_str(&format!(":alpha={:.3}", opacity));
+        }
+        vec![
+            "-i".into(),
+            info.path.clone(),
+            "-vf".into(),
+            chain,
+            "-progress".into(),
+            "pipe:1".into(),
+            "-y".into(),
+            out.to_string_lossy().to_string(),
+        ]
+    } else {
+        let mut chain = format!("[1:v]scale={}:-2", tw);
+        if opacity < 1.0 {
+            chain.push_str(",format=rgba,colorchannelmixer=aa=");
+            chain.push_str(&format!("{:.6}", opacity));
+        }
+        let fc = format!("{c}[ov];[0:v][ov]overlay=x={x}:y={y}", c = chain, x = x, y = y);
+        vec![
+            "-i".into(),
+            info.path.clone(),
+            "-i".into(),
+            overlay_path.to_string(),
+            "-filter_complex".into(),
+            fc,
+            "-progress".into(),
+            "pipe:1".into(),
+            "-y".into(),
+            out.to_string_lossy().to_string(),
+        ]
+    }
+}
+
+fn build_image_pdf_args(info: &MediaInfo, out: &Path) -> Vec<String> {
+    vec![
+        "-i".into(),
+        info.path.clone(),
+        "-progress".into(),
+        "pipe:1".into(),
+        "-y".into(),
+        out.to_string_lossy().to_string(),
+    ]
+}
+
+fn build_image_adjust_args(info: &MediaInfo, p: &ImageAdjustParams, out: &Path) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(b) = p.brightness {
+        parts.push(format!("brightness={:.3}", b.clamp(-1.0, 1.0)));
+    }
+    if let Some(c) = p.contrast {
+        parts.push(format!("contrast={:.3}", c.clamp(-2.0, 2.0)));
+    }
+    if let Some(s) = p.saturation {
+        parts.push(format!("saturation={:.3}", s.clamp(0.0, 3.0)));
+    }
+    let vf = if parts.is_empty() {
+        "null".to_string()
+    } else {
+        format!("eq={}", parts.join(":"))
+    };
+    let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-vf".into(), vf];
+    a.push("-progress".into());
+    a.push("pipe:1".into());
+    a.push("-y".into());
+    a.push(out.to_string_lossy().to_string());
+    a
+}
+
+fn build_video_frames_args(info: &MediaInfo, p: &FrameSampleParams, out: &Path) -> Vec<String> {
+    let interval = p.interval.max(0.1);
+    let width = p.width.max(64);
+    let fps = p.fps.max(1.0);
+    let mut a: Vec<String> = vec!["-i".into(), info.path.clone()];
+    a.push("-vf".into());
+    a.push(format!(
+        "fps=1/{},scale={}:-1:force_original_aspect_ratio=decrease,setpts=N/FRAME_RATE/TB",
+        interval, width
+    ));
+    a.push("-r".into());
+    a.push(fps.to_string());
+    a.push("-c:v".into());
+    a.push("libx264".into());
+    a.push("-preset".into());
+    a.push("medium".into());
+    a.push("-crf".into());
+    a.push("20".into());
+    a.push("-pix_fmt".into());
+    a.push("yuv420p".into());
+    a.push("-an".into());
+    a.push("-movflags".into());
+    a.push("+faststart".into());
+    a.push("-progress".into());
+    a.push("pipe:1".into());
+    a.push("-y".into());
+    a.push(out.to_string_lossy().to_string());
+    a
+}
+
+fn build_video_contact_args(info: &MediaInfo, p: &ContactSheetParams, out: &Path) -> Vec<String> {
+    let interval = p.interval.max(0.1);
+    let thumb_w = p.thumb_w.max(32);
+    let cols = p.cols.max(1);
+    let rows = p.rows.max(1);
+    let mut a: Vec<String> = vec!["-i".into(), info.path.clone()];
+    a.push("-vf".into());
+    a.push(format!(
+        "fps=1/{},scale={}:-1,tile={}x{}",
+        interval, thumb_w, cols, rows
+    ));
+    a.push("-frames:v".into());
+    a.push("1".into());
+    a.push("-progress".into());
+    a.push("pipe:1".into());
+    a.push("-y".into());
+    a.push(out.to_string_lossy().to_string());
+    a
+}
+
+fn build_video_silence_args(info: &MediaInfo, p: &VideoSilenceParams, _out: &Path) -> Vec<String> {
+    let threshold = p.threshold;
+    let min_len = p.min_len.max(0.0);
+    let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-y".into()];
+    a.push("-af".into());
+    a.push(format!("silencedetect=noise={}dB:d={}", threshold, min_len));
+    // No media output: discard to the null muxer; results are in the ffmpeg log.
+    a.push("-f".into());
+    a.push("null".into());
+    a.push("-".into());
+    a
+}
+
 fn audio_ext_for(codec: &str) -> &'static str {
     match codec {
         "aac" | "m4a" => "m4a",
@@ -988,6 +1644,17 @@ fn extension_for(tool_id: &str, info: &MediaInfo, params: &serde_json::Value) ->
         .to_string(),
         "trim" | "mute" | "strip-metadata" => input_ext(info, "mp4"),
         "rotate" => safe_container_ext(info),
+        "video-crop" | "video-volume" | "video-reverse" | "video-subtitle" | "video-addaudio"
+        | "video-merge" => safe_container_ext(info),
+        "audio-trim" | "audio-fade" | "audio-volume" | "audio-pitch" | "audio-silence"
+        | "audio-merge" => source_audio_format(&info.path).to_string(),
+        "image-resize" | "image-rotate" | "image-crop" | "image-watermark" | "image-adjust" => {
+            source_image_format(&info.path)
+        }
+        "image-pdf" => "pdf".to_string(),
+        "video-frames" => safe_container_ext(info),
+        "video-contact" => "png".to_string(),
+        "video-silence" => "txt".to_string(),
         _ => match info.media_type {
             MediaType::Video => {
                 let f = fmt("mp4");
@@ -1065,9 +1732,29 @@ fn norm_tool_id(id: &str) -> &str {
     id
 }
 
+/// Unique dispatch id for `prepare_job`. Old tools funnel into a shared
+/// "compress"/"convert"/… id (stripping the media prefix); new tools keep their
+/// full, already-unique id (e.g. "video-crop" vs "image-crop").
+fn tool_dispatch(id: &str) -> &str {
+    match id {
+        "video-compress" | "audio-compress" | "image-compress" => "compress",
+        "video-convert" | "audio-convert" | "image-convert" => "convert",
+        "video-trim" => "trim",
+        "video-rotate" => "rotate",
+        "video-speed" => "speed",
+        "video-mute" => "mute",
+        "video-watermark" => "watermark",
+        "video-extract-audio" => "extract-audio",
+        "video-gif" => "gif",
+        "video-screenshot" => "screenshot",
+        "video-strip-metadata" => "strip-metadata",
+        _ => id,
+    }
+}
+
 /// Build the args + output path for any tool id, or mark as skipped.
 fn prepare_job(info: &MediaInfo, req: &JobRequest, suffix: &str, policy: &str) -> Result<PreparedJob> {
-    match norm_tool_id(&req.tool_id) {
+    match tool_dispatch(&req.tool_id) {
         "compress" | "convert" => {
             let ext = extension_for(&req.tool_id, info, &req.params);
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
@@ -1194,6 +1881,206 @@ fn prepare_job(info: &MediaInfo, req: &JobRequest, suffix: &str, policy: &str) -
                 return Ok(PreparedJob::Skipped);
             };
             Ok(PreparedJob::Run { args: build_rotate_args(info, &p, &out), out })
+        }
+        /* ── New video tools ── */
+        "video-crop" => {
+            let p: CropParams = parse_params(&req.params)?;
+            let ext = safe_container_ext(info);
+            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            Ok(PreparedJob::Run { args: build_video_crop_args(info, &p, &out), out })
+        }
+        "video-volume" => {
+            let p: VideoVolumeParams = parse_params(&req.params)?;
+            let ext = safe_container_ext(info);
+            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            Ok(PreparedJob::Run { args: build_video_volume_args(info, &p, &out), out })
+        }
+        "video-reverse" => {
+            let p: VideoReverseParams = parse_params(&req.params)?;
+            let ext = safe_container_ext(info);
+            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            Ok(PreparedJob::Run { args: build_video_reverse_args(info, &p, &out), out })
+        }
+        "video-subtitle" => {
+            let p: SubtitleParams = parse_params(&req.params)?;
+            let ext = if p.burn.unwrap_or(true) {
+                safe_container_ext(info)
+            } else {
+                "mkv".to_string()
+            };
+            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            Ok(PreparedJob::Run { args: build_video_subtitle_args(info, &p, &out), out })
+        }
+        "video-addaudio" => {
+            let p: AddAudioParams = parse_params(&req.params)?;
+            let ext = safe_container_ext(info);
+            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            Ok(PreparedJob::Run { args: build_video_addaudio_args(info, &p, &out), out })
+        }
+        "video-merge" => {
+            let _p: VideoMergeParams = parse_params(&req.params)?;
+            if req.inputs.len() < 2 {
+                return Err(AppError("合并视频需要至少 2 个文件".into()));
+            }
+            let ext = safe_container_ext(info);
+            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            Ok(PreparedJob::Run { args: build_video_merge_args(&req.inputs, &out), out })
+        }
+        "video-frames" => {
+            let p: FrameSampleParams = parse_params(&req.params)?;
+            let ext = safe_container_ext(info);
+            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            Ok(PreparedJob::Run { args: build_video_frames_args(info, &p, &out), out })
+        }
+        "video-contact" => {
+            let p: ContactSheetParams = parse_params(&req.params)?;
+            let out = output_path(&info.path, &req.output_dir, "png", suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            Ok(PreparedJob::Run { args: build_video_contact_args(info, &p, &out), out })
+        }
+        "video-silence" => {
+            let p: VideoSilenceParams = parse_params(&req.params)?;
+            let out = output_path(&info.path, &req.output_dir, "txt", suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            Ok(PreparedJob::Run { args: build_video_silence_args(info, &p, &out), out })
+        }
+        /* ── New audio tools ── */
+        "audio-trim" => {
+            let p: AudioTrimParams = parse_params(&req.params)?;
+            let ext = source_audio_format(&info.path).to_string();
+            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            Ok(PreparedJob::Run { args: build_audio_trim_args(info, &p, &out), out })
+        }
+        "audio-fade" => {
+            let p: FadeParams = parse_params(&req.params)?;
+            let ext = source_audio_format(&info.path).to_string();
+            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            Ok(PreparedJob::Run { args: build_audio_fade_args(info, &p, &out), out })
+        }
+        "audio-volume" => {
+            let p: AudioVolumeParams = parse_params(&req.params)?;
+            let ext = source_audio_format(&info.path).to_string();
+            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            Ok(PreparedJob::Run { args: build_audio_volume_args(info, &p, &out), out })
+        }
+        "audio-pitch" => {
+            let p: PitchParams = parse_params(&req.params)?;
+            let ext = source_audio_format(&info.path).to_string();
+            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            Ok(PreparedJob::Run { args: build_audio_pitch_args(info, &p, &out), out })
+        }
+        "audio-silence" => {
+            let p: SilenceParams = parse_params(&req.params)?;
+            let ext = source_audio_format(&info.path).to_string();
+            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            Ok(PreparedJob::Run { args: build_audio_silence_args(info, &p, &out), out })
+        }
+        "audio-merge" => {
+            let _p: AudioMergeParams = parse_params(&req.params)?;
+            if req.inputs.len() < 2 {
+                return Err(AppError("合并音频需要至少 2 个文件".into()));
+            }
+            let ext = source_audio_format(&info.path).to_string();
+            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            Ok(PreparedJob::Run { args: build_audio_merge_args(&req.inputs, &out), out })
+        }
+        /* ── New image tools ── */
+        "image-resize" => {
+            let p: ImageResizeParams = parse_params(&req.params)?;
+            let ext = source_image_format(&info.path);
+            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            Ok(PreparedJob::Run { args: build_image_resize_args(info, &p, &out), out })
+        }
+        "image-rotate" => {
+            let p: ImageRotateParams = parse_params(&req.params)?;
+            let ext = source_image_format(&info.path);
+            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            Ok(PreparedJob::Run { args: build_image_rotate_args(info, &p, &out), out })
+        }
+        "image-crop" => {
+            let p: ImageCropParams = parse_params(&req.params)?;
+            let ext = source_image_format(&info.path);
+            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            Ok(PreparedJob::Run { args: build_image_crop_args(info, &p, &out), out })
+        }
+        "image-watermark" => {
+            let p: ImageWatermarkParams = parse_params(&req.params)?;
+            let ext = source_image_format(&info.path);
+            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            let ov = p.image_path.clone().unwrap_or_default();
+            Ok(PreparedJob::Run { args: build_image_watermark_args(info, &p, &ov, &out), out })
+        }
+        "image-adjust" => {
+            let p: ImageAdjustParams = parse_params(&req.params)?;
+            let ext = source_image_format(&info.path);
+            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            Ok(PreparedJob::Run { args: build_image_adjust_args(info, &p, &out), out })
+        }
+        "image-pdf" => {
+            parse_params::<ImagePdfParams>(&req.params)?;
+            let out = output_path(&info.path, &req.output_dir, "pdf", suffix)?;
+            let Some(out) = resolve_policy(out, policy) else {
+                return Ok(PreparedJob::Skipped);
+            };
+            Ok(PreparedJob::Run { args: build_image_pdf_args(info, &out), out })
         }
         other => Err(AppError(format!("未知工具: {}", other))),
     }
@@ -1911,6 +2798,15 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult
             emit_done(&app, &task_id, false, was_cancelled, false, None, Some(err), input_size, None);
         } else {
             let is_pattern = out.to_string_lossy().contains("%03d");
+            // Report-style outputs (e.g. silence detection) carry ffmpeg's log
+            // as the result file rather than a produced media stream.
+            if !is_pattern && out.to_string_lossy().ends_with(".txt") {
+                let log = {
+                    let buf = stderr_buf.lock().unwrap();
+                    String::from_utf8_lossy(&buf).to_string()
+                };
+                let _ = std::fs::write(&out, log.as_bytes());
+            }
             let output_size = if is_pattern {
                 pattern_output_size(&out)
             } else {

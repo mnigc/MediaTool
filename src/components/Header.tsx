@@ -80,7 +80,7 @@ export default function Header({ themeMode, onThemeChange }: HeaderProps) {
                 aria-label={label}
                 className={`flex h-8 w-8 items-center justify-center rounded-lg transition-all duration-200 ${
                   themeMode === opt
-                    ? "bg-white shadow-sm text-brand-600 dark:bg-neutral-800 dark:text-brand-400"
+                    ? "bg-brand-100/70 text-brand-700 dark:bg-brand-900/70 dark:text-brand-200"
                     : "text-neutral-500 hover:text-neutral-700 hover:bg-neutral-200/50 dark:text-neutral-400 dark:hover:text-neutral-200 dark:hover:bg-neutral-700/50"
                 }`}
               >
