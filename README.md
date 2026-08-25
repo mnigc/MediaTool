@@ -84,7 +84,7 @@ Output is in `src-tauri/target/release/bundle/` (Windows: `.msi` / `.exe`).
 ## Directory Structure
 
 ```
-MediPress/
+MediaTool/
 ├── src/                    # React frontend
 │   ├── components/         # UI components (JobCard, TaskDock, ToolNav, OptionsPanel, etc.)
 │   ├── contexts/           # TaskCenter (unified task queue, events, settings)

@@ -82,7 +82,7 @@ npm run tauri build
 ## 目录结构
 
 ```
-MediPress/
+MediaTool/
 ├── src/                    # React 前端
 │   ├── components/         # UI 组件（JobCard、TaskDock、ToolNav、OptionsPanel 等）
 │   ├── contexts/           # TaskCenter（统一任务队列、事件、设置）

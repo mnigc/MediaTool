@@ -81,7 +81,7 @@ npm run tauri build
 ## ディレクトリ構造
 
 ```
-MediPress/
+MediaTool/
 ├── src/                    # React フロントエンド
 │   ├── components/         # UI コンポーネント（JobCard、TaskDock、ToolNav、OptionsPanel など）
 │   ├── contexts/           # TaskCenter（統合タスクキュー・イベント・設定）
