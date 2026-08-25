@@ -13,7 +13,7 @@ use crate::models::{
     ImageRotateParams, ImageWatermarkParams, JobRequest, MediaInfo, MediaType, MuteParams,
     PitchParams, ProgressEvent, RotateParams, ScreenshotParams, SilenceParams, SpeedParams,
     StartJobResult, StartWorkflowResult, StripMetadataParams, SubtitleParams, TrimParams,
-    VideoMergeParams, VideoParams, VideoReverseParams, VideoVolumeParams, WatermarkParams,
+    TrimSegment, VideoMergeParams, VideoParams, VideoReverseParams, VideoVolumeParams, WatermarkParams,
     ContactSheetParams, FrameSampleParams, VideoSilenceParams,
     WorkflowRequest, WorkflowStepInput,
 };
@@ -21,6 +21,18 @@ use crate::state::JobManager;
 
 /// Build the output path, placing the result next to the input (or in output_dir).
 fn output_path(input: &str, output_dir: &Option<String>, ext: &str, suffix: &str) -> Result<PathBuf> {
+    output_path_labeled(input, output_dir, ext, suffix, "")
+}
+
+/// Like `output_path` but inserts an extra `label` (e.g. "_1", "_2") before the
+/// extension so multiple outputs from the same job never collide.
+fn output_path_labeled(
+    input: &str,
+    output_dir: &Option<String>,
+    ext: &str,
+    suffix: &str,
+    label: &str,
+) -> Result<PathBuf> {
     let input_p = Path::new(input);
     let stem = input_p
         .file_stem()
@@ -35,7 +47,7 @@ fn output_path(input: &str, output_dir: &Option<String>, ext: &str, suffix: &str
             .unwrap_or_else(|| PathBuf::from(".")),
     };
     std::fs::create_dir_all(&dir)?;
-    Ok(dir.join(format!("{}{}.{}", stem, suffix, ext)))
+    Ok(dir.join(format!("{}{}{}.{}", stem, suffix, label, ext)))
 }
 
 /// Apply the overwrite policy to a computed output path.
@@ -554,21 +566,33 @@ fn build_mute_args(info: &MediaInfo, _p: &MuteParams, out: &Path) -> Vec<String>
 
 /// Video trim. "copy" mode is lossless but snaps to keyframes; "encode" mode
 /// re-encodes for frame-exact cuts.
+#[cfg(test)]
 fn build_trim_args(info: &MediaInfo, p: &TrimParams, out: &Path) -> Vec<String> {
+    build_trim_segment_args(info, p.start_time, p.duration, &p.mode, out)
+}
+
+/// Build the ffmpeg args for one trim range.
+fn build_trim_segment_args(
+    info: &MediaInfo,
+    start: f64,
+    duration: Option<f64>,
+    mode: &str,
+    out: &Path,
+) -> Vec<String> {
     let mut a: Vec<String> = vec![
         "-ss".into(),
-        format!("{:.3}", p.start_time.max(0.0)),
+        format!("{:.3}", start.max(0.0)),
         "-i".into(),
         info.path.clone(),
     ];
-    if let Some(d) = p.duration {
+    if let Some(d) = duration {
         if d > 0.0 {
             a.push("-t".into());
             a.push(format!("{:.3}", d));
         }
     }
 
-    if p.mode == "encode" {
+    if mode == "encode" {
         a.push("-c:v".into());
         a.push("libx264".into());
         a.push("-crf".into());
@@ -1577,16 +1601,28 @@ fn build_video_frames_args(info: &MediaInfo, p: &FrameSampleParams, out: &Path) 
 }
 
 fn build_video_contact_args(info: &MediaInfo, p: &ContactSheetParams, out: &Path) -> Vec<String> {
-    let interval = p.interval.max(0.1);
     let thumb_w = p.thumb_w.max(32);
-    let cols = p.cols.max(1);
-    let rows = p.rows.max(1);
+    // In "count" mode spread the requested number of thumbnails evenly across
+    // the whole video and auto-fit a near-square grid; otherwise honor the
+    // user's sampling interval and explicit columns/rows.
+    let (cols, rows) = if p.mode == "count" {
+        let n = p.count.max(1) as u32;
+        let c = (n as f64).sqrt().ceil().max(1.0) as u32;
+        let r = n.div_ceil(c);
+        (c, r)
+    } else {
+        (p.cols.max(1), p.rows.max(1))
+    };
+    let fps_expr = if p.mode == "count" {
+        let dur = info.duration_secs.unwrap_or(0.0).max(0.1);
+        let n = p.count.max(1) as f64;
+        format!("1/{:.4}", dur / n)
+    } else {
+        format!("1/{:.3}", p.interval.max(0.1))
+    };
     let mut a: Vec<String> = vec!["-i".into(), info.path.clone()];
     a.push("-vf".into());
-    a.push(format!(
-        "fps=1/{},scale={}:-1,tile={}x{}",
-        interval, thumb_w, cols, rows
-    ));
+    a.push(format!("fps={},scale={}:-1,tile={}x{}", fps_expr, thumb_w, cols, rows));
     a.push("-frames:v".into());
     a.push("1".into());
     a.push("-progress".into());
@@ -1690,10 +1726,12 @@ fn parse_params<T: serde::de::DeserializeOwned>(params: &serde_json::Value) -> R
 }
 
 /// A fully prepared job: either skipped by the overwrite policy, or ready
-/// to run with its final ffmpeg args and resolved output path.
+/// to run with a single ffmpeg invocation, or a sequence of invocations that
+/// produce multiple output files (e.g. multi-segment trim).
 enum PreparedJob {
     Skipped,
     Run { args: Vec<String>, out: PathBuf },
+    RunMany { runs: Vec<(Vec<String>, PathBuf, f64)> },
 }
 
 /// Resolve an output path applying the rename/skip/overwrite policy.
@@ -1857,11 +1895,30 @@ fn prepare_job(info: &MediaInfo, req: &JobRequest, suffix: &str, policy: &str) -
             } else {
                 input_ext(info, "mp4")
             };
-            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
+            let segments: Vec<TrimSegment> = if p.segments.is_empty() {
+                vec![TrimSegment { start_time: p.start_time, duration: p.duration }]
+            } else {
+                p.segments
             };
-            Ok(PreparedJob::Run { args: build_trim_args(info, &p, &out), out })
+            let total_dur = info.duration_secs.unwrap_or(0.0);
+            let multi = segments.len() > 1;
+            let mut runs: Vec<(Vec<String>, PathBuf, f64)> = Vec::with_capacity(segments.len());
+            for (i, seg) in segments.iter().enumerate() {
+                let label = if multi { format!("_{}", i + 1) } else { String::new() };
+                let out = output_path_labeled(&info.path, &req.output_dir, &ext, &suffix, &label)?;
+                let Some(out) = resolve_policy(out, policy) else {
+                    return Ok(PreparedJob::Skipped);
+                };
+                let args = build_trim_segment_args(info, seg.start_time, seg.duration, &p.mode, &out);
+                let dur = seg.duration.unwrap_or_else(|| (total_dur - seg.start_time).max(0.0));
+                runs.push((args, out, dur));
+            }
+            if multi {
+                Ok(PreparedJob::RunMany { runs })
+            } else {
+                let (args, out, _) = runs.pop().expect("already branched on multi");
+                Ok(PreparedJob::Run { args, out })
+            }
         }
         "mute" => {
             parse_params::<MuteParams>(&req.params)?;
@@ -2712,106 +2769,132 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult
         .unwrap_or_else(|| "_mediatool".to_string());
     let policy = req.overwrite_policy.as_deref().unwrap_or("rename");
 
-    let (args, out) = match prepare_job(&info, &req, &suffix, policy)? {
+    let runs: Vec<(Vec<String>, PathBuf, f64)> = match prepare_job(&info, &req, &suffix, policy)? {
         PreparedJob::Skipped => {
             // Nothing was started; the frontend treats this as a terminal
             // "skipped" phase via the command's return value.
             return Ok(StartJobResult { id, skipped: true });
         }
-        PreparedJob::Run { args, out } => (args, out),
+        PreparedJob::Run { args, out } => vec![(args, out, info.duration_secs.unwrap_or(0.0))],
+        PreparedJob::RunMany { runs } => runs,
     };
 
-    let mut args = args;
-    args.insert(0, "-nostats".into());
-    let (child, stdout, stderr_buf) = ffmpeg::spawn(&app, "ffmpeg", &args)?;
+    if runs.is_empty() {
+        return Ok(StartJobResult { id, skipped: true });
+    }
     let input_size = info.size_bytes;
-    let duration = info.duration_secs.unwrap_or(0.0);
+    let total_dur: f64 = runs.iter().map(|r| r.2.max(0.0)).sum();
     let task_id = id.clone();
 
-    let child = std::sync::Arc::new(std::sync::Mutex::new(child));
-    app.state::<JobManager>().register(&task_id, child.clone());
     emit_progress(&app, &task_id, 0.0, "running", None);
 
     std::thread::spawn(move || {
-        let reader = BufReader::new(stdout);
+        let mut accum = 0.0_f64;
         let mut last_percent = 0.0_f64;
         let mut last_speed: Option<String> = None;
+        let first_out = runs.first().map(|r| r.1.clone());
+        let mut total_size: u64 = 0;
+        let mut ok = false;
+        let mut cancelled = false;
+        let mut err_msg: Option<String> = None;
 
-        for line in reader.lines() {
-            let line = match line {
-                Ok(l) => l,
-                Err(_) => break,
-            };
-            let line = line.trim();
-            if line.starts_with("out_time_ms=") {
-                if let Ok(ms) = line["out_time_ms=".len()..].trim().parse::<f64>() {
-                    let secs = ms / 1_000_000.0;
-                    let pct = if duration > 0.0 {
-                        (secs / duration * 100.0).clamp(0.0, 100.0)
-                    } else {
-                        0.0
-                    };
-                    if (pct - last_percent).abs() >= 0.5 {
-                        last_percent = pct;
-                        emit_progress(&app, &task_id, pct, "running", last_speed.clone());
-                    }
+        'runs: for (_idx, (rargs, out, dur)) in runs.iter().enumerate() {
+            let mut args = rargs.clone();
+            args.insert(0, "-nostats".into());
+            let (child, stdout, stderr_buf) = match ffmpeg::spawn(&app, "ffmpeg", &args) {
+                Ok(v) => v,
+                Err(e) => {
+                    ok = false;
+                    err_msg = Some(e.to_string());
+                    break 'runs;
                 }
-            } else if line.starts_with("speed=") {
-                last_speed = Some(line["speed=".len()..].trim().to_string());
-            }
-        }
+            };
 
-        // Process finished; collect exit status.
-        let manager = app.state::<JobManager>();
-        let was_cancelled = manager.is_cancelled(&task_id);
-        manager.finish(&task_id);
+            let child = std::sync::Arc::new(std::sync::Mutex::new(child));
+            app.state::<JobManager>().register(&task_id, child.clone());
 
-        let code = match child.lock().unwrap().wait() {
-            Ok(status) => status.code().unwrap_or(-1),
-            Err(_) => -1,
-        };
-
-        if was_cancelled || code != 0 {
-            let err = if was_cancelled {
-                "已取消".to_string()
-            } else {
-                let detail = {
-                    let buf = stderr_buf.lock().unwrap();
-                    if buf.is_empty() {
-                        String::new()
-                    } else {
-                        let s = String::from_utf8_lossy(&buf);
-                        if s.len() > 1500 {
-                            format!("\n\n{}", &s[s.len() - 1500..])
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                let line = match line {
+                    Ok(l) => l,
+                    Err(_) => break,
+                };
+                let line = line.trim();
+                if line.starts_with("out_time_ms=") {
+                    if let Ok(ms) = line["out_time_ms=".len()..].trim().parse::<f64>() {
+                        let run_secs = ms / 1_000_000.0;
+                        let pct = if total_dur > 0.0 {
+                            ((accum + run_secs) / total_dur * 100.0).clamp(0.0, 100.0)
                         } else {
-                            format!("\n\n{}", s)
+                            0.0
+                        };
+                        if (pct - last_percent).abs() >= 0.5 {
+                            last_percent = pct;
+                            emit_progress(&app, &task_id, pct, "running", last_speed.clone());
                         }
                     }
-                };
-                format!("FFmpeg 退出码 {}{}", code, detail)
-            };
-            if out.to_string_lossy().contains("%03d") {
-                cleanup_pattern_outputs(&out);
-            } else {
-                let _ = std::fs::remove_file(&out);
+                } else if line.starts_with("speed=") {
+                    last_speed = Some(line["speed=".len()..].trim().to_string());
+                }
             }
-            emit_done(&app, &task_id, false, was_cancelled, false, None, Some(err), input_size, None);
-        } else {
+
+            // Process finished; collect exit status.
+            let manager = app.state::<JobManager>();
+            let was_cancelled = manager.is_cancelled(&task_id);
+            manager.finish(&task_id);
+
+            let code = match child.lock().unwrap().wait() {
+                Ok(status) => status.code().unwrap_or(-1),
+                Err(_) => -1,
+            };
+
+            if was_cancelled || code != 0 {
+                cancelled = was_cancelled;
+                err_msg = Some(if was_cancelled {
+                    "已取消".to_string()
+                } else {
+                    let detail = {
+                        let buf = stderr_buf.lock().unwrap();
+                        if buf.is_empty() {
+                            String::new()
+                        } else {
+                            let s = String::from_utf8_lossy(&buf);
+                            if s.len() > 1500 {
+                                format!("\n\n{}", &s[s.len() - 1500..])
+                            } else {
+                                format!("\n\n{}", s)
+                            }
+                        }
+                    };
+                    format!("FFmpeg 退出码 {}{}", code, detail)
+                });
+                if out.to_string_lossy().contains("%03d") {
+                    cleanup_pattern_outputs(out);
+                } else {
+                    let _ = std::fs::remove_file(out);
+                }
+                break 'runs;
+            }
+
+            // Success: accumulate the run's processed duration and result size.
+            ok = true;
+            accum += dur.max(0.0);
             let is_pattern = out.to_string_lossy().contains("%03d");
-            // Report-style outputs (e.g. silence detection) carry ffmpeg's log
-            // as the result file rather than a produced media stream.
             if !is_pattern && out.to_string_lossy().ends_with(".txt") {
                 let log = {
                     let buf = stderr_buf.lock().unwrap();
                     String::from_utf8_lossy(&buf).to_string()
                 };
-                let _ = std::fs::write(&out, log.as_bytes());
+                let _ = std::fs::write(out, log.as_bytes());
             }
-            let output_size = if is_pattern {
-                pattern_output_size(&out)
+            total_size += if is_pattern {
+                pattern_output_size(out).unwrap_or(0)
             } else {
-                std::fs::metadata(&out).map(|m| m.len()).ok()
+                std::fs::metadata(out).map(|m| m.len()).unwrap_or(0)
             };
+        }
+
+        if ok && !runs.is_empty() {
             emit_progress(&app, &task_id, 100.0, "done", last_speed.clone());
             emit_done(
                 &app,
@@ -2819,11 +2902,13 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult
                 true,
                 false,
                 false,
-                Some(out.to_string_lossy().to_string()),
+                first_out.map(|p| p.to_string_lossy().to_string()),
                 None,
                 input_size,
-                output_size,
+                if total_size > 0 { Some(total_size) } else { None },
             );
+        } else {
+            emit_done(&app, &task_id, false, cancelled, false, None, err_msg, input_size, None);
         }
     });
 
@@ -2974,6 +3059,7 @@ fn uuid() -> String {
         .unwrap_or(0);
     format!("job-{:x}", nanos)
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -3182,7 +3268,7 @@ mod tests {
     }
 
     fn trim_params(mode: &str) -> TrimParams {
-        TrimParams { start_time: 5.5, duration: Some(10.0), mode: mode.into() }
+        TrimParams { start_time: 5.5, duration: Some(10.0), mode: mode.into(), segments: vec![] }
     }
 
     #[test]

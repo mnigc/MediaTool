@@ -9,7 +9,7 @@ interface JobListProps {
   onJobRemove: (uiId: string) => void;
   onJobOpenFolder: (path: string) => void;
   onJobChangeParams: (uiId: string, params: JobParams) => void;
-  onJobSyncParams: (uiId: string) => void;
+  onJobSyncParams?: (uiId: string) => void;
   onJobRetry: (uiId: string) => void;
   onReorderStart: (uiId: string) => void;
   onReorderOver: (uiId: string) => void;

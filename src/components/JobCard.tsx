@@ -225,11 +225,11 @@ export default function JobCard({
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className={`rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${badge.cls}`}>
+            <span className={`shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${badge.cls}`}>
               {typeLabel}
             </span>
             <span
-              className="rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-medium text-neutral-500 ring-1 ring-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:ring-neutral-700"
+              className="shrink-0 whitespace-nowrap rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-medium text-neutral-500 ring-1 ring-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:ring-neutral-700"
               title={t(`tool.${job.toolId}.desc`)}
             >
               {t(`tool.${job.toolId}.name`)}

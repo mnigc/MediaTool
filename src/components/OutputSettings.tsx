@@ -1,6 +1,22 @@
+import type { ReactNode } from "react";
 import { useI18n } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
 import { FolderIcon, XIcon } from "./icons";
+
+function Tooltip({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <span className="group/tt relative inline-flex">
+      {children}
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-1.5 w-max max-w-[240px] -translate-x-1/2 rounded-lg bg-neutral-900/95 px-2.5 py-1.5 text-[11px] font-medium leading-snug text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover/tt:opacity-100 dark:bg-neutral-700"
+      >
+        {label}
+        <span className="absolute left-1/2 top-full h-1.5 w-1.5 -translate-x-1/2 -translate-y-1 rotate-45 bg-neutral-900/95 dark:bg-neutral-700" />
+      </span>
+    </span>
+  );
+}
 
 interface OutputSettingsProps {
   compact?: boolean;
@@ -14,22 +30,23 @@ export default function OutputSettings({ compact = false }: OutputSettingsProps)
     return (
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex items-center rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-800">
-          <button
-            onClick={() => void tasks.chooseOutput()}
-            className="flex items-center gap-1.5 px-2 py-1 text-xs text-neutral-700 transition hover:bg-neutral-50 dark:text-neutral-200 dark:hover:bg-neutral-700"
-            title={tasks.settings.outputDir ?? t("sidebar.sameDirFull")}
-          >
-            <FolderIcon className="h-3.5 w-3.5 shrink-0 text-brand-500" />
-            <span className="truncate max-w-[120px]">
-              {tasks.settings.outputDir ?? t("sidebar.sameDir")}
-            </span>
-          </button>
+          <Tooltip label={tasks.settings.outputDir ?? t("sidebar.sameDirFull")}>
+            <button
+              onClick={() => void tasks.chooseOutput()}
+              className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-neutral-700 transition hover:bg-neutral-50 dark:text-neutral-200 dark:hover:bg-neutral-700"
+            >
+              <FolderIcon className="h-3.5 w-3.5 shrink-0 text-brand-500" />
+              <span className="truncate max-w-[120px]">
+                {tasks.settings.outputDir ?? t("sidebar.sameDir")}
+              </span>
+            </button>
+          </Tooltip>
           {tasks.settings.outputDir && (
             <>
               <div className="h-3 w-px bg-neutral-200 dark:bg-neutral-600" />
               <button
                 onClick={() => tasks.setOutputDir(null)}
-                className="flex items-center justify-center px-1.5 py-1 text-neutral-400 transition hover:bg-error-50 hover:text-error-500 dark:text-neutral-500 dark:hover:bg-error-950/30 dark:hover:text-error-400"
+                className="flex items-center justify-center rounded-r-lg px-1.5 py-1 text-neutral-400 transition hover:bg-error-50 hover:text-error-500 dark:text-neutral-500 dark:hover:bg-error-950/30 dark:hover:text-error-400"
                 title={t("sidebar.sameDirFull")}
               >
                 <XIcon className="h-3 w-3" />
@@ -78,22 +95,23 @@ export default function OutputSettings({ compact = false }: OutputSettingsProps)
             {t("sidebar.output")}
           </div>
           <div className="mt-1 flex items-center rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-800">
-            <button
-              onClick={() => void tasks.chooseOutput()}
-              className="flex flex-1 min-w-0 items-center gap-1.5 px-2 py-1.5 text-left text-xs text-neutral-700 transition hover:bg-neutral-50 dark:text-neutral-200 dark:hover:bg-neutral-700"
-              title={tasks.settings.outputDir ?? t("sidebar.sameDirFull")}
-            >
-              <FolderIcon className="h-3.5 w-3.5 shrink-0 text-brand-500" />
-              <span className="truncate">
-                {tasks.settings.outputDir ?? t("sidebar.sameDir")}
-              </span>
-            </button>
+            <Tooltip label={tasks.settings.outputDir ?? t("sidebar.sameDirFull")}>
+              <button
+                onClick={() => void tasks.chooseOutput()}
+                className="flex flex-1 min-w-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-xs text-neutral-700 transition hover:bg-neutral-50 dark:text-neutral-200 dark:hover:bg-neutral-700"
+              >
+                <FolderIcon className="h-3.5 w-3.5 shrink-0 text-brand-500" />
+                <span className="truncate">
+                  {tasks.settings.outputDir ?? t("sidebar.sameDir")}
+                </span>
+              </button>
+            </Tooltip>
             {tasks.settings.outputDir && (
               <>
                 <div className="h-3 w-px bg-neutral-200 dark:bg-neutral-600" />
                 <button
                   onClick={() => tasks.setOutputDir(null)}
-                  className="flex items-center justify-center px-1.5 py-1.5 text-neutral-400 transition hover:bg-error-50 hover:text-error-500 dark:text-neutral-500 dark:hover:bg-error-950/30 dark:hover:text-error-400"
+                  className="flex items-center justify-center rounded-r-lg px-1.5 py-1.5 text-neutral-400 transition hover:bg-error-50 hover:text-error-500 dark:text-neutral-500 dark:hover:bg-error-950/30 dark:hover:text-error-400"
                   title={t("sidebar.sameDirFull")}
                 >
                   <XIcon className="h-3 w-3" />

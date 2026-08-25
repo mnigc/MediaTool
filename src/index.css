@@ -19,9 +19,15 @@
   /* Semantic colors */
   --color-success-50: #ECFDF5;
   --color-success-100: #D1FAE5;
+  --color-success-200: #A7F3D0;
+  --color-success-300: #6EE7B7;
+  --color-success-400: #34D399;
   --color-success-500: #10B981;
   --color-success-600: #059669;
   --color-success-700: #047857;
+  --color-success-800: #065F46;
+  --color-success-900: #064E3B;
+  --color-success-950: #022C22;
 
   --color-warning-50: #FFFBEB;
   --color-warning-100: #FEF3C7;
@@ -30,9 +36,15 @@
 
   --color-error-50: #FEF2F2;
   --color-error-100: #FEE2E2;
+  --color-error-200: #FECACA;
+  --color-error-300: #FCA5A5;
+  --color-error-400: #F87171;
   --color-error-500: #EF4444;
   --color-error-600: #DC2626;
   --color-error-700: #B91C1C;
+  --color-error-800: #991B1B;
+  --color-error-900: #7F1D1D;
+  --color-error-950: #450A0A;
 
   /* Shadows */
   --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.04);
@@ -330,4 +342,38 @@ input[type="range"].mp-range::-moz-range-thumb {
   background: rgba(10, 10, 10, 0.84);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
+}
+
+/* Global scrollbar (WebKit/Blink) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sb-thumb) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--sb-thumb);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--sb-thumb-hover);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+:root {
+  --sb-thumb: #d4d4d8;
+  --sb-thumb-hover: #a1a1aa;
+}
+.dark {
+  --sb-thumb: #3f3f46;
+  --sb-thumb-hover: #52525b;
 }

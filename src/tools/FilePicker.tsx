@@ -50,7 +50,7 @@ export default function FilePicker({ meta, files, onChange }: Props) {
   const browse = async () => {
     const filterName = meta.mediaType ? t(`dz.filter.${meta.mediaType}`) : t("dz.filter.any");
     const sel = await open({
-      multiple: true,
+      multiple: meta.multiFile,
       title: t("opt.selectFiles"),
       filters: [{ name: filterName, extensions: meta.accepts }],
     });
@@ -70,8 +70,10 @@ export default function FilePicker({ meta, files, onChange }: Props) {
   };
 
   const formatHint = meta.mediaType
-    ? t("dz.formatHint", { exts: meta.accepts.map((e) => `.${e}`).join(", ") })
-    : t("dz.formatHintAny");
+    ? t(meta.multiFile ? "dz.formatHint" : "dz.formatHintSingle", {
+        exts: meta.accepts.map((e) => `.${e}`).join(", "),
+      })
+    : t(meta.multiFile ? "dz.formatHintAny" : "dz.formatHintAnySingle");
 
   return (
     <div className="space-y-2">

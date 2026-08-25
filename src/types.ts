@@ -119,10 +119,18 @@ export interface WatermarkParams {
 }
 
 /** Video trim tool: lossless keyframe-aligned cut or precise re-encode. */
+export interface TrimSegment {
+  startTime: number;
+  duration?: number; // undefined = to end
+}
+
 export interface TrimParams {
   startTime: number;
   duration?: number; // undefined = to end
   mode: "copy" | "encode";
+  /** Multiple cut ranges, each exported as its own clip. Empty = single
+   *  legacy range from startTime/duration. */
+  segments?: TrimSegment[];
 }
 
 /** Rotate/flip tool (re-encodes). */
@@ -264,9 +272,13 @@ export interface FrameSampleParams {
   width: number; // sampled frame width (px)
 }
 
-/** Build a contact sheet / sprite grid of thumbnails from the video. */
+/** Build a contact sheet / sprite grid of thumbnails from the video.
+ *  mode "interval": capture every `interval` seconds. mode "count": capture
+ *  `count` thumbnails spread evenly across the whole video (grid auto-fits). */
 export interface ContactSheetParams {
-  interval: number; // seconds between thumbnails
+  mode: "interval" | "count";
+  interval: number; // seconds between thumbnails (interval mode)
+  count: number; // total thumbnails (count mode)
   cols: number;
   rows: number;
   thumbW: number; // thumbnail width (px)

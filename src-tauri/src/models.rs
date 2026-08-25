@@ -79,6 +79,16 @@ pub struct StripMetadataParams {}
 /// Params for the video-trim tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TrimSegment {
+    /// Cut start offset in seconds.
+    pub start_time: f64,
+    /// Clip length in seconds (None = to end).
+    pub duration: Option<f64>,
+}
+
+/// Params for the "trim" tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TrimParams {
     /// Cut start offset in seconds.
     pub start_time: f64,
@@ -86,6 +96,14 @@ pub struct TrimParams {
     pub duration: Option<f64>,
     /// "copy" (lossless, keyframe-aligned) | "encode" (precise re-encode)
     pub mode: String,
+    /// Multiple cut ranges, each exported as its own clip. Empty = single
+    /// legacy range from `start_time` / `duration`.
+    #[serde(default = "default_trim_segments")]
+    pub segments: Vec<TrimSegment>,
+}
+
+fn default_trim_segments() -> Vec<TrimSegment> {
+    Vec::new()
 }
 
 /// Params for the rotate/flip tool.
@@ -368,12 +386,26 @@ pub struct FrameSampleParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContactSheetParams {
-    /// seconds between captured thumbnails
+    /// "interval" (capture every N seconds) | "count" (N thumbnails across the video)
+    #[serde(default = "default_contact_mode")]
+    pub mode: String,
+    /// seconds between captured thumbnails (interval mode)
     pub interval: f64,
+    /// total number of thumbnails (count mode, grid auto-fits)
+    #[serde(default = "default_contact_count")]
+    pub count: u32,
     pub cols: u32,
     pub rows: u32,
     /// width of each thumbnail (px)
     pub thumb_w: u32,
+}
+
+fn default_contact_mode() -> String {
+    "interval".to_string()
+}
+
+fn default_contact_count() -> u32 {
+    20
 }
 
 /// Params for the "video-silence" tool (detect silent segments, write a report).
@@ -394,7 +426,7 @@ impl Default for FrameSampleParams {
 
 impl Default for ContactSheetParams {
     fn default() -> Self {
-        Self { interval: 5.0, cols: 4, rows: 4, thumb_w: 160 }
+        Self { mode: "interval".into(), interval: 5.0, count: 20, cols: 4, rows: 4, thumb_w: 160 }
     }
 }
 

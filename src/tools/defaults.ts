@@ -62,7 +62,7 @@ export function blankToolParams(tool: WorkbenchId): ToolParams | null {
         marginPercent: 3,
       } satisfies WatermarkParams;
     case "trim":
-      return { startTime: 0, duration: undefined, mode: "copy" } satisfies TrimParams;
+      return { startTime: 0, duration: undefined, mode: "copy", segments: [] } satisfies TrimParams;
     case "rotate":
       return { transform: "90c" } satisfies RotateParams;
     case "mute":
@@ -87,7 +87,7 @@ export function blankToolParams(tool: WorkbenchId): ToolParams | null {
     case "video-frames":
       return { interval: 2, fps: 12, width: 480 } satisfies FrameSampleParams;
     case "video-contact":
-      return { interval: 5, cols: 4, rows: 4, thumbW: 160 } satisfies ContactSheetParams;
+      return { mode: "interval", interval: 5, count: 20, cols: 4, rows: 4, thumbW: 160 } satisfies ContactSheetParams;
     case "video-silence":
       return { threshold: -35, minLen: 2 } satisfies VideoSilenceParams;
     /* ── New audio tools ── */

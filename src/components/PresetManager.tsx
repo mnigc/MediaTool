@@ -1,19 +1,16 @@
 import { useState } from "react";
-import type { AudioParams, ExtractAudioParams, ImageParams, JobParams, ToolId } from "../types";
+import type { JobParams, ToolId } from "../types";
 import {
   addPreset,
   loadPresets,
   presetDisplayName,
   removePreset,
+  restoreBuiltin,
+  saveBuiltinOverride,
   type Preset,
 } from "../lib/presets";
 import { defaultParamsFor } from "../lib/defaults";
-import {
-  AudioCompressOptions,
-  ImageCompressOptions,
-  VideoCompressOptions,
-} from "./OptionsPanel";
-import ExtractAudioPanel from "../tools/panels/ExtractAudioPanel";
+import PresetParamsEditor from "./PresetParamsEditor";
 import { XIcon } from "./icons";
 import { useI18n } from "../i18n";
 
@@ -61,8 +58,16 @@ export default function PresetManager({ open, onClose }: PresetManagerProps) {
     if (!editing) return;
     const name = editing.name.trim();
     if (!name) return;
-    setPresets(addPreset({ ...editing, name, builtin: false }));
+    setPresets(
+      editing.builtin
+        ? saveBuiltinOverride(editing.toolId, name, editing.params)
+        : addPreset({ ...editing, name, builtin: false })
+    );
     setEditing(null);
+  };
+
+  const handleRestore = (p: Preset) => {
+    setPresets(restoreBuiltin(p.toolId, p.name));
   };
 
   const handleToolChange = (toolId: ToolId) => {
@@ -132,18 +137,35 @@ export default function PresetManager({ open, onClose }: PresetManagerProps) {
                             <div className="truncate text-sm font-medium text-neutral-700 dark:text-neutral-200">
                               {presetDisplayName(p, t)}
                             </div>
-                             <div className="text-[10px] text-neutral-400 dark:text-neutral-500">
-                               {p.builtin ? t("pm.builtin") : t("pm.custom")}
+                             <div
+                               className={
+                                 p.builtin && p.modified
+                                   ? "text-[10px] font-medium text-brand-600 dark:text-brand-400"
+                                   : "text-[10px] text-neutral-400 dark:text-neutral-500"
+                               }
+                             >
+                               {p.builtin
+                                 ? p.modified
+                                   ? t("pm.modified")
+                                   : t("pm.builtin")
+                                 : t("pm.custom")}
                              </div>
                           </div>
                           <div className="flex shrink-0 items-center gap-1.5">
                             <button
                               onClick={() => startEdit(p)}
-                              disabled={p.builtin}
-                              className="rounded-md border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+                              className="rounded-md border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
                             >
                                {t("pm.edit")}
                              </button>
+                             {p.builtin && p.modified && (
+                               <button
+                                 onClick={() => handleRestore(p)}
+                                 className="rounded-md border border-brand-200 bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-600 transition hover:bg-brand-100 dark:border-brand-800 dark:bg-brand-950/30 dark:text-brand-300 dark:hover:bg-brand-900/50"
+                               >
+                                 {t("pm.restore")}
+                               </button>
+                             )}
                              {!p.builtin && (
                                <button
                                  onClick={() => handleDelete(p)}
@@ -222,27 +244,11 @@ function PresetEditor({
       </div>
 
       <div className="rounded-xl border border-neutral-100 bg-neutral-50/40 p-3 dark:border-neutral-700/60 dark:bg-neutral-800/30">
-        {preset.toolId === "video-compress" && (
-          <VideoCompressOptions params={preset.params} onChange={onParamsChange} />
-        )}
-        {preset.toolId === "image-compress" && (
-          <ImageCompressOptions
-            params={preset.params as ImageParams}
-            onChange={onParamsChange}
-          />
-        )}
-        {preset.toolId === "audio-compress" && (
-          <AudioCompressOptions
-            params={preset.params as AudioParams}
-            onChange={onParamsChange}
-          />
-        )}
-        {preset.toolId === "extract-audio" && (
-          <ExtractAudioPanel
-            params={preset.params as ExtractAudioParams}
-            onChange={onParamsChange}
-          />
-        )}
+        <PresetParamsEditor
+          toolId={preset.toolId}
+          params={preset.params}
+          onChange={onParamsChange}
+        />
       </div>
 
       <div className="flex justify-end gap-2">

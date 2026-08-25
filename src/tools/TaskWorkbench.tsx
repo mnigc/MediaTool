@@ -3,6 +3,7 @@ import FilterTabs, { type FilterStatus } from "../components/FilterTabs";
 import JobList from "../components/JobList";
 import SkeletonJobCard from "../components/SkeletonJobCard";
 import PresetManager from "../components/PresetManager";
+import MetadataPreview from "../components/MetadataPreview";
 import OutputSettings from "../components/OutputSettings";
 import DropZone from "../components/DropZone";
 import { useConfirm } from "../components/ConfirmDialog";
@@ -10,6 +11,7 @@ import { openOutputFolder } from "../lib/tauri";
 import { useI18n } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
 import { extOk } from "./FilePicker";
+import { isBatchEditable } from "./kinds";
 import { getTool, type WorkbenchId } from "./registry";
 
 type QueuableToolId = Exclude<WorkbenchId, "inspect" | "workflow">;
@@ -36,8 +38,13 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
   const showGpu = toolId === "video-compress";
   const showPresets = toolId.endsWith("-compress");
 
-  const displayMediaType = meta.mediaType ?? 
-    (meta.category === "audio" ? "audio" : meta.category === "image" ? "image" : undefined);
+  // Only real media types ("video" | "audio" | "image") drive the localized
+  // support/filter hints. The "tools" category (metadata strip, inspect)
+  // accepts any type, so it must fall back to the generic hint instead of
+  // building a missing `dz.support.tools` / `dz.filter.tools` key.
+  const displayMediaType =
+    meta.mediaType ??
+    (meta.category && meta.category !== "tools" ? meta.category : undefined);
 
   useEffect(() => {
     tasks.registerDropHandler((paths) => {
@@ -52,6 +59,11 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
 
   const jobs = tasks.jobs.filter((j) => j.toolId === toolId);
   const hasJobs = jobs.length > 0;
+  // Sync-params only makes sense for batch tools (compress/convert) where you
+  // import several files intending uniform settings, and only when there are
+  // multiple queued jobs to copy across.
+  const queuedCount = jobs.filter((j) => j.phase === "queued").length;
+  const syncParamsEditable = isBatchEditable(toolId) && queuedCount > 1;
 
   const filteredJobs =
     filter === "all" ? jobs : jobs.filter((j) => j.phase === filter);
@@ -281,6 +293,16 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
                 )}
               </div>
             </div>
+
+            <DropZone
+              compact
+              dragOver={false}
+              jobCount={jobs.length}
+              onClick={() => tasks.pickFiles([{ name: filterName, extensions: accepts }])}
+              onDragOver={(e) => e.preventDefault()}
+              onDragLeave={() => {}}
+              onDrop={(e) => e.preventDefault()}
+            />
           </div>
 
           <JobList
@@ -290,12 +312,16 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
             onJobRemove={tasks.removeOne}
             onJobOpenFolder={openOutputFolder}
             onJobChangeParams={tasks.changeParams}
-            onJobSyncParams={tasks.syncParamsToAll}
+            onJobSyncParams={syncParamsEditable ? tasks.syncParamsToAll : undefined}
             onJobRetry={tasks.retryOne}
             onReorderStart={tasks.reorderStart}
             onReorderOver={tasks.reorderOver}
             onReorderDrop={tasks.reorderDrop}
           />
+
+          {toolId === "strip-metadata" && (
+            <MetadataPreview paths={jobs.map((j) => j.info.path)} />
+          )}
         </>
       )}
 

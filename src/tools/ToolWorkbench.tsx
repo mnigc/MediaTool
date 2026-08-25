@@ -58,7 +58,12 @@ function InspectWorkbench({ onBack }: { onBack?: () => void }) {
   }, []);
 
   useEffect(() => {
-    if (!file) return;
+    if (!file) {
+      setReport(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     setError(null);

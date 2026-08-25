@@ -8,9 +8,15 @@ export interface Preset {
   toolId: string;
   params: JobParams;
   builtin?: boolean;
+  /** True when a builtin preset has been edited by the user, i.e. its params
+   *  shadow the factory defaults until it is restored. */
+  modified?: boolean;
 }
 
 const KEY = "mediatool.presets";
+/** Builtin-preset edits live separate from custom presets so a modified
+ *  default can be reverted to its factory values with one click. */
+const OVERRIDE_KEY = "mediatool.presetOverrides";
 
 const keyOf = (p: { toolId: string; name: string }) => `${p.toolId}::${p.name}`;
 
@@ -575,15 +581,53 @@ function loadCustoms(): Preset[] {
   }
 }
 
+function saveCustoms(customs: Preset[]): void {
+  writeStorage(KEY, JSON.stringify(customs));
+}
+
+function loadOverrides(): Preset[] {
+  try {
+    const raw = readStorage(OVERRIDE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as Preset[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveOverrides(overrides: Preset[]): void {
+  writeStorage(OVERRIDE_KEY, JSON.stringify(overrides));
+}
+
 export function loadPresets(): Preset[] {
   const byKey = new Map<string, Preset>();
-  for (const p of BUILTIN_PRESETS) byKey.set(keyOf(p), { ...p, builtin: true });
-  for (const p of loadCustoms()) byKey.set(keyOf(p), { ...p, builtin: false });
+  for (const p of BUILTIN_PRESETS) byKey.set(keyOf(p), { ...p });
+  for (const o of loadOverrides()) {
+    const base = byKey.get(keyOf(o));
+    if (base?.builtin) {
+      byKey.set(keyOf(o), { ...base, params: o.params, modified: true });
+    }
+  }
+  for (const p of loadCustoms()) byKey.set(keyOf(p), { ...p, builtin: false, modified: false });
   return [...byKey.values()];
 }
 
-function saveCustoms(customs: Preset[]): void {
-  writeStorage(KEY, JSON.stringify(customs));
+/** Persist edited params for a builtin preset (keeping its builtin identity)
+ *  so it shows up as a modified default and can be restored later. */
+export function saveBuiltinOverride(toolId: string, name: string, params: JobParams): Preset[] {
+  const overrides = loadOverrides().filter(
+    (o) => !(o.toolId === toolId && o.name === name)
+  );
+  overrides.push({ toolId, name, params });
+  saveOverrides(overrides);
+  return loadPresets();
+}
+
+/** Drop a builtin-preset override, reverting to its factory defaults. */
+export function restoreBuiltin(toolId: string, name: string): Preset[] {
+  saveOverrides(loadOverrides().filter((o) => !(o.toolId === toolId && o.name === name)));
+  return loadPresets();
 }
 
 export function addPreset(preset: Preset): Preset[] {
