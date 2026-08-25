@@ -111,7 +111,7 @@ export interface SpeedParams {
 }
 
 export interface WatermarkParams {
-  imagePath: string;
+  imagePath?: string;
   position: string; // tl|tc|tr|ml|mc|mr|bl|bc|br
   scalePercent: number;
   opacity: number; // 0..1
@@ -135,7 +135,7 @@ export interface RotateParams {
 /** Crop a video to an aspect ratio (centered) or a custom rectangle. */
 export interface CropParams {
   mode: "center" | "custom";
-  aspect?: "1:1" | "16:9" | "9:16" | "4:3" | "3:2" | "original";
+  aspect?: string;
   x?: number;
   y?: number;
   width?: number;
@@ -227,7 +227,7 @@ export interface ImageRotateParams {
 /** Crop an image. */
 export interface ImageCropParams {
   mode: "center" | "custom";
-  aspect?: "1:1" | "16:9" | "9:16" | "4:3" | "3:2" | "original";
+  aspect?: string;
   x?: number;
   y?: number;
   width?: number;
@@ -388,6 +388,9 @@ export interface StartWorkflowResult {
   /** true when the steps were merged into one FFmpeg command now running on
    *  `id`; false means the caller should run the steps one by one. */
   merged: boolean;
+  /** true when the output already existed and the policy was "skip", so
+   *  nothing was encoded and the run should be treated as finished. */
+  skipped?: boolean;
 }
 
 export interface StartJobResult {

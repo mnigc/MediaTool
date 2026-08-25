@@ -2,7 +2,7 @@
 
 ---
 
-# MediPress
+# MediaTool
 
 로컬 미디어 압축 및 변환 도구로, 비디오, 이미지, 오디오 파일을 일괄 처리할 수 있습니다. **Tauri 2 + React + TypeScript** 기반 데스크톱 애플리케이션으로, **FFmpeg**를 처리 엔진으로 사용합니다.
 
@@ -33,7 +33,7 @@
 
 ## 스크린샷
 
-![MediPress 스크린샷](https://via.placeholder.com/800x500?text=MediPress+Screenshot)
+![MediaTool 스크린샷](https://via.placeholder.com/800x500?text=MediaTool+Screenshot)
 
 ## 요구 사항
 

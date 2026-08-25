@@ -3,6 +3,7 @@ import type { AudioParams, ExtractAudioParams, ImageParams, JobParams, ToolId } 
 import {
   addPreset,
   loadPresets,
+  presetDisplayName,
   removePreset,
   type Preset,
 } from "../lib/presets";
@@ -29,12 +30,12 @@ interface PresetManagerProps {
 }
 
 export default function PresetManager({ open, onClose }: PresetManagerProps) {
+  const { t } = useI18n();
   const [presets, setPresets] = useState<Preset[]>(() => loadPresets());
   const [editing, setEditing] = useState<Preset | null>(null);
   const [isNew, setIsNew] = useState(false);
 
   if (!open) return null;
-  const { t } = useI18n();
 
   const startNew = () => {
     const toolId = PRESET_TOOLS[0];
@@ -129,7 +130,7 @@ export default function PresetManager({ open, onClose }: PresetManagerProps) {
                         >
                           <div className="min-w-0">
                             <div className="truncate text-sm font-medium text-neutral-700 dark:text-neutral-200">
-                              {p.name}
+                              {presetDisplayName(p, t)}
                             </div>
                              <div className="text-[10px] text-neutral-400 dark:text-neutral-500">
                                {p.builtin ? t("pm.builtin") : t("pm.custom")}

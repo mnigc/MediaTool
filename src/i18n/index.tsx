@@ -7,17 +7,14 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { readStorage, writeStorage } from "../lib/storage";
 import { LOCALES, translations, type Locale } from "./translations";
 
-const STORAGE_KEY = "mediapress.lang";
+const STORAGE_KEY = "mediatool.lang";
 
 function detectLocale(): Locale {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved && (LOCALES as string[]).includes(saved)) return saved as Locale;
-  } catch {
-    /* ignore */
-  }
+  const saved = readStorage(STORAGE_KEY);
+  if (saved && (LOCALES as string[]).includes(saved)) return saved as Locale;
   const nav = (
     typeof navigator !== "undefined" ? navigator.language : ""
   ).toLowerCase();
@@ -55,11 +52,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   }, [locale]);
 
   const setLocale = useCallback((l: Locale) => {
-    try {
-      localStorage.setItem(STORAGE_KEY, l);
-    } catch {
-      /* ignore */
-    }
+    writeStorage(STORAGE_KEY, l);
     setLocaleState(l);
   }, []);
 

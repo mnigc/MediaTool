@@ -475,6 +475,10 @@ pub struct StartWorkflowResult {
     /// running (progress/done report on `id`). false means nothing was started
     /// and the caller should run the steps individually.
     pub merged: bool,
+    /// true when the output file already existed and the policy was "skip", so
+    /// nothing was started and the caller should treat the run as finished.
+    #[serde(default)]
+    pub skipped: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

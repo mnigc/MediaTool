@@ -49,7 +49,7 @@ fn image_thumbnail(path: &Path) -> Option<String> {
 
 fn video_thumbnail(app: &tauri::AppHandle, path: &Path) -> Result<Option<String>> {
     let tmp = std::env::temp_dir().join(format!(
-        "mediapress_thumb_{}.png",
+        "mediatool_thumb_{}.png",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())

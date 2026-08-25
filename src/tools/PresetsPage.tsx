@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useI18n } from "../i18n";
-import { loadPresets, removePreset, type Preset } from "../lib/presets";
+import { loadPresets, presetDisplayName, removePreset, type Preset } from "../lib/presets";
 import type { WorkbenchId } from "./registry";
 
 interface Group {
@@ -13,6 +13,13 @@ const ORDER: string[] = [
   "video-compress",
   "audio-compress",
   "image-compress",
+  "image-crop",
+  "image-resize",
+  "video-crop",
+  "gif",
+  "image-adjust",
+  "image-watermark",
+  "watermark",
   "extract-audio",
 ];
 
@@ -79,7 +86,7 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
                     className="flex items-center gap-2 rounded-xl bg-white p-3 ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-800"
                   >
                     <span className="min-w-0 flex-1 truncate text-sm text-neutral-800 dark:text-neutral-100">
-                      {p.name}
+                      {presetDisplayName(p, t)}
                     </span>
                     <span
                       className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${

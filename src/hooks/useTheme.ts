@@ -1,17 +1,14 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { readStorage, writeStorage } from "../lib/storage";
 
 export type ThemeMode = "light" | "dark" | "auto";
 
-const STORAGE_KEY = "mediapress.theme";
+const STORAGE_KEY = "mediatool.theme";
 
 function loadThemeMode(): ThemeMode {
-  try {
-    const v = localStorage.getItem(STORAGE_KEY);
-    if (v === "light" || v === "dark" || v === "auto") return v;
-  } catch {
-    /* ignore */
-  }
+  const v = readStorage(STORAGE_KEY);
+  if (v === "light" || v === "dark" || v === "auto") return v;
   return "auto";
 }
 
@@ -39,11 +36,7 @@ export function useTheme() {
   }, [dark]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, themeMode);
-    } catch {
-      /* ignore */
-    }
+    writeStorage(STORAGE_KEY, themeMode);
 
     setDark(effectiveDark(themeMode, systemPrefersDark()));
 

@@ -113,7 +113,7 @@ export function blankToolParams(tool: WorkbenchId): ToolParams | null {
     case "image-watermark":
       return {
         mode: "text",
-        text: "MediPress",
+        text: "MediaTool",
         imagePath: undefined,
         position: "br",
         scalePercent: 25,

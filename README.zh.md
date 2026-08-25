@@ -2,7 +2,7 @@
 
 ---
 
-# MediPress
+# MediaTool
 
 本地媒体**工具箱**，支持视频、图片、音频的批量处理与多种实用工具。基于 **Tauri 2 + React + TypeScript** 桌面端，底层使用 **FFmpeg** 作为处理引擎。
 
@@ -34,7 +34,7 @@
 
 ## 截图
 
-![MediPress 界面](https://via.placeholder.com/800x500?text=MediPress+Screenshot)
+![MediaTool 界面](https://via.placeholder.com/800x500?text=MediaTool+Screenshot)
 
 ## 环境要求
 

@@ -2,7 +2,10 @@ import { useI18n } from "../../i18n";
 import type { CropParams } from "../../types";
 import { Field, FieldRow, NumInput, sel } from "./ui";
 
-const ASPECTS = ["1:1", "16:9", "9:16", "4:3", "3:2", "original"] as const;
+const ASPECTS = [
+  "1:1", "16:9", "9:16", "4:3", "3:2", "3:4", "21:9", "2.35:1",
+  "295:413", "413:579", "358:441", "original",
+] as const;
 
 export default function VideoCropPanel({
   params,

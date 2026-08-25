@@ -2581,30 +2581,30 @@ pub async fn start_workflow(app: AppHandle, req: WorkflowRequest) -> Result<Star
     let input = req.input.clone();
     // An empty chain cannot be merged; let the caller decide how to behave.
     if req.steps.is_empty() {
-        return Ok(StartWorkflowResult { id, merged: false });
+        return Ok(StartWorkflowResult { id, merged: false, skipped: false });
     }
     let info = probe(&app, &input).await?;
     let suffix = req
         .output_suffix
         .clone()
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "_mediapress".to_string());
+        .unwrap_or_else(|| "_mediatool".to_string());
     let policy = req.overwrite_policy.as_deref().unwrap_or("rename");
 
     let ext = match merged_output_ext(&info, &req.steps) {
         Some(ext) => ext,
-        None => return Ok(StartWorkflowResult { id, merged: false }),
+        None => return Ok(StartWorkflowResult { id, merged: false, skipped: false }),
     };
     let out = output_path(&input, &req.output_dir, &ext, &suffix)?;
     let Some(out) = resolve_policy(out, policy) else {
-        // Output already existed and policy = "skip": report a no-op done so the
-        // caller can treat the merged chain as finished.
-        emit_done(&app, &id, true, false, true, None, None, info.size_bytes, None);
-        return Ok(StartWorkflowResult { id, merged: true });
+        // Output already existed and policy = "skip": signal a no-op via the
+        // `skipped` flag instead of emitting a synchronous done event (which
+        // the frontend would race and miss). The caller finishes immediately.
+        return Ok(StartWorkflowResult { id, merged: true, skipped: true });
     };
 
     let Some(chain) = merged_chain(&info, &req.steps) else {
-        return Ok(StartWorkflowResult { id, merged: false });
+        return Ok(StartWorkflowResult { id, merged: false, skipped: false });
     };
     let args = merged_args(&info, &chain, &out, &req.gpu);
 
@@ -2693,7 +2693,7 @@ pub async fn start_workflow(app: AppHandle, req: WorkflowRequest) -> Result<Star
         }
     });
 
-    Ok(StartWorkflowResult { id, merged: true })
+    Ok(StartWorkflowResult { id, merged: true, skipped: false })
 }
 
 /// Start a conversion job. Spawns FFmpeg, streams progress, emits events.
@@ -2709,7 +2709,7 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult
         .output_suffix
         .clone()
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "_mediapress".to_string());
+        .unwrap_or_else(|| "_mediatool".to_string());
     let policy = req.overwrite_policy.as_deref().unwrap_or("rename");
 
     let (args, out) = match prepare_job(&info, &req, &suffix, policy)? {
@@ -2839,7 +2839,7 @@ pub async fn estimate_size(app: AppHandle, req: EstimateRequest) -> Result<Estim
     let sample_secs = req.sample_secs.unwrap_or(8.0).max(0.1);
     let info = req.info;
     let ext = extension_for("estimate", &info, &req.params);
-    let tmp = std::env::temp_dir().join(format!("mediapress_est_{}.{}", uuid(), ext));
+    let tmp = std::env::temp_dir().join(format!("mediatool_est_{}.{}", uuid(), ext));
 
     let total = info.duration_secs;
 
@@ -3271,7 +3271,7 @@ mod tests {
             inputs: vec!["in.mp4".into()],
             output_dir: None,
             params,
-            output_suffix: Some("_mediapress".into()),
+            output_suffix: Some("_mediatool".into()),
             gpu: None,
             overwrite_policy: None,
         }
@@ -3281,7 +3281,7 @@ mod tests {
     fn prepare_rotate_picks_safe_container() {
         let mut info = sample_info();
         info.path = "clip.webm".into();
-        match prepare_job(&info, &req("rotate", serde_json::json!({"transform":"90c"})), "_mediapress", "rename").unwrap() {
+        match prepare_job(&info, &req("rotate", serde_json::json!({"transform":"90c"})), "_mediatool", "rename").unwrap() {
             PreparedJob::Run { out, .. } => {
                 assert!(out.to_string_lossy().ends_with(".mp4"), "got {:?}", out);
             }
@@ -3296,7 +3296,7 @@ mod tests {
         match prepare_job(
             &info,
             &req("extract-audio", serde_json::json!({"format":"opus","bitrateKbps":128})),
-            "_mediapress",
+            "_mediatool",
             "rename",
         )
         .unwrap()
@@ -3314,7 +3314,7 @@ mod tests {
     fn prepare_strip_metadata_video_remux() {
         let mut info = sample_info();
         info.path = "clip.mp4".into();
-        match prepare_job(&info, &req("strip-metadata", serde_json::json!({})), "_mediapress", "rename").unwrap() {
+        match prepare_job(&info, &req("strip-metadata", serde_json::json!({})), "_mediatool", "rename").unwrap() {
             PreparedJob::Run { args, out } => {
                 assert!(out.to_string_lossy().ends_with(".mp4"), "got {:?}", out);
                 assert!(args.contains(&"copy".to_string()));
@@ -3327,7 +3327,7 @@ mod tests {
     fn overwrite_policy_rename() {
         let dir = std::env::temp_dir().join(format!("mp_ov_test_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let base = dir.join("clip_mediapress.mp4");
+        let base = dir.join("clip_mediatool.mp4");
         std::fs::write(&base, b"x").unwrap();
 
         let renamed = apply_overwrite_policy(base.clone(), "rename");
@@ -3395,11 +3395,11 @@ mod tests {
 
     #[test]
     fn interval_pattern_naming() {
-        let base = PathBuf::from("anywhere").join("clip_mediapress.png");
+        let base = PathBuf::from("anywhere").join("clip_mediatool.png");
         let pat = interval_pattern(base);
         assert_eq!(
             pat.file_name().and_then(|n| n.to_str()),
-            Some("clip_mediapress_%03d.png")
+            Some("clip_mediatool_%03d.png")
         );
     }
 

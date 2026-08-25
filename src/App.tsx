@@ -16,12 +16,12 @@ function AppShell({
   themeMode,
   setThemeMode,
   toasts,
-  dismissAll,
+  dismissToast,
 }: {
   themeMode: ThemeMode;
   setThemeMode: (m: ThemeMode) => void;
   toasts: ToastItem[];
-  dismissAll: () => void;
+  dismissToast: (id: number) => void;
 }) {
   const [route, setRoute] = useState<Route>({ kind: "module", id: "video" });
 
@@ -62,14 +62,14 @@ function AppShell({
           {content()}
         </main>
       </div>
-      <ToastContainer toasts={toasts} onDismiss={dismissAll} />
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }
 
 export default function App() {
   const { themeMode, setThemeMode } = useTheme();
-  const { toasts, pushToast, dismissAll } = useToasts();
+  const { toasts, pushToast, dismissToast } = useToasts();
 
   return (
     <TaskCenterProvider onToast={pushToast}>
@@ -77,7 +77,7 @@ export default function App() {
         themeMode={themeMode}
         setThemeMode={setThemeMode}
         toasts={toasts}
-        dismissAll={dismissAll}
+        dismissToast={dismissToast}
       />
     </TaskCenterProvider>
   );

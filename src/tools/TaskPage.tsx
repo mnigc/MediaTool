@@ -149,7 +149,7 @@ export default function TaskPage() {
             </div>
           </div>
 
-          <div className="space-y-3" role="list" aria-label="任务列表">
+          <div className="space-y-3" role="list" aria-label={t("a11y.taskList")}>
             {jobs.map((job, i) => (
               <JobCard
                 key={job.uiId}

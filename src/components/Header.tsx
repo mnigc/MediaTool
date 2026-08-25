@@ -33,7 +33,7 @@ export default function Header({ themeMode, onThemeChange }: HeaderProps) {
           </div>
           <div className="leading-tight">
             <div className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
-              MediPress
+              MediaTool
             </div>
             <div className="text-xs text-neutral-500 dark:text-neutral-400">
               {t("header.subtitle")}

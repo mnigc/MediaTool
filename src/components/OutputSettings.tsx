@@ -40,7 +40,7 @@ export default function OutputSettings({ compact = false }: OutputSettingsProps)
         <input
           value={tasks.settings.outputSuffix}
           onChange={(e) => tasks.setOutputSuffix(e.target.value)}
-          placeholder="_mediapress"
+          placeholder="_mediatool"
           className="w-24 rounded-lg border border-neutral-200 bg-white px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 focus:border-brand-400 focus:ring-1 focus:ring-brand-100"
           title={t("sidebar.suffix")}
         />
@@ -109,7 +109,7 @@ export default function OutputSettings({ compact = false }: OutputSettingsProps)
           <input
             value={tasks.settings.outputSuffix}
             onChange={(e) => tasks.setOutputSuffix(e.target.value)}
-            placeholder="_mediapress"
+            placeholder="_mediatool"
             className="mt-1 w-full rounded-lg border border-neutral-200 bg-white px-2 py-1.5 text-xs dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 focus:border-brand-400 focus:ring-1 focus:ring-brand-100"
           />
         </div>

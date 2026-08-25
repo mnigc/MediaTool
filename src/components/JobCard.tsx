@@ -276,7 +276,7 @@ export default function JobCard({
           <div className="mt-4 rounded-xl border border-error-100 bg-error-50 dark:border-error-900/50 dark:bg-error-950/30">
             <div className="px-4 pt-2.5">
               <div className="text-sm font-medium text-error-700 dark:text-error-400">
-                {friendlyError(job.error)}
+                {friendlyError(job.error, t)}
               </div>
               <div className="mt-1 flex items-center gap-2">
                 <button
@@ -428,6 +428,12 @@ export default function JobCard({
       {job.phase === "cancelled" && (
         <div className="mt-4 rounded-xl bg-neutral-50 px-4 py-2.5 text-sm text-neutral-400 ring-1 ring-neutral-200 dark:bg-neutral-800 dark:text-neutral-500 dark:ring-neutral-700">
           {t("job.cancelled")}
+          <button
+            onClick={() => onRetry(job.uiId)}
+            className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl border border-brand-200 bg-brand-50 px-4 py-2 text-sm font-medium text-brand-700 transition hover:bg-brand-100 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-300 dark:hover:bg-brand-900"
+          >
+            {t("job.retry")}
+          </button>
         </div>
       )}
 

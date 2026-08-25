@@ -11,6 +11,7 @@ import {
   startJob,
 } from "../lib/tauri";
 import { defaultParamsFor } from "../lib/defaults";
+import { readStorage, writeStorage } from "../lib/storage";
 import { useI18n } from "../i18n";
 import { isBatchEditable } from "../tools/kinds";
 import { extOk } from "../tools/FilePicker";
@@ -33,8 +34,8 @@ export interface TaskStats {
   runningCount: number;
 }
 
-const SETTINGS_KEY = "mediapress.settings";
-const JOBS_KEY = "mediapress.jobs";
+const SETTINGS_KEY = "mediatool.settings";
+const JOBS_KEY = "mediatool.jobs";
 
 /** Drop transient runtime fields and reset in-flight jobs so a resumed
  *  session treats them as queued (the child processes are gone). */
@@ -61,7 +62,7 @@ function sanitizePersisted(j: Job): Job | null {
 
 function restoreJobs(): Job[] {
   try {
-    const raw = localStorage.getItem(JOBS_KEY);
+    const raw = readStorage(JOBS_KEY);
     if (!raw) return [];
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return [];
@@ -82,16 +83,16 @@ function restoreJobs(): Job[] {
 function loadSettings(): TaskSettings {
   const fallback: TaskSettings = {
     outputDir: null,
-    outputSuffix: "_mediapress",
+    outputSuffix: "_mediatool",
     maxConcurrent: 2,
     gpu: "",
     overwritePolicy: "rename",
   };
   try {
-    const raw = localStorage.getItem(SETTINGS_KEY);
+    const raw = readStorage(SETTINGS_KEY);
     if (!raw) return fallback;
     const saved = JSON.parse(raw) as Partial<TaskSettings>;
-    return {
+    const settings: TaskSettings = {
       ...fallback,
       ...saved,
       overwritePolicy:
@@ -99,17 +100,17 @@ function loadSettings(): TaskSettings {
           ? saved.overwritePolicy
           : "rename",
     };
+    // Migrate the old default output suffix so resumed sessions don't keep
+    // naming outputs "_mediapress" after the rename.
+    if (settings.outputSuffix === "_mediapress") settings.outputSuffix = "_mediatool";
+    return settings;
   } catch {
     return fallback;
   }
 }
 
 function saveSettings(s: TaskSettings) {
-  try {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
-  } catch {
-    // ignore persistence failures (private mode etc.)
-  }
+  writeStorage(SETTINGS_KEY, JSON.stringify(s));
 }
 
 interface TaskCenterValue {
@@ -182,7 +183,7 @@ export function TaskCenterProvider({
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
       try {
-        localStorage.setItem(JOBS_KEY, JSON.stringify(jobs.map(sanitizePersisted)));
+        writeStorage(JOBS_KEY, JSON.stringify(jobs.map(sanitizePersisted)));
       } catch {
         // ignore quota / serialization errors
       }
@@ -257,12 +258,18 @@ export function TaskCenterProvider({
         optsToast("error", t("toast.fail", { error: e.error ?? t("job.unknownError") }));
       }
 
-      if (
+      // Drain the pending queue, skipping stale entries (jobs removed or no
+      // longer queued) so a terminal event never stalls the auto-start chain.
+      while (
         pendingQueue.current.length > 0 &&
         runningCount.current < maxConcurrentRef.current
       ) {
         const next = pendingQueue.current.shift()!;
-        void startOne(next);
+        const pendingJob = jobsRef.current.find((j) => j.uiId === next);
+        if (pendingJob && pendingJob.phase === "queued") {
+          void startOne(next);
+          break;
+        }
       }
     });
 
@@ -423,7 +430,7 @@ export function TaskCenterProvider({
           inputs,
           params: job.params,
           outputDir: settingsRef.current.outputDir ?? undefined,
-          outputSuffix: settingsRef.current.outputSuffix || "_mediapress",
+          outputSuffix: settingsRef.current.outputSuffix || "_mediatool",
           gpu: settingsRef.current.gpu || "",
           overwritePolicy: settingsRef.current.overwritePolicy,
         });
@@ -459,17 +466,22 @@ export function TaskCenterProvider({
   }
 
   async function startAll(toolId?: string) {
-    const queued = jobsRef.current.filter(
-      (j) => j.phase === "queued" && (toolId == null || j.toolId === toolId)
-    );
-    pendingQueue.current = queued.map((j) => j.uiId);
+    const queued = jobsRef.current
+      .filter(
+        (j) => j.phase === "queued" && (toolId == null || j.toolId === toolId)
+      )
+      .map((j) => j.uiId);
     while (
       runningCount.current < maxConcurrentRef.current &&
-      pendingQueue.current.length > 0
+      queued.length > 0
     ) {
-      const next = pendingQueue.current.shift()!;
-      await startOne(next);
+      await startOne(queued.shift()!);
     }
+    // Keep a unified drain queue. Do NOT replace it wholesale: overwriting
+    // would drop jobs from other tools that were already waiting to auto-start.
+    pendingQueue.current = Array.from(
+      new Set([...pendingQueue.current, ...queued])
+    );
   }
 
   function cancelOne(uiId: string) {
@@ -489,7 +501,7 @@ export function TaskCenterProvider({
   function retryOne(uiId: string) {
     setJobs((prev) =>
       prev.map((j) =>
-        j.uiId === uiId && j.phase === "error"
+        j.uiId === uiId && (j.phase === "error" || j.phase === "cancelled")
           ? { ...j, phase: "queued", error: null, outputSize: null, startedAt: null }
           : j
       )

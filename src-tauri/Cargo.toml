@@ -1,12 +1,12 @@
 [package]
-name = "medipress"
+name = "mediatool"
 version = "0.1.0"
-description = "Local media convert & compress"
+description = "Local media toolbox for video, image & audio"
 authors = ["you"]
 edition = "2021"
 
 [lib]
-name = "medipress_lib"
+name = "mediatool_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

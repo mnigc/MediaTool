@@ -2,7 +2,7 @@
 
 ---
 
-# MediPress
+# MediaTool
 
 A local media **toolbox** for batch processing of video, image, and audio files. Built on **Tauri 2 + React + TypeScript** with **FFmpeg** as the processing engine.
 
@@ -36,7 +36,7 @@ A local media **toolbox** for batch processing of video, image, and audio files.
 
 ## Screenshot
 
-![MediPress Screenshot](https://via.placeholder.com/800x500?text=MediPress+Screenshot)
+![MediaTool Screenshot](https://via.placeholder.com/800x500?text=MediaTool+Screenshot)
 
 ## Requirements
 

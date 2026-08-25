@@ -1,6 +1,21 @@
 import type { JobParams } from "../types";
 import OptionsPanel from "../components/OptionsPanel";
+import PresetsBar from "../components/PresetsBar";
 import { isBatchEditable } from "./kinds";
+
+/** Tool panels that expose a scenario/builtin preset bar on top of their own
+ *  params editor (compress/convert tools use OptionsPanel which already renders
+ *  PresetsBar). */
+const SCENARIO_TOOLS = new Set<string>([
+  "image-crop",
+  "image-resize",
+  "video-crop",
+  "gif",
+  "image-adjust",
+  "image-watermark",
+  "watermark",
+  "extract-audio",
+]);
 import GifPanel from "./panels/GifPanel";
 import ScreenshotPanel from "./panels/ScreenshotPanel";
 import SpeedPanel from "./panels/SpeedPanel";
@@ -70,7 +85,8 @@ export default function JobParamsEditor({
     return <OptionsPanel toolId={toolId} params={params} onChange={onChange} />;
   }
 
-  switch (toolId) {
+  const editor = (() => {
+    switch (toolId) {
     case "gif":
       return <GifPanel params={params as GifParams} onChange={(p) => onChange(p)} />;
     case "screenshot":
@@ -128,5 +144,17 @@ export default function JobParamsEditor({
       return <ImageAdjustPanel params={params as ImageAdjustParams} onChange={(p) => onChange(p)} />;
     default:
       return null;
+    }
+  })();
+
+  if (SCENARIO_TOOLS.has(toolId)) {
+    return (
+      <div className="flex flex-col gap-3">
+        <PresetsBar toolId={toolId} params={params} onChange={onChange} />
+        {editor}
+      </div>
+    );
   }
+
+  return editor;
 }

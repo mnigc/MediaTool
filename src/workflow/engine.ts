@@ -22,9 +22,9 @@ function buildRequest(
     toolId: step.toolId,
     inputs: [input],
     params: step.params,
-    outputDir: settings.outputDir,
-    outputSuffix: settings.outputSuffix || "_mediapress",
-    gpu: settings.gpu || "",
+        outputDir: settings.outputDir,
+        outputSuffix: settings.outputSuffix || "_mediatool",
+        gpu: settings.gpu || "",
     overwritePolicy: settings.overwritePolicy || "rename",
   };
 }
@@ -107,7 +107,8 @@ function runMerged(
   id: string,
   steps: WorkflowStep[],
   onUpdate: (r: StepRun) => void,
-  onFinish: (ok: boolean, error?: string | null, output?: string | null) => void
+  onFinish: (ok: boolean, error?: string | null, output?: string | null) => void,
+  t: (key: string, vars?: Record<string, string | number>) => string
 ): Promise<void> {
   return new Promise<void>((resolve) => {
     let settled = false;
@@ -150,8 +151,8 @@ function runMerged(
             fin({ ok: true, output: e.output });
           } else {
             const idx = Math.max(lastCur, 0);
-            onUpdate({ index: idx, status: "error", percent: 0, error: e.error ?? "处理失败" });
-            fin({ ok: false, error: e.error ?? "处理失败" });
+            onUpdate({ index: idx, status: "error", percent: 0, error: e.error ?? t("err.friendly.empty") });
+            fin({ ok: false, error: e.error ?? t("err.friendly.empty") });
           }
         });
       } catch (err) {
@@ -171,8 +172,9 @@ export function startWorkflow(opts: {
   settings: RunSettings;
   onUpdate: (r: StepRun) => void;
   onFinish?: (ok: boolean, error?: string | null, output?: string | null) => void;
+  t: (key: string, vars?: Record<string, string | number>) => string;
 }): WorkflowRunHandle {
-  const { input, steps, settings, onUpdate, onFinish } = opts;
+  const { input, steps, settings, onUpdate, onFinish, t } = opts;
   let cancelled = false;
   let mergedId: string | null = null;
   let activeId: string | null = null;
@@ -190,18 +192,28 @@ export function startWorkflow(opts: {
       const res = await startWorkflowRust({
         input,
         outputDir: settings.outputDir,
-        outputSuffix: settings.outputSuffix || "_mediapress",
+    outputSuffix: settings.outputSuffix || "_mediatool",
         gpu: settings.gpu || "",
         overwritePolicy: settings.overwritePolicy || "rename",
         steps: steps.map((s) => ({ toolId: s.toolId, params: s.params })),
       });
       if (res.merged) {
         usedMerged = true;
-        mergedId = res.id;
-        await runMerged(res.id, steps, onUpdate, (ok, error, output) => {
-          if (cancelled) onFinish?.(false, "已取消", null);
-          else onFinish?.(ok, error, output);
-        });
+        if (res.skipped) {
+          // Output already existed + policy = "skip": the backend started no
+          // process and emits no done event, so finish here immediately
+          // (otherwise the merge runner would hang waiting for an event).
+          for (let i = 0; i < steps.length; i++) {
+            onUpdate({ index: i, status: "done", percent: 100 });
+          }
+          onFinish?.(true, null, null);
+        } else {
+          mergedId = res.id;
+          await runMerged(res.id, steps, onUpdate, (ok2, error, output) => {
+            if (cancelled) onFinish?.(false, t("job.cancelled"), null);
+            else onFinish?.(ok2, error, output);
+          }, t);
+        }
       }
     } catch {
       usedMerged = false;
@@ -229,14 +241,14 @@ export function startWorkflow(opts: {
       activeId = null;
 
       if (cancelled) {
-        onUpdate({ index: i, status: "error", percent: 0, error: "已取消", input: prev });
-        onFinish?.(false, "已取消", null);
+        onUpdate({ index: i, status: "error", percent: 0, error: t("job.cancelled"), input: prev });
+        onFinish?.(false, t("job.cancelled"), null);
         return;
       }
 
       if (!result.ok) {
-        onUpdate({ index: i, status: "error", percent: 0, error: result.error ?? "处理失败", input: prev });
-        onFinish?.(false, result.error ?? "处理失败", null);
+        onUpdate({ index: i, status: "error", percent: 0, error: result.error ?? t("err.friendly.empty"), input: prev });
+        onFinish?.(false, result.error ?? t("err.friendly.empty"), null);
         return;
       }
 

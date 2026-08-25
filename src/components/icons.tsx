@@ -5,11 +5,16 @@ interface IconProps {
 export function LogoIcon({ className }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
-      <rect x="2" y="2" width="20" height="20" rx="6" fill="white" />
-      <path
-        d="M7 17V7h4.5a3 3 0 0 1 0 6H9v4h-2Zm2-5.5h2.2a1 1 0 0 0 0-2H9v2Z"
-        fill="#4F6BBD"
+      <rect
+        x="4.5"
+        y="5.5"
+        width="15"
+        height="13"
+        rx="2.2"
+        stroke="white"
+        strokeWidth="1.8"
       />
+      <path d="M10 9l4.6 3-4.6 3z" fill="white" />
     </svg>
   );
 }

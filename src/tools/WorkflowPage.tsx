@@ -121,8 +121,13 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
         setRunning(false);
         setResult({ ok, error, output });
       },
+      t,
     });
-    await handleRef.current.promise;
+    try {
+      await handleRef.current.promise;
+    } catch {
+      setRunning(false);
+    }
   };
 
   const cancel = () => handleRef.current?.cancel();
@@ -342,7 +347,7 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
         >
           {result.ok
             ? t("workflow.finished")
-            : `${t("workflow.failed")}${result.error ? ` · ${friendlyError(result.error)}` : ""}`}
+            : `${t("workflow.failed")}${result.error ? ` · ${friendlyError(result.error, t)}` : ""}`}
         </div>
       )}
     </div>

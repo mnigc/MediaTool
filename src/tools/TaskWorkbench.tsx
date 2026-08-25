@@ -196,7 +196,7 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
       )}
 
       {tasks.loading && jobs.length === 0 ? (
-        <div aria-label="加载中" className="space-y-4">
+        <div aria-label={t("a11y.loading")} className="space-y-4">
           <SkeletonJobCard mediaType={meta.mediaType ?? "video"} />
         </div>
       ) : !hasJobs ? (
@@ -285,8 +285,6 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
 
           <JobList
             jobs={filteredJobs}
-            maxConcurrent={tasks.settings.maxConcurrent}
-            onMaxConcurrentChange={tasks.setMaxConcurrent}
             onJobStart={tasks.startOne}
             onJobCancel={tasks.cancelOne}
             onJobRemove={tasks.removeOne}

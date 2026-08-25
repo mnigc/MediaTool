@@ -48,7 +48,7 @@ export default function FilePicker({ meta, files, onChange }: Props) {
   }, [previewPath]);
 
   const browse = async () => {
-    const filterName = meta.mediaType ? t(`dz.filter.${meta.mediaType}`) : "媒体文件";
+    const filterName = meta.mediaType ? t(`dz.filter.${meta.mediaType}`) : t("dz.filter.any");
     const sel = await open({
       multiple: true,
       title: t("opt.selectFiles"),
@@ -69,13 +69,9 @@ export default function FilePicker({ meta, files, onChange }: Props) {
     onChange([...files, ...paths.filter((p) => !files.includes(p))]);
   };
 
-  const formatHint = meta.mediaType === "video"
-    ? `支持 ${meta.accepts.map((e) => `.${e}`).join(", ")} · 可批量添加`
-    : meta.mediaType === "audio"
-    ? `支持 ${meta.accepts.map((e) => `.${e}`).join(", ")} · 可批量添加`
-    : meta.mediaType === "image"
-    ? `支持 ${meta.accepts.map((e) => `.${e}`).join(", ")} · 可批量添加`
-    : "支持视频、图片、音频 · 可批量添加";
+  const formatHint = meta.mediaType
+    ? t("dz.formatHint", { exts: meta.accepts.map((e) => `.${e}`).join(", ") })
+    : t("dz.formatHintAny");
 
   return (
     <div className="space-y-2">

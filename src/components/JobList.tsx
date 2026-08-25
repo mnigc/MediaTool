@@ -1,10 +1,9 @@
 import type { Job, JobParams } from "../types";
 import JobCard from "./JobCard";
+import { useI18n } from "../i18n";
 
 interface JobListProps {
   jobs: Job[];
-  maxConcurrent: number;
-  onMaxConcurrentChange: (n: number) => void;
   onJobStart: (uiId: string) => void;
   onJobCancel: (uiId: string) => void;
   onJobRemove: (uiId: string) => void;
@@ -19,8 +18,6 @@ interface JobListProps {
 
 export default function JobList({
   jobs,
-  maxConcurrent,
-  onMaxConcurrentChange,
   onJobStart,
   onJobCancel,
   onJobRemove,
@@ -32,24 +29,15 @@ export default function JobList({
   onReorderOver,
   onReorderDrop,
 }: JobListProps) {
+  const { t } = useI18n();
   return (
     <div
       data-od-id="job-list"
       id="job-list"
       className="space-y-3"
       role="list"
-      aria-label="任务列表"
+      aria-label={t("a11y.taskList")}
     >
-      <input
-        type="range"
-        min="1"
-        max="4"
-        step="1"
-        value={maxConcurrent}
-        onChange={(e) => onMaxConcurrentChange(Number(e.target.value))}
-        className="sr-only"
-        aria-label="并行度"
-      />
       {jobs.map((job, idx) => (
         <JobCard
           key={job.uiId}

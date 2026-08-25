@@ -31,7 +31,7 @@ try {
   & $ff -hide_banner -encoders 2>&1 | Select-String -Pattern "libx264|libvpx-vp9|libmp3lame|libopus|aac|av1|webp" | ForEach-Object { Log $_.Line }
 
   Log "=== functional test ==="
-  $tmpd = Join-Path $env:TEMP "mediapress_test"
+  $tmpd = Join-Path $env:TEMP "mediatool_test"
   if (-not (Test-Path $tmpd)) { New-Item -ItemType Directory -Force -Path $tmpd | Out-Null }
   $src = Join-Path $tmpd "src.mp4"
   & $ff -y -f lavfi -i testsrc=duration=2:size=320x240:rate=25 -pix_fmt yuv420p $src 2>&1 | Out-Null
