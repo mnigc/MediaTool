@@ -10,7 +10,7 @@ A local media **toolbox** for batch processing of video, image, and audio files.
 
 ## Features
 
-- **Toolbox Layout** — categorized tool tree (video / audio / image / general, 15 tools in total) with a unified bottom task dock; different tools can run tasks simultaneously
+- **Toolbox Layout** — categorized tool tree (video / audio / image / tools, 37 tools in total) with a unified bottom task dock; different tools can run tasks simultaneously
 - **Video Compress** — H.264, VP9, AV1 (SVT-AV1) encoding with CRF/target size/fixed bitrate quality modes, resolution (480p ~ 2160p), frame rate and speed presets
 - **Video Convert** — free container & codec combos (MP4/WebM/MKV/MOV × H.264/VP9/AV1); switching containers auto-selects matching codecs
 - **Video Trim** — lossless quick mode (stream copy, keyframe-aligned) or precise mode (re-encode)
@@ -86,11 +86,12 @@ Output is in `src-tauri/target/release/bundle/` (Windows: `.msi` / `.exe`).
 ```
 MediaTool/
 ├── src/                    # React frontend
-│   ├── components/         # UI components (JobCard, TaskDock, ToolNav, OptionsPanel, etc.)
+│   ├── components/         # UI components (JobCard, JobList, ToolNav, OptionsPanel, etc.)
 │   ├── contexts/           # TaskCenter (unified task queue, events, settings)
 │   ├── tools/              # Toolbox: tool registry, workbenches, tool param panels
+│   ├── workflow/           # Multi-step workflow engine & types
 │   ├── hooks/              # Custom hooks (useTheme, useToasts)
-│   ├── i18n/               # Internationalization (4 languages)
+│   ├── i18n/               # Internationalization (2 languages: Chinese / English)
 │   ├── lib/                # Utilities (preset management, output estimation, Tauri calls)
 │   ├── App.tsx             # Main app component
 │   ├── main.tsx            # Entry point

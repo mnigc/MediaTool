@@ -10,7 +10,7 @@
 
 ## 機能
 
-- **ツールボックスレイアウト** — 左側カテゴリツールツリー（動画/音声/画像/汎用、全 15 ツール）+ 下部統合タスクドック、異なるツールのタスクを同時実行
+- **ツールボックスレイアウト** — 左側カテゴリツールツリー（動画/音声/画像/ツール、全 37 ツール）+ 下部統合タスクドック、異なるツールのタスクを同時実行
 - **動画圧縮** — H.264、VP9、AV1 (SVT-AV1) エンコード、CRF/目標サイズ/固定ビットレート品質モード、解像度（480p〜2160p）、フレームレート、エンコード速度
 - **動画変換** — コンテナとコーデックの自由な組み合わせ（MP4/WebM/MKV/MOV × H.264/VP9/AV1）、コンテナ切替時にデフォルトコーデックを自動マッチング
 - **動画トリム** — ロスレス高速モード（ストリームコピー、キーフレーム整列）または精密モード（再エンコード）
@@ -83,11 +83,12 @@ npm run tauri build
 ```
 MediaTool/
 ├── src/                    # React フロントエンド
-│   ├── components/         # UI コンポーネント（JobCard、TaskDock、ToolNav、OptionsPanel など）
+│   ├── components/         # UI コンポーネント（JobCard、JobList、ToolNav、OptionsPanel など）
 │   ├── contexts/           # TaskCenter（統合タスクキュー・イベント・設定）
 │   ├── tools/              # ツールボックス：ツールレジストリ、ワークベンチ、パラメータパネル
+│   ├── workflow/           # マルチステップワークフローエンジンと型
 │   ├── hooks/              # カスタム Hooks（useTheme、useToasts）
-│   ├── i18n/               # 国際化（6 言語）
+│   ├── i18n/               # 国際化（2 言語：中文 / English）
 │   ├── lib/                # ユーティリティ（プリセット管理、出力推定、Tauri 呼び出し）
 │   ├── App.tsx             # メインアプリコンポーネント
 │   ├── main.tsx            # エントリーポイント
@@ -97,6 +98,7 @@ MediaTool/
 │   ├── src/                # Rust ソース
 │   │   ├── commands.rs     # Tauri コマンド登録
 │   │   ├── jobs.rs         # タスクキュー、FFmpeg 引数、進捗/イベント
+│   │   ├── inspect.rs      # ffprobe ベースの完全なメディア検査
 │   │   ├── ffmpeg.rs       # FFmpeg プロセス検索と起動
 │   │   ├── media.rs        # ffprobe メディア検出
 │   │   ├── gpu.rs          # GPU アクセラレーション検出

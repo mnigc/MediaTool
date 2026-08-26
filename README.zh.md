@@ -10,7 +10,7 @@
 
 ## 功能特性
 
-- **工具箱布局** — 左侧分类工具树（视频/音频/图片/通用，共 15 个小工具）+ 底部统一任务坞，不同工具的任务可同时进行
+- **工具箱布局** — 左侧分类工具树（视频/音频/图片/工具，共 37 个小工具）+ 底部统一任务坞，不同工具的任务可同时进行
 - **视频压缩** — H.264、VP9、AV1 (SVT-AV1) 编码，CRF/目标大小/固定码率三种质量模式，分辨率（480p ~ 2160p）、帧率、编码速度
 - **视频转换** — 自由选择容器与编码组合（MP4/WebM/MKV/MOV × H.264/VP9/AV1），切换容器自动匹配默认编码器
 - **视频裁剪** — 无损快速模式（流复制、关键帧对齐）与精确模式（重编码）两种裁剪方式
@@ -84,11 +84,12 @@ npm run tauri build
 ```
 MediaTool/
 ├── src/                    # React 前端
-│   ├── components/         # UI 组件（JobCard、TaskDock、ToolNav、OptionsPanel 等）
+│   ├── components/         # UI 组件（JobCard、JobList、ToolNav、OptionsPanel 等）
 │   ├── contexts/           # TaskCenter（统一任务队列、事件、设置）
 │   ├── tools/              # 工具箱：工具注册表、工作台、参数面板
+│   ├── workflow/           # 多步骤工作流引擎与类型
 │   ├── hooks/              # 自定义 Hooks（useTheme、useToasts）
-│   ├── i18n/               # 国际化（6 种语言）
+│   ├── i18n/               # 国际化（2 种语言：中文 / English）
 │   ├── lib/                # 工具库（预设管理、输出估算、Tauri 调用）
 │   ├── App.tsx             # 主应用组件
 │   ├── main.tsx            # 入口
@@ -98,6 +99,7 @@ MediaTool/
 │   ├── src/                # Rust 源码
 │   │   ├── commands.rs     # Tauri 命令注册
 │   │   ├── jobs.rs         # 任务队列、FFmpeg 参数构建、进度/事件
+│   │   ├── inspect.rs      # 基于 ffprobe 的完整媒体检测
 │   │   ├── ffmpeg.rs       # FFmpeg 进程查找与启动
 │   │   ├── media.rs        # ffprobe 媒体探测
 │   │   ├── gpu.rs          # GPU 加速后端检测

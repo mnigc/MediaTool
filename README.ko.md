@@ -10,7 +10,7 @@
 
 ## 기능
 
-- **도구 상자 레이아웃** — 좌측 카테고리 도구 트리(비디오/오디오/이미지/일반, 총 15개 도구) + 하단 통합 작업 독, 서로 다른 도구의 작업 동시 실행
+- **도구 상자 레이아웃** — 좌측 카테고리 도구 트리(비디오/오디오/이미지/도구, 총 37개 도구) + 하단 통합 작업 독, 서로 다른 도구의 작업 동시 실행
 - **비디오 압축** — H.264, VP9, AV1 (SVT-AV1) 인코딩, CRF/목표 크기/고정 비트레이트 품질 모드, 해상도(480p ~ 2160p), 프레임 레이트, 인코딩 속도
 - **비디오 변환** — 컨테이너·코덱 자유 조합(MP4/WebM/MKV/MOV × H.264/VP9/AV1), 컨테이너 전환 시 기본 코덱 자동 매칭
 - **비디오 트림** — 무손실 빠른 모드(스트림 복사, 키프레임 정렬) 또는 정밀 모드(재인코딩)
@@ -83,11 +83,12 @@ npm run tauri build
 ```
 MediaTool/
 ├── src/                    # React 프론트엔드
-│   ├── components/         # UI 컴포넌트 (JobCard, TaskDock, ToolNav, OptionsPanel 등)
+│   ├── components/         # UI 컴포넌트 (JobCard, JobList, ToolNav, OptionsPanel 등)
 │   ├── contexts/           # TaskCenter (통합 작업 대기열, 이벤트, 설정)
 │   ├── tools/              # 도구 상자: 도구 레지스트리, 워크벤치, 파라미터 패널
+│   ├── workflow/           # 다단계 워크플로 엔진과 타입
 │   ├── hooks/              # 사용자 정의 Hooks (useTheme, useToasts)
-│   ├── i18n/               # 국제화 (6개 언어)
+│   ├── i18n/               # 국제화 (2개 언어: 中文 / English)
 │   ├── lib/                # 유틸리티 (프리셋 관리, 출력 추정, Tauri 호출)
 │   ├── App.tsx             # 메인 앱 컴포넌트
 │   ├── main.tsx            # 진입점
@@ -97,6 +98,7 @@ MediaTool/
 │   ├── src/                # Rust 소스
 │   │   ├── commands.rs     # Tauri 명령 등록
 │   │   ├── jobs.rs         # 작업 큐, FFmpeg 인수, 진행/이벤트
+│   │   ├── inspect.rs      # ffprobe 기반 전체 미디어 검사
 │   │   ├── ffmpeg.rs       # FFmpeg 프로세스 검색 및 실행
 │   │   ├── media.rs        # ffprobe 미디어 감지
 │   │   ├── gpu.rs          # GPU 가속 감지
