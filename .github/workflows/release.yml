@@ -4,9 +4,7 @@ on:
   push:
     tags:
       - "v*"
-
-permissions:
-  contents: write
+  workflow_dispatch:
 
 jobs:
   build-and-release:
@@ -41,6 +39,8 @@ jobs:
 
       - name: Build and upload to release
         uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: v__VERSION__
           releaseName: v__VERSION__
