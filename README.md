@@ -72,6 +72,50 @@ npm run tauri build
 
 Output is in `src-tauri/target/release/bundle/` (Windows: `.msi` / `.exe`).
 
+## Auto-Update & Release
+
+The app uses the Tauri 2 updater: on launch it silently checks
+`https://github.com/mnigc/MediaTool/releases/latest/download/latest.json`, and the
+header download button triggers a manual check. When a newer version is found the
+user is prompted to download and install (NSIS installer, auto-restart). The upgrade
+installer is signed with an updater key pair that is **NOT** tracked in git.
+
+### One-time setup (already done)
+
+- Generating the key pair:
+  `npx @tauri-apps/cli signer generate --password <pw> --write-keys <PATH>`
+  - Private key: keep it offline / in key manager, e.g. `C:\Users\<you>\.tauri\mediatool.key`
+  - Public key: stored in `src-tauri/tauri.conf.json` -> `plugins.updater.pubkey`
+- Add GitHub repo Secrets (Settings → Secrets and variables → Actions):
+  - `TAURI_SIGNING_PRIVATE_KEY` — content of the private key file
+  - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — the key password
+
+### Publishing a new version
+
+1. Bump `version` in `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml`
+   (keep them in sync; optionally also `package.json`).
+2. Commit and push, then create a tag and push it:
+   `git tag v0.2.0 && git push origin v0.2.0`
+3. The `Release` workflow (`.github/workflows/release.yml`) builds the NSIS
+   installer with the signing key, generates `latest.json` and uploads everything
+   to a **draft** GitHub Release.
+4. Review the draft release, edit the release notes, and click **Publish**.
+   Existing apps will now see the update button in the header.
+
+### Building update artifacts locally
+
+Set the signing env vars first, then run `tauri build`:
+
+```powershell
+$env:TAURI_SIGNING_PRIVATE_KEY = (Get-Content "$env:USERPROFILE\.tauri\mediatool.key" -Raw).Trim()
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "<pw>"
+npx @tauri-apps/cli build --bundles nsis
+```
+
+This produces `MediaTool_<ver>_x64-setup.exe` and its `.sig` signature; CI generates
+the `latest.json` manifest on release. The updater only works with NSIS installers
+(MSI is not supported for updates).
+
 ## Scripts
 
 | Command | Description |
