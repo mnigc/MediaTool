@@ -1,6 +1,6 @@
 [package]
 name = "mediatool"
-version = "0.1.1"
+version = "0.1.2"
 description = "Local media toolbox for video, image & audio"
 authors = ["you"]
 edition = "2021"
