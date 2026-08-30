@@ -2,7 +2,12 @@ import { useCallback, useRef, useState } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 
-export type UpdaterPhase = "idle" | "checking" | "downloading" | "installing";
+export type UpdaterPhase =
+  | "idle"
+  | "checking"
+  | "downloading"
+  | "downloaded"
+  | "installing";
 
 export const DEV_UNAVAILABLE = "DEV_MODE";
 
@@ -47,41 +52,57 @@ export function useUpdater() {
     []
   );
 
-  const downloadAndInstall = useCallback(async () => {
+  const download = useCallback(async () => {
     if (!update || busy.current) return;
     busy.current = true;
     setError(null);
     setPhase("downloading");
+    setProgress(0);
+    let contentLength = 0;
     try {
-      await update.downloadAndInstall((event) => {
-        if (event.event === "Progress") {
-          const data = event.data as {
-            contentLength: number;
-            chunkLength: number;
-          };
-          if (data.contentLength > 0) {
+      await update.download((event) => {
+        if (event.event === "Started") {
+          contentLength = event.data.contentLength ?? 0;
+        } else if (event.event === "Progress") {
+          if (contentLength > 0) {
             setProgress(
-              Math.min(100, Math.round((data.chunkLength / data.contentLength) * 100))
+              Math.min(
+                100,
+                Math.round((event.data.chunkLength / contentLength) * 100)
+              )
             );
           }
         } else if (event.event === "Finished") {
           setProgress(100);
-          setPhase("installing");
         }
       });
-      await relaunch();
+      setProgress(100);
+      setPhase("downloaded");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setPhase("idle");
+    } finally {
+      busy.current = false;
+    }
+  }, [update]);
+
+  const installAndRelaunch = useCallback(async () => {
+    if (!update || busy.current) return;
+    busy.current = true;
+    setError(null);
+    setPhase("installing");
+    try {
+      await update.install();
+      await relaunch();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setPhase("downloaded");
       busy.current = false;
     }
   }, [update]);
 
   const dismiss = useCallback(() => {
-    setUpdate(null);
     setError(null);
-    setProgress(0);
-    setPhase((p) => (p === "idle" || p === "checking" ? "idle" : p));
   }, []);
 
   return {
@@ -90,7 +111,8 @@ export function useUpdater() {
     progress,
     error,
     checkForUpdates,
-    downloadAndInstall,
+    download,
+    installAndRelaunch,
     dismiss,
   };
 }

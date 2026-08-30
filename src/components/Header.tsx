@@ -1,17 +1,13 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ComponentType } from "react";
 import type { ThemeMode } from "../hooks/useTheme";
-import { AutoIcon, DownloadIcon, LogoIcon, MaximizeIcon, MinimizeIcon, MoonIcon, SpinnerIcon, SunIcon, XIcon, GlobeIcon } from "./icons";
+import { AutoIcon, LogoIcon, MaximizeIcon, MinimizeIcon, MoonIcon, SunIcon, XIcon, GlobeIcon } from "./icons";
 import { useI18n } from "../i18n";
 import { LOCALES, LOCALE_NAMES } from "../i18n/translations";
-import type { UpdaterPhase } from "../hooks/useUpdater";
 
 interface HeaderProps {
   themeMode: ThemeMode;
   onThemeChange: (mode: ThemeMode) => void;
-  updatePhase: UpdaterPhase;
-  hasUpdate: boolean;
-  onCheckUpdates: () => void;
 }
 
 const THEME_ICONS: Record<ThemeMode, ComponentType<{ className?: string }>> = {
@@ -23,9 +19,6 @@ const THEME_ICONS: Record<ThemeMode, ComponentType<{ className?: string }>> = {
 export default function Header({
   themeMode,
   onThemeChange,
-  updatePhase,
-  hasUpdate,
-  onCheckUpdates,
 }: HeaderProps) {
   const appWindow = getCurrentWindow();
   const { t, locale, setLocale } = useI18n();
@@ -70,30 +63,6 @@ export default function Header({
             ))}
           </select>
           <GlobeIcon className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-400 pointer-events-none" />
-        </div>
-
-        {/* Update check */}
-        <div className="flex items-center rounded-xl border border-neutral-200 bg-neutral-50/50 p-1 dark:border-neutral-700 dark:bg-neutral-800/50">
-          <button
-            onClick={onCheckUpdates}
-            disabled={updatePhase === "checking" || updatePhase === "installing"}
-            title={t("updater.check")}
-            aria-label={t("updater.check")}
-            className={`relative flex h-8 w-8 items-center justify-center rounded-lg transition-all duration-200 disabled:opacity-50 ${
-              hasUpdate
-                ? "bg-brand-100/70 text-brand-700 dark:bg-brand-900/70 dark:text-brand-200"
-                : "text-neutral-500 hover:text-neutral-700 hover:bg-neutral-200/50 dark:text-neutral-400 dark:hover:text-neutral-200 dark:hover:bg-neutral-700/50"
-            }`}
-          >
-            {updatePhase === "checking" || updatePhase === "installing" ? (
-              <SpinnerIcon className="h-4.5 w-4.5 animate-spin" />
-            ) : (
-              <DownloadIcon className="h-4.5 w-4.5" />
-            )}
-            {hasUpdate && updatePhase !== "checking" && updatePhase !== "installing" && (
-              <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-error-500 ring-2 ring-white dark:ring-neutral-900" />
-            )}
-          </button>
         </div>
 
         {/* Theme toggle */}

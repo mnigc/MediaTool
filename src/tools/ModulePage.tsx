@@ -87,6 +87,7 @@ const MODULE_TITLE: Record<ModuleId, string> = {
   tasks: "module.tasks.title",
   presets: "module.presets.title",
   workflow: "module.workflow.title",
+  about: "module.about.title",
 };
 
 const MODULE_DESC: Record<ModuleId, string> = {
@@ -97,6 +98,7 @@ const MODULE_DESC: Record<ModuleId, string> = {
   tasks: "module.tasks.desc",
   presets: "module.presets.desc",
   workflow: "module.workflow.desc",
+  about: "module.about.desc",
 };
 
 function ToolCard({ tool, onOpen, pending }: { tool: ToolMeta; onOpen: (id: WorkbenchId) => void; pending: number }) {

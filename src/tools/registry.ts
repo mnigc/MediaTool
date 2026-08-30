@@ -12,7 +12,8 @@ export type ModuleId =
   | "tools"
   | "tasks"
   | "presets"
-  | "workflow";
+  | "workflow"
+  | "about";
 
 /** Pseudo-tool rendered as a panel but never queued as a job. */
 export type WorkbenchId = ToolId | "inspect" | "workflow";
@@ -52,6 +53,7 @@ export const MODULES: ModuleId[] = [
   "tools",
   "tasks",
   "presets",
+  "about",
 ];
 
 export const TOOLS: ToolMeta[] = [

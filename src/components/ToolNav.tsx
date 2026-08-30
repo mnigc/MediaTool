@@ -6,6 +6,7 @@ import {
   ChartIcon,
   FilmIcon,
   ImageIcon,
+  InfoIcon,
   MusicIcon,
   SettingsIcon,
   SlidersIcon,
@@ -20,6 +21,7 @@ const MODULE_ICONS: Record<ModuleId, ComponentType<{ className?: string }>> = {
   tools: SettingsIcon,
   tasks: ChartIcon,
   presets: SlidersIcon,
+  about: InfoIcon,
 };
 
 const MODULE_LABEL: Record<ModuleId, string> = {
@@ -30,6 +32,7 @@ const MODULE_LABEL: Record<ModuleId, string> = {
   tools: "nav.module.tools",
   tasks: "nav.module.tasks",
   presets: "nav.module.presets",
+  about: "nav.module.about",
 };
 
 interface Props {
