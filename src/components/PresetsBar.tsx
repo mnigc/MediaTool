@@ -1,13 +1,13 @@
 import { useState } from "react";
 import {
   addPreset,
-  loadPresets,
   presetDisplayName,
   removePreset,
-  type Preset,
+  usePresets,
 } from "../lib/presets";
 import { defaultParamsFor } from "../lib/defaults";
 import { useI18n } from "../i18n";
+import { usePrompt } from "./PromptDialog";
 import type { JobParams, ToolId } from "../types";
 
 const DEFAULT_PRESET = "__default__";
@@ -26,7 +26,9 @@ export default function PresetsBar({
 }) {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
-  const [presets, setPresets] = useState<Preset[]>(() => loadPresets());
+  // Shared store: presets saved/deleted on any other card or page update here.
+  const presets = usePresets();
+  const { prompt, dialog } = usePrompt();
   const [selected, setSelected] = useState<string>(DEFAULT_PRESET);
 
   const myPresets = presets.filter((p) => p.toolId === toolId);
@@ -41,18 +43,18 @@ export default function PresetsBar({
     if (p) onChange({ ...params, ...p.params });
   };
 
-  const save = () => {
-    const name = window.prompt(
-      t("pm.presetName"),
-      `${t(`tool.${toolId}.name`)} ${t("pm.presetName")}`
-    );
+  const save = async () => {
+    const name = await prompt({
+      title: t("pm.presetName"),
+      initialValue: `${t(`tool.${toolId}.name`)} ${t("pm.presetName")}`,
+    });
     if (!name) return;
-    setPresets(addPreset({ name, toolId, params }));
+    addPreset({ name, toolId, params });
     setSelected(name);
   };
 
   const del = (name: string) => {
-    setPresets(removePreset(toolId, name));
+    removePreset(toolId, name);
     if (selected === name) setSelected("");
   };
 
@@ -169,6 +171,7 @@ export default function PresetsBar({
           </button>
         )}
       </div>
+      {dialog}
     </div>
   );
 }

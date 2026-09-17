@@ -8,7 +8,7 @@ import { friendlyError } from "../lib/errors";
 import { defaultParamsFor } from "../lib/defaults";
 import JobParamsEditor from "./JobParamsEditor";
 import { startWorkflow } from "../workflow/engine";
-import { WORKFLOW_STEP_TOOLS, type StepRun, type WorkflowStep } from "../workflow/types";
+import { TERMINAL_STEP_TOOLS, WORKFLOW_STEP_TOOLS, type StepRun, type WorkflowStep } from "../workflow/types";
 import type { JobParams, ToolId } from "../types";
 
 let stepCounter = 0;
@@ -93,6 +93,9 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
   };
 
   const canRun = !running && !!input && steps.length > 0;
+  // A terminal step (screenshot/extract-audio) emits a non-video artifact:
+  // nothing can run after it, so once present no further steps can be added.
+  const hasTerminal = steps.some((s) => TERMINAL_STEP_TOOLS.includes(s.toolId));
 
   const onUpdate = useCallback((r: StepRun) => {
     setRunStates((prev) => {
@@ -202,12 +205,19 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
             </button>
             {addOpen && (
               <div className="absolute right-0 top-full z-30 mt-1 max-h-72 w-56 overflow-y-auto rounded-xl border border-neutral-200 bg-white p-1.5 shadow-card dark:border-neutral-700 dark:bg-neutral-900 animate-slide-up">
+                {hasTerminal && (
+                  <p className="px-2.5 py-1.5 text-[10px] text-neutral-400 dark:text-neutral-500">
+                    {t("workflow.terminalHint")}
+                  </p>
+                )}
                 {WORKFLOW_STEP_TOOLS.map((toolId) => (
                   <button
                     key={toolId}
                     type="button"
                     onClick={() => addStep(toolId)}
-                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-neutral-700 transition hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800"
+                    disabled={hasTerminal}
+                    title={hasTerminal ? t("workflow.terminalHint") : undefined}
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent dark:text-neutral-200 dark:hover:bg-neutral-800"
                   >
                     <span className="text-neutral-400 dark:text-neutral-500">{t(`tool.${toolId}.name`)}</span>
                   </button>
@@ -256,7 +266,7 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
                       <>
                         <button
                           type="button"
-                          disabled={i === 0}
+                          disabled={i === 0 || TERMINAL_STEP_TOOLS.includes(st.toolId)}
                           onClick={() => moveStep(i, -1)}
                           className="rounded p-1 text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-600 disabled:opacity-30 dark:hover:bg-neutral-800"
                           aria-label={t("workflow.moveUp")}
@@ -265,7 +275,10 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
                         </button>
                         <button
                           type="button"
-                          disabled={i === steps.length - 1}
+                          disabled={
+                            i === steps.length - 1 ||
+                            (i + 1 < steps.length && TERMINAL_STEP_TOOLS.includes(steps[i + 1].toolId))
+                          }
                           onClick={() => moveStep(i, 1)}
                           className="rounded p-1 text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-600 disabled:opacity-30 dark:hover:bg-neutral-800"
                           aria-label={t("workflow.moveDown")}

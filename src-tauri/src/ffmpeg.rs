@@ -55,6 +55,13 @@ pub fn resolve(app: &tauri::AppHandle, base: &str) -> Option<PathBuf> {
         }
     }
 
+    if let Some(found) = find_in_path(&name) {
+        return Some(found);
+    }
+
+    // Last resort: let the OS resolve the bare name. (On Windows this search
+    // also covers the current working directory — find_in_path above already
+    // checked the real PATH dirs, so this only fires when nothing else worked.)
     if Command::new(&name)
         .arg("-version")
         .stdout(Stdio::null())
@@ -69,13 +76,34 @@ pub fn resolve(app: &tauri::AppHandle, base: &str) -> Option<PathBuf> {
     None
 }
 
-/// Spawn a process, returning the child handle, its stdout pipe, and a shared
-/// buffer that captures stderr (used to surface FFmpeg error output on failure).
+/// Walk the PATH environment explicitly instead of letting CreateProcess
+/// resolve a bare executable name (which also searches the current working
+/// directory first — a hijack vector when launched from a downloaded folder).
+fn find_in_path(name: &str) -> Option<PathBuf> {
+    let dirs = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&dirs) {
+        let cand = dir.join(name);
+        if cand.is_file() {
+            return Some(cand);
+        }
+    }
+    None
+}
+
+/// Spawn a process, returning the child handle, its stdout pipe, a shared
+/// buffer that captures stderr (used to surface FFmpeg error output on
+/// failure), and the drain-thread handle (join it before reading the buffer
+/// to make sure the tail of stderr has been captured).
 pub fn spawn(
     app: &tauri::AppHandle,
     base: &str,
     args: &[String],
-) -> Result<(std::process::Child, std::process::ChildStdout, Arc<Mutex<Vec<u8>>>)> {
+) -> Result<(
+    std::process::Child,
+    std::process::ChildStdout,
+    Arc<Mutex<Vec<u8>>>,
+    std::thread::JoinHandle<()>,
+)> {
     let bin = resolve(app, base).ok_or_else(|| {
         AppError(format!(
             "找不到 {}：请将 FFmpeg 放在程序同目录，或安装到系统 PATH 中",
@@ -85,6 +113,12 @@ pub fn spawn(
 
     let mut cmd = Command::new(&bin);
     cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // GUI-subsystem parents otherwise pop up a console window per child.
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
 
     let mut child = cmd.spawn().map_err(AppError::from)?;
     let stdout = child
@@ -96,9 +130,9 @@ pub fn spawn(
     // background thread so the pipe buffer never fills and blocks the process,
     // while capturing it for error reporting (capped to avoid unbounded growth).
     let stderr_buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-    if let Some(stderr) = child.stderr.take() {
+    let drain = if let Some(stderr) = child.stderr.take() {
         let buf_clone = stderr_buf.clone();
-        const CAP: usize = 200_000;
+        const CAP: usize = 1_000_000;
         std::thread::spawn(move || {
             let mut r = stderr;
             let mut chunk = [0u8; 4096];
@@ -115,8 +149,10 @@ pub fn spawn(
                     Err(_) => break,
                 }
             }
-        });
-    }
+        })
+    } else {
+        std::thread::spawn(|| {})
+    };
 
-    Ok((child, stdout, stderr_buf))
+    Ok((child, stdout, stderr_buf, drain))
 }

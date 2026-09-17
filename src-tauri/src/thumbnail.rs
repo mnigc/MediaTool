@@ -1,61 +1,113 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::Child;
+use std::time::{Duration, Instant};
 
 use crate::error::Result;
 use crate::ffmpeg;
 
+const THUMB_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// Return a data-URL thumbnail (base64) for the given media path, or `None` if
 /// no preview is available (audio, unknown, or generation failed).
 #[tauri::command]
-pub async fn get_thumbnail(app: tauri::AppHandle, path: String, media_type: String) -> Result<Option<String>> {
+pub async fn get_thumbnail(
+    app: tauri::AppHandle,
+    path: String,
+    media_type: String,
+) -> Result<Option<String>> {
     let path = PathBuf::from(&path);
     if !path.exists() {
         return Ok(None);
     }
+    if media_type != "image" && media_type != "video" {
+        return Ok(None);
+    }
 
-    match media_type.as_str() {
-        "image" => Ok(image_thumbnail(&path)),
-        "video" => video_thumbnail(&app, &path),
+    // ffmpeg runs block for seconds; keep them off the async runtime workers.
+    let res = tauri::async_runtime::spawn_blocking(move || match media_type.as_str() {
+        "image" => image_thumbnail(&app, &path),
+        _ => video_thumbnail(&app, &path),
+    })
+    .await
+    .map_err(|e| crate::error::AppError(e.to_string()))?;
+    res
+}
+
+/// Wait for a child to exit with a hard timeout; kill it when it hangs
+/// (corrupt files / slow paths can stall ffmpeg indefinitely).
+fn wait_with_timeout(mut child: Child, timeout: Duration) -> bool {
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) if start.elapsed() > timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(_) => return false,
+        }
+    }
+}
+
+/// Run one ffmpeg invocation that writes `tmp`, then return its bytes as a
+/// PNG data URL. Attempts `args` once; on failure runs `retry_args` if given.
+fn render_thumbnail(
+    app: &tauri::AppHandle,
+    args: Vec<String>,
+    retry_args: Option<Vec<String>>,
+    tmp: &Path,
+) -> Result<Option<String>> {
+    let run = |args: Vec<String>| -> bool {
+        let Ok((child, _stdout, _stderr, _drain)) = ffmpeg::spawn(app, "ffmpeg", &args) else {
+            return false;
+        };
+        wait_with_timeout(child, THUMB_TIMEOUT) && tmp.exists()
+    };
+
+    if !run(args) {
+        let _ = std::fs::remove_file(tmp);
+        let retried = match retry_args {
+            Some(retry) => run(retry),
+            None => false,
+        };
+        if !retried {
+            let _ = std::fs::remove_file(tmp);
+            return Ok(None);
+        }
+    }
+
+    let mut buf = Vec::new();
+    let read = std::fs::File::open(tmp).ok().and_then(|mut f| f.read_to_end(&mut buf).ok());
+    let _ = std::fs::remove_file(tmp);
+    match read {
+        Some(_) if !buf.is_empty() => {
+            Ok(Some(format!("data:image/png;base64,{}", base64_encode(&buf))))
+        }
         _ => Ok(None),
     }
 }
 
-fn mime_for_path(path: &Path) -> &'static str {
-    match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("png") => "image/png",
-        Some("jpg") | Some("jpeg") => "image/jpeg",
-        Some("webp") => "image/webp",
-        Some("gif") => "image/gif",
-        Some("bmp") => "image/bmp",
-        Some("avif") => "image/avif",
-        _ => "image/png",
-    }
-}
-
-fn image_thumbnail(path: &Path) -> Option<String> {
-    let mut buf = Vec::new();
-    if std::fs::File::open(path).ok()?.read_to_end(&mut buf).is_err() {
-        return None;
-    }
-    let mime = mime_for_path(path);
-    let b64 = base64_encode(&buf);
-    Some(format!("data:{};base64,{}", mime, b64))
+fn image_thumbnail(app: &tauri::AppHandle, path: &Path) -> Result<Option<String>> {
+    let tmp = temp_png("mediatool_imgthumb");
+    let args: Vec<String> = vec![
+        "-i".into(),
+        path.to_string_lossy().to_string(),
+        "-frames:v".into(),
+        "1".into(),
+        "-vf".into(),
+        "scale=320:-2".into(),
+        "-y".into(),
+        tmp.to_string_lossy().to_string(),
+    ];
+    // Images need no retry pass.
+    render_thumbnail(app, args, None, &tmp)
 }
 
 fn video_thumbnail(app: &tauri::AppHandle, path: &Path) -> Result<Option<String>> {
-    let tmp = std::env::temp_dir().join(format!(
-        "mediatool_thumb_{}.png",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-
+    let tmp = temp_png("mediatool_thumb");
     let args: Vec<String> = vec![
         "-ss".into(),
         "1".into(),
@@ -64,46 +116,33 @@ fn video_thumbnail(app: &tauri::AppHandle, path: &Path) -> Result<Option<String>
         "-frames:v".into(),
         "1".into(),
         "-vf".into(),
-        "scale=320:-1".into(),
+        "scale=320:-2".into(),
         "-y".into(),
         tmp.to_string_lossy().to_string(),
     ];
+    // Retry without fast-seek (short clips where 1s is past the end).
+    let retry: Vec<String> = vec![
+        "-i".into(),
+        path.to_string_lossy().to_string(),
+        "-frames:v".into(),
+        "1".into(),
+        "-vf".into(),
+        "scale=320:-2".into(),
+        "-y".into(),
+        tmp.to_string_lossy().to_string(),
+    ];
+    render_thumbnail(app, args, Some(retry), &tmp)
+}
 
-    let (mut child, _stdout, _stderr) = ffmpeg::spawn(app, "ffmpeg", &args)?;
-    let code = child.wait().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
-    if code != 0 || !tmp.exists() {
-        let _ = std::fs::remove_file(&tmp);
-        // Fall back: try without fast-seek (short clips).
-        let args2: Vec<String> = vec![
-            "-i".into(),
-            path.to_string_lossy().to_string(),
-            "-frames:v".into(),
-            "1".into(),
-            "-vf".into(),
-            "scale=320:-1".into(),
-            "-y".into(),
-            tmp.to_string_lossy().to_string(),
-        ];
-        let (mut child2, _s2, _e2) = ffmpeg::spawn(app, "ffmpeg", &args2)?;
-        let c2 = child2.wait().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
-        if c2 != 0 || !tmp.exists() {
-            let _ = std::fs::remove_file(&tmp);
-            return Ok(None);
-        }
-    }
-
-    let mut buf = Vec::new();
-    match std::fs::File::open(&tmp).ok().and_then(|mut f| f.read_to_end(&mut buf).ok()) {
-        Some(_) => {
-            let _ = std::fs::remove_file(&tmp);
-            let b64 = base64_encode(&buf);
-            Ok(Some(format!("data:image/png;base64,{}", b64)))
-        }
-        None => {
-            let _ = std::fs::remove_file(&tmp);
-            Ok(None)
-        }
-    }
+fn temp_png(prefix: &str) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "{}_{}.png",
+        prefix,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ))
 }
 
 fn base64_encode(input: &[u8]) -> String {

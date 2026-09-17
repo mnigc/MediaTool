@@ -67,7 +67,6 @@ function AppShell({
         );
       case "video":
       case "audio":
-      case "image":
       case "tools":
         return <ModulePage module={route.id} onOpenTool={openTool} />;
       default:

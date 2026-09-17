@@ -59,18 +59,17 @@ export function useUpdater() {
     setPhase("downloading");
     setProgress(0);
     let contentLength = 0;
+    let downloaded = 0;
     try {
       await update.download((event) => {
         if (event.event === "Started") {
           contentLength = event.data.contentLength ?? 0;
+          downloaded = 0;
         } else if (event.event === "Progress") {
+          // chunkLength is the size of THIS chunk, not the running total.
+          downloaded += event.data.chunkLength;
           if (contentLength > 0) {
-            setProgress(
-              Math.min(
-                100,
-                Math.round((event.data.chunkLength / contentLength) * 100)
-              )
-            );
+            setProgress(Math.min(100, Math.round((downloaded / contentLength) * 100)));
           }
         } else if (event.event === "Finished") {
           setProgress(100);

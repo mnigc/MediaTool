@@ -11,7 +11,18 @@ permissions:
 
 jobs:
   build-and-release:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # arm64 runner; builds a universal binary covering Intel + Apple Silicon
+          - platform: macos-latest
+            args: --target universal-apple-darwin --bundles dmg
+          - platform: ubuntu-latest
+            args: --bundles deb,rpm,appimage
+          - platform: windows-latest
+            args: --bundles nsis
+    runs-on: ${{ matrix.platform }}
     env:
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -27,6 +38,28 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Add macOS Rust targets (universal binary)
+        if: matrix.platform == 'macos-latest'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+          # AppImage tooling needs FUSE on 24.04 (t64 name, fallback for older)
+          sudo apt-get install -y libfuse2t64 || sudo apt-get install -y libfuse2 || true
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -44,6 +77,7 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPIMAGE_EXTRACT_AND_RUN: 1
         with:
           tagName: v__VERSION__
           releaseName: v__VERSION__
@@ -51,4 +85,4 @@ jobs:
           releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
-          args: --bundles nsis
+          args: ${{ matrix.args }}

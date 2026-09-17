@@ -2,22 +2,22 @@ import { useState } from "react";
 import type { JobParams, ToolId } from "../types";
 import {
   addPreset,
-  loadPresets,
   presetDisplayName,
   removePreset,
   restoreBuiltin,
   saveBuiltinOverride,
+  usePresets,
   type Preset,
 } from "../lib/presets";
 import { defaultParamsFor } from "../lib/defaults";
 import PresetParamsEditor from "./PresetParamsEditor";
+import { useConfirm } from "./ConfirmDialog";
 import { XIcon } from "./icons";
 import { useI18n } from "../i18n";
 
 const PRESET_TOOLS: ToolId[] = [
   "video-compress",
   "audio-compress",
-  "image-compress",
   "extract-audio",
 ];
 
@@ -28,7 +28,9 @@ interface PresetManagerProps {
 
 export default function PresetManager({ open, onClose }: PresetManagerProps) {
   const { t } = useI18n();
-  const [presets, setPresets] = useState<Preset[]>(() => loadPresets());
+  // Shared store — stays in sync with preset bars and the presets page.
+  const presets = usePresets();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [editing, setEditing] = useState<Preset | null>(null);
   const [isNew, setIsNew] = useState(false);
 
@@ -50,24 +52,30 @@ export default function PresetManager({ open, onClose }: PresetManagerProps) {
     setIsNew(false);
   };
 
-  const handleDelete = (p: Preset) => {
-    setPresets(removePreset(p.toolId, p.name));
+  const handleDelete = async (p: Preset) => {
+    // Custom presets live only in localStorage — deleting is irreversible.
+    const ok = await confirm({
+      title: t("pm.deleteTitle"),
+      message: t("pm.deleteMsg", { name: presetDisplayName(p, t) }),
+      confirmLabel: t("pm.delete"),
+      cancelLabel: t("confirm.cancel"),
+      danger: true,
+    });
+    if (ok) removePreset(p.toolId, p.name);
   };
 
   const handleSave = () => {
     if (!editing) return;
     const name = editing.name.trim();
     if (!name) return;
-    setPresets(
-      editing.builtin
-        ? saveBuiltinOverride(editing.toolId, name, editing.params)
-        : addPreset({ ...editing, name, builtin: false })
-    );
+    editing.builtin
+      ? saveBuiltinOverride(editing.toolId, name, editing.params)
+      : addPreset({ ...editing, name, builtin: false });
     setEditing(null);
   };
 
   const handleRestore = (p: Preset) => {
-    setPresets(restoreBuiltin(p.toolId, p.name));
+    restoreBuiltin(p.toolId, p.name);
   };
 
   const handleToolChange = (toolId: ToolId) => {
@@ -185,6 +193,7 @@ export default function PresetManager({ open, onClose }: PresetManagerProps) {
           )}
         </div>
       </div>
+      {confirmDialog}
     </div>
   );
 }

@@ -5,7 +5,6 @@ import { MODULES, toolToModule, type ModuleId, type Route } from "../tools/regis
 import {
   ChartIcon,
   FilmIcon,
-  ImageIcon,
   InfoIcon,
   MusicIcon,
   SettingsIcon,
@@ -16,7 +15,6 @@ import {
 const MODULE_ICONS: Record<ModuleId, ComponentType<{ className?: string }>> = {
   video: FilmIcon,
   audio: MusicIcon,
-  image: ImageIcon,
   workflow: WorkflowIcon,
   tools: SettingsIcon,
   tasks: ChartIcon,
@@ -27,7 +25,6 @@ const MODULE_ICONS: Record<ModuleId, ComponentType<{ className?: string }>> = {
 const MODULE_LABEL: Record<ModuleId, string> = {
   video: "nav.module.video",
   audio: "nav.module.audio",
-  image: "nav.module.image",
   workflow: "nav.module.workflow",
   tools: "nav.module.tools",
   tasks: "nav.module.tasks",

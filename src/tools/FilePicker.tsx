@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getThumbnail } from "../lib/tauri";
 import { useI18n } from "../i18n";
+import { useToasts } from "../hooks/useToasts";
 import type { ToolMeta } from "./registry";
 
 function basename(p: string): string {
@@ -26,6 +27,7 @@ interface Props {
  * drag-drops are routed here by the workbench via TaskCenter. */
 export default function FilePicker({ meta, files, onChange }: Props) {
   const { t } = useI18n();
+  const { pushToast } = useToasts();
   const [thumb, setThumb] = useState<string | null>(null);
 
   const previewPath = files[0];
@@ -55,10 +57,13 @@ export default function FilePicker({ meta, files, onChange }: Props) {
       filters: [{ name: filterName, extensions: meta.accepts }],
     });
     const arr = Array.isArray(sel) ? sel : sel ? [sel] : [];
+    if (arr.length === 0) return; // user cancelled — keep the current selection
     const valid = arr.filter((p) => extOk(p, meta.accepts));
-    if (valid.length > 0 || arr.length === 0) {
-      add(valid);
+    if (valid.length === 0) {
+      pushToast("error", t("dz.unsupported"));
+      return;
     }
+    add(valid);
   };
 
   const add = (paths: string[]) => {

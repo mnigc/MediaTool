@@ -1,9 +1,6 @@
 import type {
   AudioParams,
-  ImageParams,
   JobParams,
-  MediaInfo,
-  MediaType,
   ToolId,
   VideoParams,
 } from "../types";
@@ -25,16 +22,14 @@ function videoDefaults(format: string, crf: number, audioKbps: number): VideoPar
 }
 
 /** Compress-tool defaults: keep the source container, focus on size. */
-export function blankParams(mediaType: MediaType): JobParams {
+export function blankParams(mediaType: "video" | "audio"): JobParams {
   switch (mediaType) {
     case "video":
       return videoDefaults("source", 28, 128) satisfies VideoParams;
-    case "image":
-      return { format: "source", quality: 80, maxDimension: undefined } satisfies ImageParams;
     case "audio":
       return { format: "source", bitrateKbps: 128 } satisfies AudioParams;
     default:
-      return { format: "source", quality: 80 } as JobParams;
+      return { format: "source", bitrateKbps: 128 } as JobParams;
   }
 }
 
@@ -45,8 +40,6 @@ function convertParams(toolId: ToolId): JobParams | null {
       return videoDefaults("mp4", 22, 192);
     case "audio-convert":
       return { format: "mp3", bitrateKbps: 192 } satisfies AudioParams;
-    case "image-convert":
-      return { format: "webp", quality: 80, maxDimension: undefined } satisfies ImageParams;
     default:
       return null;
   }
@@ -58,8 +51,6 @@ export function defaultParamsFor(toolId: ToolId): JobParams {
       return blankParams("video");
     case "audio-compress":
       return blankParams("audio");
-    case "image-compress":
-      return blankParams("image");
     default: {
       const p = convertParams(toolId);
       if (p) return p;
@@ -68,8 +59,4 @@ export function defaultParamsFor(toolId: ToolId): JobParams {
       return blankParams("video");
     }
   }
-}
-
-export function defaultParams(info: MediaInfo): JobParams {
-  return blankParams(info.mediaType);
 }

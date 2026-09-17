@@ -2,15 +2,16 @@ import { useMemo, useState } from "react";
 import { useI18n } from "../i18n";
 import {
   addPreset,
-  loadPresets,
   presetDisplayName,
   removePreset,
   restoreBuiltin,
   saveBuiltinOverride,
+  usePresets,
   type Preset,
 } from "../lib/presets";
 import { defaultParamsFor } from "../lib/defaults";
 import PresetParamsEditor from "../components/PresetParamsEditor";
+import { useConfirm } from "../components/ConfirmDialog";
 import { XIcon } from "../components/icons";
 import type { JobParams, ToolId } from "../types";
 import type { WorkbenchId } from "./registry";
@@ -24,23 +25,16 @@ interface Group {
 const ORDER: string[] = [
   "video-compress",
   "audio-compress",
-  "image-compress",
-  "image-crop",
-  "image-resize",
-  "video-crop",
-  "gif",
-  "image-adjust",
-  "image-watermark",
   "watermark",
   "extract-audio",
 ];
 
 export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: WorkbenchId) => void }) {
   const { t } = useI18n();
-  const [version, setVersion] = useState(0);
+  const all = usePresets();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [editing, setEditing] = useState<Preset | null>(null);
   const [isNew, setIsNew] = useState(false);
-  const all = useMemo(() => loadPresets(), [version]);
 
   const groups: Group[] = useMemo(() => {
     const byTool = new Map<string, Preset[]>();
@@ -63,16 +57,19 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
     return ordered;
   }, [all]);
 
-  const reload = () => setVersion((v) => v + 1);
-
-  const del = (toolId: string, name: string) => {
-    removePreset(toolId, name);
-    reload();
+  const del = async (toolId: string, name: string) => {
+    const ok = await confirm({
+      title: t("pm.deleteTitle"),
+      message: t("pm.deleteMsg", { name }),
+      confirmLabel: t("pm.delete"),
+      cancelLabel: t("confirm.cancel"),
+      danger: true,
+    });
+    if (ok) removePreset(toolId, name);
   };
 
   const restore = (toolId: string, name: string) => {
     restoreBuiltin(toolId, name);
-    reload();
   };
 
   const startNew = () => {
@@ -105,7 +102,6 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
       addPreset({ ...editing, name, builtin: false });
     }
     setEditing(null);
-    reload();
   };
 
   return (
@@ -303,6 +299,7 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
           </div>
         </div>
       )}
+      {confirmDialog}
     </div>
   );
 }

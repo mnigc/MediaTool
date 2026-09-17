@@ -90,7 +90,9 @@ function runOne(
       }
 
       if (res.skipped) {
-        fin({ ok: true, output: null, skipped: true, cancelled: false, error: null });
+        // Backend reports the existing output that caused the skip so the
+        // chain can feed it onward instead of silently reusing the input.
+        fin({ ok: true, output: res.output ?? null, skipped: true, cancelled: false, error: null });
         return;
       }
 
@@ -178,6 +180,16 @@ export function startWorkflow(opts: {
   let cancelled = false;
   let mergedId: string | null = null;
   let activeId: string | null = null;
+  // Guarantee: onFinish fires exactly once, whatever path the run takes —
+  // including cancels that land between the merge attempt and the fallback
+  // loop (previously those paths finished silently and the UI stayed in
+  // "running" forever).
+  let finished = false;
+  const finish = (ok: boolean, error?: string | null, output?: string | null) => {
+    if (finished) return;
+    finished = true;
+    onFinish?.(ok, error, output);
+  };
 
   const cancel = () => {
     cancelled = true;
@@ -206,12 +218,12 @@ export function startWorkflow(opts: {
           for (let i = 0; i < steps.length; i++) {
             onUpdate({ index: i, status: "done", percent: 100 });
           }
-          onFinish?.(true, null, null);
+          finish(true, null, null);
         } else {
           mergedId = res.id;
           await runMerged(res.id, steps, onUpdate, (ok2, error, output) => {
-            if (cancelled) onFinish?.(false, t("job.cancelled"), null);
-            else onFinish?.(ok2, error, output);
+            if (cancelled) finish(false, t("job.cancelled"), null);
+            else finish(ok2, error, output);
           }, t);
         }
       }
@@ -219,7 +231,11 @@ export function startWorkflow(opts: {
       usedMerged = false;
     }
 
-    if (usedMerged || cancelled) return;
+    if (usedMerged) return;
+    if (cancelled) {
+      finish(false, t("job.cancelled"), null);
+      return;
+    }
 
     // 2) Fall back: run each step in sequence, feeding the previous output in.
     let working = input;
@@ -242,23 +258,28 @@ export function startWorkflow(opts: {
 
       if (cancelled) {
         onUpdate({ index: i, status: "error", percent: 0, error: t("job.cancelled"), input: prev });
-        onFinish?.(false, t("job.cancelled"), null);
+        finish(false, t("job.cancelled"), null);
         return;
       }
 
       if (!result.ok) {
         onUpdate({ index: i, status: "error", percent: 0, error: result.error ?? t("err.friendly.empty"), input: prev });
-        onFinish?.(false, result.error ?? t("err.friendly.empty"), null);
+        finish(false, result.error ?? t("err.friendly.empty"), null);
         return;
       }
 
+      // A skipped step's "output" is the existing file reported by the
+      // backend; falling back to the previous output would silently drop
+      // that step's processing from the chain.
       const output = result.output ?? prev;
       onUpdate({ index: i, status: "done", percent: 100, input: prev, output });
       working = output;
     }
 
-    if (!cancelled) {
-      onFinish?.(true, null, working);
+    if (cancelled) {
+      finish(false, t("job.cancelled"), null);
+    } else {
+      finish(true, null, working);
     }
   })();
 

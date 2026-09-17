@@ -31,9 +31,7 @@ export default function Header({
           onDoubleClick={() => appWindow.toggleMaximize()}
           className="flex min-w-0 flex-1 cursor-default items-center gap-3"
         >
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl brand-gradient shadow-sm">
-            <LogoIcon className="h-6 w-6" />
-          </div>
+          <LogoIcon className="h-9 w-9 drop-shadow-sm" />
           <div className="leading-tight">
             <div className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
               MediaTool

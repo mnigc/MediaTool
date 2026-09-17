@@ -27,10 +27,7 @@ dist-ssr
 src-tauri/target
 
 # FFmpeg sidecar binaries (downloaded via scripts/fetch-ffmpeg.ps1, not committed)
-src-tauri/binaries/*.exe
-src-tauri/binaries/*.zip
-src-tauri/binaries/dl.log
-src-tauri/binaries/ffmpeg-extracted/
+src-tauri/binaries/*
 
 # Verification artifacts
 scripts/verify.log

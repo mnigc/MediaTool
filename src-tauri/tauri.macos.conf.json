@@ -1,0 +1,9 @@
+{
+  "bundle": {
+    "targets": ["app", "dmg"],
+    "resources": {
+      "binaries/ffmpeg": "binaries/",
+      "binaries/ffprobe": "binaries/"
+    }
+  }
+}

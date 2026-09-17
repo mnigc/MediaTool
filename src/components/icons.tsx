@@ -1,22 +1,11 @@
+import appIconUrl from "../assets/app-icon.png";
+
 interface IconProps {
   className?: string;
 }
 
 export function LogoIcon({ className }: IconProps) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
-      <rect
-        x="4.5"
-        y="5.5"
-        width="15"
-        height="13"
-        rx="2.2"
-        stroke="white"
-        strokeWidth="1.8"
-      />
-      <path d="M10 9l4.6 3-4.6 3z" fill="white" />
-    </svg>
-  );
+  return <img src={appIconUrl} className={className} alt="" aria-hidden draggable={false} />;
 }
 
 export function UploadIcon({ className }: IconProps) {
@@ -197,14 +186,6 @@ export function SlidersIcon({ className }: IconProps) {
   );
 }
 
-export function GifIcon({ className }: IconProps) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
-      <rect x="3" y="4" width="18" height="16" rx="2" />
-      <path d="M7 12h4M15 12h2M7 16h4M15 16h2M7 8h4M15 8h2" />
-    </svg>
-  );
-}
 
 export function CameraIcon({ className }: IconProps) {
   return (
@@ -305,14 +286,6 @@ export function ScissorsIcon({ className }: IconProps) {
   );
 }
 
-export function RotateIcon({ className }: IconProps) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
-      <path d="M21 2v6h-6" />
-      <path d="M21 8a9 9 0 1 0 .49 4.2" />
-    </svg>
-  );
-}
 
 export function MuteIcon({ className }: IconProps) {
   return (
@@ -368,14 +341,6 @@ export function WorkflowIcon({ className }: IconProps) {
 
 /* ── New toolbox-tool icons ─────────────────────────────────── */
 
-export function CropIcon({ className }: IconProps) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
-      <path d="M6 2v14a2 2 0 0 0 2 2h14" />
-      <path d="M2 6h14a2 2 0 0 1 2 2v14" />
-    </svg>
-  );
-}
 
 export function VolumeIcon({ className }: IconProps) {
   return (
@@ -386,14 +351,6 @@ export function VolumeIcon({ className }: IconProps) {
   );
 }
 
-export function ReverseIcon({ className }: IconProps) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
-      <path d="M3 12a9 9 0 1 1 3 6.7" />
-      <path d="M3 19v-4h4" />
-    </svg>
-  );
-}
 
 export function SubtitleIcon({ className }: IconProps) {
   return (
@@ -404,16 +361,6 @@ export function SubtitleIcon({ className }: IconProps) {
   );
 }
 
-export function AddAudioIcon({ className }: IconProps) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
-      <path d="M9 18V6l10-2v12" />
-      <circle cx="6" cy="18" r="3" />
-      <circle cx="16" cy="16" r="3" />
-      <path d="M19 6v12" />
-    </svg>
-  );
-}
 
 export function MergeIcon({ className }: IconProps) {
   return (
@@ -448,34 +395,6 @@ export function SilenceIcon({ className }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
       <path d="M4 12h3l2-5 3 14 3-9 2 4h3" />
-    </svg>
-  );
-}
-
-export function ResizeIcon({ className }: IconProps) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
-      <rect x="4" y="4" width="16" height="16" rx="2" />
-      <path d="M4 9h3M4 15h3M9 4v3M15 4v3M9 17v3M15 17v3M17 4v3M17 9h3M17 15h3" />
-    </svg>
-  );
-}
-
-export function PdfIcon({ className }: IconProps) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
-      <path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" />
-      <path d="M14 3v5h5" />
-      <path d="M9 13h6M9 16h4" />
-    </svg>
-  );
-}
-
-export function AdjustIcon({ className }: IconProps) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
-      <circle cx="12" cy="12" r="3.2" />
-      <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.5 5.5l2 2M16.5 16.5l2 2M18.5 5.5l-2 2M7.5 16.5l-2 2" />
     </svg>
   );
 }

@@ -1,6 +1,5 @@
 import type {
   AudioParams,
-  ImageParams,
   JobParams,
   MediaInfo,
   VideoParams,
@@ -10,7 +9,7 @@ export interface SizeEstimate {
   bytes: number;
   /** true when directly derivable (bitrate / target size / audio bitrate) */
   exact: boolean;
-  /** true when a heuristic (CRF quality / image re-encode) */
+  /** true when a heuristic (CRF quality estimate) */
   rough: boolean;
 }
 
@@ -66,26 +65,6 @@ function audioKbpsOf(codec: string, bitrateKbps: number | undefined): number {
   return bitrateKbps ?? 128;
 }
 
-function estimateImage(info: MediaInfo, p: ImageParams): SizeEstimate {
-  let pixelRatio = 1;
-  if (
-    p.maxDimension &&
-    p.maxDimension > 0 &&
-    info.width &&
-    info.height
-  ) {
-    const scale = Math.min(
-      p.maxDimension / info.width,
-      p.maxDimension / info.height,
-      1
-    );
-    if (scale > 0) pixelRatio = scale * scale;
-  }
-  const q = p.quality / 100;
-  const factor = pixelRatio * Math.pow(q, 1.3);
-  return { bytes: Math.round(info.sizeBytes * factor), exact: false, rough: true };
-}
-
 export function estimateOutputSize(
   info: MediaInfo,
   params: JobParams
@@ -98,10 +77,6 @@ export function estimateOutputSize(
     return { bytes: audioBytes(kbps, dur), exact: true, rough: false };
   }
 
-  if (info.mediaType === "image") {
-    return estimateImage(info, params as ImageParams);
-  }
-
   if (info.mediaType === "video") {
     const v = params as VideoParams;
 
@@ -109,7 +84,8 @@ export function estimateOutputSize(
 
     if (v.qualityMode === "target_size") {
       const mb = v.targetSizeMb ?? 10;
-      return { bytes: Math.round(mb * 1_000_000), exact: true, rough: false };
+      // MiB — matches the backend's bitrate math (mb * 1024² * 8 bits).
+      return { bytes: Math.round(mb * 1024 * 1024), exact: true, rough: false };
     }
 
     let videoKbps: number;

@@ -3,7 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { getThumbnail } from "../../lib/tauri";
 import { useI18n } from "../../i18n";
 import type { WatermarkParams } from "../../types";
-import { Field, FieldRow, NumInput } from "./ui";
+import { Field, FieldRow, NumInput, RequiredHint } from "./ui";
 
 const POSITIONS = ["tl", "tc", "tr", "ml", "mc", "mr", "bl", "bc", "br"] as const;
 
@@ -59,6 +59,7 @@ export default function WatermarkPanel({
           </span>
         )}
       </div>
+      <RequiredHint missing={!params.imagePath} />
 
       <Field label={t("tool.wm.position")}>
         <div className="grid w-[72px] grid-cols-3 gap-1">
@@ -72,7 +73,8 @@ export default function WatermarkPanel({
                   ? "bg-brand-600 dark:bg-brand-500"
                   : "bg-neutral-200 hover:bg-neutral-300 dark:bg-neutral-700 dark:hover:bg-neutral-600"
               }`}
-              title={p}
+              title={t(`opt.pos.${p}`)}
+              aria-label={t(`opt.pos.${p}`)}
             />
           ))}
         </div>

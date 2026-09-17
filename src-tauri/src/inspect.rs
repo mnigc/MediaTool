@@ -1,4 +1,3 @@
-use std::io::Read;
 use std::path::Path;
 
 use serde_json::Value;
@@ -64,11 +63,8 @@ pub fn inspect_sync(app: &AppHandle, path: &str) -> Result<MediaReport> {
         "-show_chapters".to_string(),
         path.to_string(),
     ];
-    let (_child, stdout, _stderr_buf) = ffmpeg::spawn(app, "ffprobe", &args)?;
-
-    let mut out = String::new();
-    let mut reader = std::io::BufReader::new(stdout);
-    reader.read_to_string(&mut out)?;
+    let (child, stdout, _stderr_buf, _drain) = ffmpeg::spawn(app, "ffprobe", &args)?;
+    let out = crate::media::read_stdout_timeout(child, stdout, std::time::Duration::from_secs(30))?;
     let v: Value = serde_json::from_str(&out)?;
 
     let format = v.get("format").cloned().unwrap_or(Value::Null);

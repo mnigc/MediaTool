@@ -1,0 +1,9 @@
+{
+  "bundle": {
+    "targets": ["deb", "rpm", "appimage"],
+    "resources": {
+      "binaries/ffmpeg": "binaries/",
+      "binaries/ffprobe": "binaries/"
+    }
+  }
+}

@@ -93,6 +93,7 @@ export default function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
+  const { t } = useI18n();
   if (!open) return null;
 
   return (
@@ -110,7 +111,7 @@ export default function ConfirmDialog({
         <button
           onClick={onCancel}
           className="absolute right-4 top-4 rounded-lg p-1.5 text-neutral-300 transition hover:bg-neutral-100 hover:text-neutral-600 dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-neutral-300"
-          aria-label="Close"
+          aria-label={t("a11y.close")}
         >
           <XIcon className="h-4 w-4" />
         </button>

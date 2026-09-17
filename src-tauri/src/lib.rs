@@ -9,6 +9,8 @@ mod models;
 mod state;
 mod thumbnail;
 
+use tauri::Manager;
+
 use state::JobManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -30,6 +32,14 @@ pub fn run() {
             commands::inspect_media,
             thumbnail::get_thumbnail
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app_handle, event| {
+            // Quitting mid-encode must not orphan the ffmpeg sidecars: kill
+            // every live child so no zombie processes keep burning CPU and
+            // writing partial output files after the app is gone.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                app_handle.state::<JobManager>().kill_all();
+            }
+        });
 }

@@ -177,6 +177,13 @@ export function TaskCenterProvider({
   const jobsRef = useRef<Job[]>(jobs);
   jobsRef.current = jobs;
 
+  // The done/progress listeners below live in a mount-only effect; they must
+  // read the *current* translation function, not the one from first render.
+  const tRef = useRef(t);
+  tRef.current = t;
+  const onToastRef = useRef(onToast);
+  onToastRef.current = onToast;
+
   // Persist the task queue to localStorage (debounced) so history survives restarts.
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
@@ -201,6 +208,8 @@ export function TaskCenterProvider({
 
   const pendingQueue = useRef<string[]>([]);
   const runningCount = useRef(0);
+  // Jobs with an in-flight startJob call (double-click guard).
+  const startingRef = useRef<Set<string>>(new Set());
 
   const dragId = useRef<string | null>(null);
   const dragOverId = useRef<string | null>(null);
@@ -234,7 +243,12 @@ export function TaskCenterProvider({
     });
 
     const doneUn = onDone((e) => {
-      runningCount.current = Math.max(0, runningCount.current - 1);
+      const finished = jobsRef.current.find((j) => j.rustId === e.id);
+      // Only running jobs hold a concurrency slot; stale events (job already
+      // removed/cleared) must not decrement.
+      if (finished && finished.phase === "running") {
+        runningCount.current = Math.max(0, runningCount.current - 1);
+      }
       const phase: Job["phase"] = e.ok ? "done" : e.cancelled ? "cancelled" : "error";
       setJobs((prev) =>
         prev.map((j) =>
@@ -253,9 +267,12 @@ export function TaskCenterProvider({
       );
 
       if (e.ok) {
-        optsToast("success", t("toast.done"));
+        onToastRef.current?.("success", tRef.current("toast.done"));
       } else if (!e.cancelled) {
-        optsToast("error", t("toast.fail", { error: e.error ?? t("job.unknownError") }));
+        onToastRef.current?.(
+          "error",
+          tRef.current("toast.fail", { error: e.error ?? tRef.current("job.unknownError") })
+        );
       }
 
       // Drain the pending queue, skipping stale entries (jobs removed or no
@@ -421,31 +438,38 @@ export function TaskCenterProvider({
   async function startOne(uiId: string) {
     const job = jobsRef.current.find((j) => j.uiId === uiId);
     if (!job || job.phase !== "queued") return;
+    // Guard against double-clicks: the job's phase stays "queued" in state
+    // until the IPC call resolves, so a fast second click would pass the
+    // check above and spawn a duplicate process.
+    if (startingRef.current.has(uiId)) return;
+    startingRef.current.add(uiId);
     setError(null);
-      try {
-        const extra = (job.params as unknown as { mergeInputs?: string[] }).mergeInputs;
-        const inputs = extra && extra.length > 0 ? extra : [job.info.path];
-        const res = await startJob({
-          toolId: job.toolId,
-          inputs,
-          params: job.params,
-          outputDir: settingsRef.current.outputDir ?? undefined,
-          outputSuffix: settingsRef.current.outputSuffix || "_mediatool",
-          gpu: settingsRef.current.gpu || "",
-          overwritePolicy: settingsRef.current.overwritePolicy,
-        });
+    try {
+      const extra = (job.params as unknown as { mergeInputs?: string[] }).mergeInputs;
+      const inputs = extra && extra.length > 0 ? extra : [job.info.path];
+      const res = await startJob({
+        toolId: job.toolId,
+        inputs,
+        params: job.params,
+        outputDir: settingsRef.current.outputDir ?? undefined,
+        outputSuffix: settingsRef.current.outputSuffix || "_mediatool",
+        gpu: settingsRef.current.gpu || "",
+        overwritePolicy: settingsRef.current.overwritePolicy,
+      });
       // Output already existed and policy = "skip": nothing was encoded.
       if (res.skipped) {
         setJobs((prev) =>
           prev.map((j) =>
             j.uiId === uiId
-              ? { ...j, rustId: res.id, phase: "skipped" }
+              ? { ...j, rustId: res.id, phase: "skipped", output: res.output ?? j.output }
               : j
           )
         );
         optsToast("info", t("job.skipped"));
         return;
       }
+      // Take the concurrency slot synchronously: incrementing only after the
+      // IPC round-trip would let rapid terminal events over-subscribe.
       runningCount.current += 1;
       setJobs((prev) =>
         prev.map((j) =>
@@ -462,6 +486,8 @@ export function TaskCenterProvider({
       );
     } catch (err) {
       setError(t("err.start", { error: String(err) }));
+    } finally {
+      startingRef.current.delete(uiId);
     }
   }
 
@@ -487,6 +513,11 @@ export function TaskCenterProvider({
   function cancelOne(uiId: string) {
     const job = jobsRef.current.find((j) => j.uiId === uiId);
     if (job?.rustId) cancelJob(job.rustId);
+    // Release the concurrency slot now; the backend's done event for this
+    // (already "cancelled") job won't decrement again.
+    if (job?.phase === "running") {
+      runningCount.current = Math.max(0, runningCount.current - 1);
+    }
     setJobs((prev) =>
       prev.map((j) =>
         j.uiId === uiId ? { ...j, phase: "cancelled" } : j
@@ -495,6 +526,13 @@ export function TaskCenterProvider({
   }
 
   function removeOne(uiId: string) {
+    // Removing a running card must also stop the process — otherwise ffmpeg
+    // keeps encoding with no UI left to cancel it.
+    const job = jobsRef.current.find((j) => j.uiId === uiId);
+    if (job?.phase === "running" && job.rustId) {
+      cancelJob(job.rustId);
+      runningCount.current = Math.max(0, runningCount.current - 1);
+    }
     setJobs((prev) => prev.filter((j) => j.uiId !== uiId));
   }
 
@@ -595,6 +633,11 @@ export function TaskCenterProvider({
 
   function clearAll() {
     pendingQueue.current = [];
+    // Stop live encodes: their done events would otherwise arrive with no job
+    // to attach to, and the processes would keep running uncontrolled.
+    for (const j of jobsRef.current) {
+      if (j.phase === "running" && j.rustId) cancelJob(j.rustId);
+    }
     runningCount.current = 0;
     setJobs([]);
   }

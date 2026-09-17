@@ -1,14 +1,13 @@
 import type { ToolId } from "../types";
 
-export type ToolCategory = "video" | "audio" | "image" | "tools";
+export type ToolCategory = "video" | "audio" | "tools";
 
 /** Top-level navigation modules. "tasks" and "presets" are full pages, the
- *  rest (video/audio/image/tools) render a function-card grid. "workflow" is a
+ *  rest (video/audio/tools) render a function-card grid. "workflow" is a
  *  full-page multi-step pipeline builder. */
 export type ModuleId =
   | "video"
   | "audio"
-  | "image"
   | "tools"
   | "tasks"
   | "presets"
@@ -30,7 +29,7 @@ export interface ToolMeta {
   accepts: string[];
   multiFile: boolean;
   /** For compress tools: which media type to filter for */
-  mediaType?: "video" | "audio" | "image";
+  mediaType?: "video" | "audio";
 }
 
 export const VIDEO_EXTS = [
@@ -48,7 +47,6 @@ export const ALL_EXTS = [...VIDEO_EXTS, ...AUDIO_EXTS, ...IMAGE_EXTS];
 export const MODULES: ModuleId[] = [
   "video",
   "audio",
-  "image",
   "workflow",
   "tools",
   "tasks",
@@ -62,16 +60,10 @@ export const TOOLS: ToolMeta[] = [
   { id: "video-convert", category: "video", accepts: VIDEO_EXTS, multiFile: true, mediaType: "video" },
   { id: "trim", category: "video", accepts: VIDEO_EXTS, multiFile: true },
   { id: "mute", category: "video", accepts: VIDEO_EXTS, multiFile: true },
-  { id: "rotate", category: "video", accepts: VIDEO_EXTS, multiFile: true },
-  { id: "gif", category: "video", accepts: VIDEO_EXTS, multiFile: false },
   { id: "screenshot", category: "video", accepts: VIDEO_EXTS, multiFile: false },
   { id: "speed", category: "video", accepts: VIDEO_EXTS, multiFile: false },
   { id: "watermark", category: "video", accepts: VIDEO_EXTS, multiFile: false },
-  { id: "video-crop", category: "video", accepts: VIDEO_EXTS, multiFile: false, mediaType: "video" },
-  { id: "video-volume", category: "video", accepts: VIDEO_EXTS, multiFile: false, mediaType: "video" },
-  { id: "video-reverse", category: "video", accepts: VIDEO_EXTS, multiFile: false, mediaType: "video" },
   { id: "video-subtitle", category: "video", accepts: VIDEO_EXTS, multiFile: false, mediaType: "video" },
-  { id: "video-addaudio", category: "video", accepts: VIDEO_EXTS, multiFile: false, mediaType: "video" },
   { id: "video-merge", category: "video", accepts: VIDEO_EXTS, multiFile: true, mediaType: "video" },
   { id: "video-frames", category: "video", accepts: VIDEO_EXTS, multiFile: false, mediaType: "video" },
   { id: "video-contact", category: "video", accepts: VIDEO_EXTS, multiFile: false, mediaType: "video" },
@@ -86,22 +78,13 @@ export const TOOLS: ToolMeta[] = [
   { id: "audio-pitch", category: "audio", accepts: AUDIO_EXTS, multiFile: false, mediaType: "audio" },
   { id: "audio-silence", category: "audio", accepts: AUDIO_EXTS, multiFile: false, mediaType: "audio" },
   { id: "audio-merge", category: "audio", accepts: AUDIO_EXTS, multiFile: true, mediaType: "audio" },
-  // image
-  { id: "image-compress", category: "image", accepts: IMAGE_EXTS, multiFile: true, mediaType: "image" },
-  { id: "image-convert", category: "image", accepts: IMAGE_EXTS, multiFile: true, mediaType: "image" },
-  { id: "image-resize", category: "image", accepts: IMAGE_EXTS, multiFile: false, mediaType: "image" },
-  { id: "image-rotate", category: "image", accepts: IMAGE_EXTS, multiFile: false, mediaType: "image" },
-  { id: "image-crop", category: "image", accepts: IMAGE_EXTS, multiFile: false, mediaType: "image" },
-  { id: "image-watermark", category: "image", accepts: IMAGE_EXTS, multiFile: false, mediaType: "image" },
-  { id: "image-pdf", category: "image", accepts: IMAGE_EXTS, multiFile: false, mediaType: "image" },
-  { id: "image-adjust", category: "image", accepts: IMAGE_EXTS, multiFile: false, mediaType: "image" },
   // tools (utilities)
   { id: "strip-metadata", category: "tools", accepts: ALL_EXTS, multiFile: true },
   { id: "inspect", category: "tools", accepts: ALL_EXTS, multiFile: false },
 ];
 
 function categoryToModule(cat: ToolCategory): ModuleId {
-  return cat; // video/audio/image/tools map 1:1 to their module
+  return cat; // video/audio/tools map 1:1 to their module
 }
 
 export function getTool(id: WorkbenchId): ToolMeta | undefined {

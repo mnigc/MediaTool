@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useI18n } from "../../i18n";
 
 export const sel =
   "w-full select-text rounded-md border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-700 transition focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-100 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 dark:focus:border-brand-500";
@@ -18,6 +19,17 @@ export function FieldRow({ children }: { children: ReactNode }) {
   return <div className="grid grid-cols-2 gap-3">{children}</div>;
 }
 
+/** Inline hint shown when a tool's required file has not been picked yet. */
+export function RequiredHint({ missing }: { missing: boolean }) {
+  const { t } = useI18n();
+  if (!missing) return null;
+  return (
+    <p className="text-[11px] font-medium text-error-500" role="alert">
+      {t("opt.requiredMissing")}
+    </p>
+  );
+}
+
 export function NumInput({
   value,
   onChange,
@@ -33,6 +45,24 @@ export function NumInput({
   step?: number;
   placeholder?: string;
 }) {
+  const handleChange = (raw: string) => {
+    if (raw === "") {
+      onChange(undefined);
+      return;
+    }
+    let v = Number(raw);
+    if (!Number.isFinite(v)) {
+      onChange(undefined);
+      return;
+    }
+    // Integer fields (step >= 1): reject decimals like 100.5 — the backend
+    // deserializes them as u32 and the whole start_job call would fail.
+    if ((step ?? 1) >= 1) v = Math.round(v);
+    if (min != null) v = Math.max(min, v);
+    if (max != null) v = Math.min(max, v);
+    onChange(v);
+  };
+
   return (
     <input
       type="number"
@@ -43,7 +73,7 @@ export function NumInput({
       placeholder={placeholder}
       value={value ?? ""}
       onFocus={(e) => e.currentTarget.select()}
-      onChange={(e) => onChange(e.target.value === "" ? undefined : Number(e.target.value))}
+      onChange={(e) => handleChange(e.target.value)}
     />
   );
 }

@@ -33,13 +33,24 @@ export default function InspectReport({ report }: { report: MediaReport }) {
   };
   const tags = (report.tags ?? {}) as Record<string, string>;
 
+  // 90-minute videos shouldn't render as "5412s".
+  const fmtDuration = (secs: number): string => {
+    const s = Math.round(secs);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const r = s % 60;
+    const mm = String(m).padStart(2, "0");
+    const ss = String(r).padStart(2, "0");
+    return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
+  };
+
   return (
     <div className="space-y-3">
       <Card title={t("tool.inspect.container")}>
         <Row k={t("tool.inspect.format")} v={report.formatName} />
         <Row k={t("sidebar.total")} v={formatBytes(report.sizeBytes)} />
         <Row k={t("tool.inspect.duration")} v={
-          report.durationSecs != null ? `${Math.round(report.durationSecs)}s` : null
+          report.durationSecs != null ? fmtDuration(report.durationSecs) : null
         } />
         <Row k={t("tool.inspect.bitrate")} v={report.bitrateKbps != null ? `${report.bitrateKbps} kbps` : null} />
         <Row k={t("tool.inspect.chapters")} v={report.chapterCount > 0 ? report.chapterCount : null} />

@@ -37,6 +37,14 @@ impl JobManager {
         }
     }
 
+    /// Kill every live child. Called on app exit so closing the window doesn't
+    /// leave orphan ffmpeg processes burning CPU and writing partial outputs.
+    pub fn kill_all(&self) {
+        for child in self.children.lock().unwrap().values() {
+            let _ = child.lock().unwrap().kill();
+        }
+    }
+
     pub fn finish(&self, id: &str) {
         self.children.lock().unwrap().remove(id);
         self.cancelled.lock().unwrap().remove(id);

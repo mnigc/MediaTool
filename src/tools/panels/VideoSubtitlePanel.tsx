@@ -1,7 +1,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { useI18n } from "../../i18n";
 import type { SubtitleParams } from "../../types";
-import { Field, Checkbox } from "./ui";
+import { Field, Checkbox, RequiredHint } from "./ui";
 
 export default function VideoSubtitlePanel({
   params,
@@ -34,6 +34,7 @@ export default function VideoSubtitlePanel({
           {params.path.replace(/\\/g, "/").split("/").pop()}
         </span>
       )}
+      <RequiredHint missing={!params.path} />
       <Field label={t("opt.burnIn")}>
         <Checkbox checked={params.burn ?? true} onChange={(v) => set({ burn: v })} />
       </Field>

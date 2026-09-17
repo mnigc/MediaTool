@@ -1,0 +1,9 @@
+{
+  "bundle": {
+    "targets": ["nsis", "msi"],
+    "resources": {
+      "binaries/ffmpeg.exe": "binaries/",
+      "binaries/ffprobe.exe": "binaries/"
+    }
+  }
+}

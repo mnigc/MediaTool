@@ -1,4 +1,3 @@
-use std::io::Read;
 use std::path::Path;
 
 use tauri::AppHandle;
@@ -8,7 +7,7 @@ use crate::ffmpeg;
 use crate::models::{MediaInfo, MediaType};
 
 /// Probe a media file using ffprobe. Blocking; call within spawn_blocking.
-fn probe_sync(app: &AppHandle, path: &str) -> Result<MediaInfo> {
+pub(crate) fn probe_sync(app: &AppHandle, path: &str) -> Result<MediaInfo> {
     let size_bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
 
     let args = vec![
@@ -20,13 +19,8 @@ fn probe_sync(app: &AppHandle, path: &str) -> Result<MediaInfo> {
         "-show_streams".into(),
         path.to_string(),
     ];
-    let (_child, stdout, _stderr_buf) = ffmpeg::spawn(app, "ffprobe", &args)?;
-
-    let mut out = String::new();
-    let mut reader = std::io::BufReader::new(stdout);
-    reader.read_to_string(&mut out)?;
-    // Ensure the child has exited.
-    // (stdout EOF implies process ended; we ignore the wait result here.)
+    let (child, stdout, _stderr_buf, _drain) = ffmpeg::spawn(app, "ffprobe", &args)?;
+    let out = read_stdout_timeout(child, stdout, std::time::Duration::from_secs(30))?;
 
     let v: serde_json::Value = serde_json::from_str(&out)?;
 
@@ -90,6 +84,44 @@ fn probe_sync(app: &AppHandle, path: &str) -> Result<MediaInfo> {
         bitrate_kbps,
         size_bytes,
     })
+}
+
+/// Read a child's stdout to EOF with a hard timeout. On timeout the child is
+/// killed and an error returned — corrupt files or slow/network paths can
+/// otherwise hang ffprobe forever.
+pub(crate) fn read_stdout_timeout(
+    child: std::process::Child,
+    stdout: std::process::ChildStdout,
+    timeout: std::time::Duration,
+) -> Result<String> {
+    use std::sync::mpsc;
+    use std::sync::{Arc, Mutex};
+
+    let child = Arc::new(Mutex::new(child));
+    let (tx, rx) = mpsc::channel::<std::io::Result<Vec<u8>>>();
+    let child_in_thread = child.clone();
+    std::thread::spawn(move || {
+        let mut stdout = stdout;
+        let mut buf = Vec::new();
+        let res = std::io::Read::read_to_end(&mut stdout, &mut buf);
+        let _ = tx.send(res.map(|_| buf));
+        if let Ok(mut c) = child_in_thread.lock() {
+            let _ = c.wait();
+        }
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(bytes)) => Ok(String::from_utf8_lossy(&bytes).to_string()),
+        Ok(Err(e)) => Err(AppError(format!("ffprobe 读取失败: {}", e))),
+        Err(_) => {
+            if let Ok(mut c) = child.lock() {
+                let _ = c.kill();
+            }
+            Err(AppError(
+                "ffprobe 读取超时（文件可能已损坏，或位于慢速/网络介质上）".into(),
+            ))
+        }
+    }
 }
 
 /// Async wrapper around the blocking probe.

@@ -47,15 +47,24 @@ export function useTheme() {
     mql.addEventListener("change", onMediaChange);
 
     let unlisten: (() => void) | undefined;
+    let cancelled = false;
     getCurrentWindow()
       .onThemeChanged((e) => {
         setDark(effectiveDark(themeMode, e.payload === "dark"));
       })
       .then((fn) => {
+        if (cancelled) {
+          // The effect already cleaned up before the promise resolved —
+          // unregister immediately instead of leaking the listener (which
+          // would keep firing with a stale themeMode closure).
+          fn();
+          return;
+        }
         unlisten = fn;
       });
 
     return () => {
+      cancelled = true;
       mql.removeEventListener("change", onMediaChange);
       unlisten?.();
     };

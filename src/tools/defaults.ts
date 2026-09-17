@@ -1,23 +1,13 @@
 import type {
-  AddAudioParams,
   AudioMergeParams,
   AudioTrimParams,
   AudioVolumeParams,
   ContactSheetParams,
-  CropParams,
   ExtractAudioParams,
   FadeParams,
   FrameSampleParams,
-  GifParams,
-  ImageAdjustParams,
-  ImageCropParams,
-  ImagePdfParams,
-  ImageResizeParams,
-  ImageRotateParams,
-  ImageWatermarkParams,
   MuteParams,
   PitchParams,
-  RotateParams,
   SilenceParams,
   ScreenshotParams,
   SpeedParams,
@@ -26,22 +16,13 @@ import type {
   ToolParams,
   TrimParams,
   VideoMergeParams,
-  VideoReverseParams,
   VideoSilenceParams,
-  VideoVolumeParams,
   WatermarkParams,
 } from "../types";
 import type { WorkbenchId } from "./registry";
 
 export function blankToolParams(tool: WorkbenchId): ToolParams | null {
   switch (tool) {
-    case "gif":
-      return {
-        startTime: undefined,
-        duration: undefined,
-        fps: 12,
-        width: 480,
-      } satisfies GifParams;
     case "screenshot":
       return {
         mode: "single",
@@ -52,7 +33,7 @@ export function blankToolParams(tool: WorkbenchId): ToolParams | null {
         format: "png",
       } satisfies ScreenshotParams;
     case "speed":
-      return { rate: 2, muteAudio: false } satisfies SpeedParams;
+      return { rate: 1, muteAudio: false } satisfies SpeedParams;
     case "watermark":
       return {
         imagePath: "",
@@ -63,8 +44,6 @@ export function blankToolParams(tool: WorkbenchId): ToolParams | null {
       } satisfies WatermarkParams;
     case "trim":
       return { startTime: 0, duration: undefined, mode: "copy", segments: [] } satisfies TrimParams;
-    case "rotate":
-      return { transform: "90c" } satisfies RotateParams;
     case "mute":
       return {} satisfies MuteParams;
     case "extract-audio":
@@ -72,16 +51,8 @@ export function blankToolParams(tool: WorkbenchId): ToolParams | null {
     case "strip-metadata":
       return {} satisfies StripMetadataParams;
     /* ── New video tools ── */
-    case "video-crop":
-      return { mode: "center", aspect: "16:9" } satisfies CropParams;
-    case "video-volume":
-      return { mode: "normalize" } satisfies VideoVolumeParams;
-    case "video-reverse":
-      return {} satisfies VideoReverseParams;
     case "video-subtitle":
       return { path: "", burn: true } satisfies SubtitleParams;
-    case "video-addaudio":
-      return { audioPath: "", mode: "replace", volume: 1 } satisfies AddAudioParams;
     case "video-merge":
       return { mode: "concat" } satisfies VideoMergeParams;
     case "video-frames":
@@ -103,29 +74,6 @@ export function blankToolParams(tool: WorkbenchId): ToolParams | null {
       return { mode: "remove", thresholdDb: -35, minLen: 0.5 } satisfies SilenceParams;
     case "audio-merge":
       return { mode: "concat" } satisfies AudioMergeParams;
-    /* ── New image tools ── */
-    case "image-resize":
-      return { mode: "longest", width: 1280 } satisfies ImageResizeParams;
-    case "image-rotate":
-      return { transform: "90c" } satisfies ImageRotateParams;
-    case "image-crop":
-      return { mode: "center", aspect: "1:1" } satisfies ImageCropParams;
-    case "image-watermark":
-      return {
-        mode: "text",
-        text: "MediaTool",
-        imagePath: undefined,
-        position: "br",
-        scalePercent: 25,
-        opacity: 1,
-        marginPercent: 3,
-        fontSize: 36,
-        color: "white",
-      } satisfies ImageWatermarkParams;
-    case "image-pdf":
-      return {} satisfies ImagePdfParams;
-    case "image-adjust":
-      return { brightness: 0, contrast: 1, saturation: 1 } satisfies ImageAdjustParams;
     default:
       return null;
   }

@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import type { AudioParams, ImageParams, JobParams, VideoParams } from "../types";
+import type { AudioParams, JobParams, VideoParams } from "../types";
 import PresetsBar from "./PresetsBar";
 import { useI18n } from "../i18n";
 
@@ -18,10 +18,6 @@ export default function OptionsPanel({ toolId, params, onChange }: Props) {
         return <VideoCompressOptions params={params} onChange={onChange} />;
       case "video-convert":
         return <VideoConvertOptions params={params as VideoParams} onChange={onChange} />;
-      case "image-compress":
-        return <ImageCompressOptions params={params as ImageParams} onChange={onChange} />;
-      case "image-convert":
-        return <ImageConvertOptions params={params as ImageParams} onChange={onChange} />;
       case "audio-compress":
         return <AudioCompressOptions params={params as AudioParams} onChange={onChange} />;
       case "audio-convert":
@@ -368,101 +364,6 @@ export function VideoConvertOptions({
           <TierPicker value={tierOfVideo(v)} onChange={changeTier} />
         </Field>
       </FieldRow>
-      <p className="text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-500">
-        {t("opt.convert.autoHint")}
-      </p>
-    </div>
-  );
-}
-
-/* ── 图片压缩（保持原格式）────────────────────── */
-
-export function ImageCompressOptions({ params, onChange }: {
-  params: ImageParams;
-  onChange: (p: ImageParams) => void;
-}) {
-  const { t } = useI18n();
-  const set = (patch: Partial<ImageParams>) => onChange({ ...params, ...patch });
-
-  return (
-    <div className="space-y-3">
-      <FieldRow>
-        <Field label={t("opt.format")}>
-          <SourceFormatChip label={t("opt.format.sourceKeep")} />
-        </Field>
-        <Field label={t("opt.quality", { n: params.quality })}>
-          <input
-            type="range"
-            min={1}
-            max={100}
-            value={params.quality}
-            onChange={(e) => set({ quality: Number(e.target.value) })}
-            className={range}
-          />
-        </Field>
-      </FieldRow>
-      <FieldRow>
-        <Field label={t("opt.maxSide")}>
-          <input
-            type="number"
-            className={sel}
-            min={0}
-            step={10}
-            value={params.maxDimension ?? ""}
-            onFocus={(e) => e.currentTarget.select()}
-            onChange={(e) => set({ maxDimension: e.target.value === "" ? undefined : Number(e.target.value) })}
-          />
-        </Field>
-      </FieldRow>
-    </div>
-  );
-}
-
-/* ── 图片转换（极简：格式 + 质量档）────────────── */
-
-const IMAGE_TIER_QUALITY: Record<QualityTier, number> = { high: 90, balanced: 80, compact: 60 };
-
-function tierOfImage(p: ImageParams): QualityTier {
-  if (p.quality === IMAGE_TIER_QUALITY.high) return "high";
-  if (p.quality === IMAGE_TIER_QUALITY.compact) return "compact";
-  return "balanced";
-}
-
-export function ImageConvertOptions({ params, onChange }: {
-  params: ImageParams;
-  onChange: (p: ImageParams) => void;
-}) {
-  const { t } = useI18n();
-  const isPng = params.format === "png";
-
-  const changeFormat = (format: string) =>
-    onChange({ ...params, format, quality: format === "png" ? 100 : IMAGE_TIER_QUALITY.balanced });
-
-  return (
-    <div className="space-y-3">
-      <FieldRow>
-        <Field label={t("opt.format")}>
-          <select className={sel} value={params.format} onChange={(e) => changeFormat(e.target.value)}>
-            <option value="webp">WebP</option>
-            <option value="jpeg">JPEG</option>
-            <option value="png">PNG</option>
-            <option value="avif">AVIF</option>
-          </select>
-        </Field>
-        {!isPng && (
-          <Field label={t("opt.tier")}>
-            <TierPicker
-              value={tierOfImage(params)}
-              onChange={(tier) => onChange({ ...params, quality: IMAGE_TIER_QUALITY[tier] })}
-            />
-          </Field>
-        )}
-      </FieldRow>
-      {isPng && (
-        <p className="text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-500">
-          {t("opt.image.pngLossless")}
-        </p>
-      )}
       <p className="text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-500">
         {t("opt.convert.autoHint")}
       </p>

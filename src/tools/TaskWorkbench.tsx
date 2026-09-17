@@ -38,7 +38,7 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
   const showGpu = toolId === "video-compress";
   const showPresets = toolId.endsWith("-compress");
 
-  // Only real media types ("video" | "audio" | "image") drive the localized
+  // Only real media types ("video" | "audio") drive the localized
   // support/filter hints. The "tools" category (metadata strip, inspect)
   // accepts any type, so it must fall back to the generic hint instead of
   // building a missing `dz.support.tools` / `dz.filter.tools` key.
@@ -127,7 +127,7 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
     ? t(`dz.support.${displayMediaType}`, { exts: accepts.map((e) => `.${e}`).join(", ") })
     : t("dz.support");
 
-  const filterName = displayMediaType ? t(`dz.filter.${displayMediaType}`) : t("dz.support");
+  const filterName = displayMediaType ? t(`dz.filter.${displayMediaType}`) : t("dz.filter.any");
 
   return (
     <div>
@@ -320,7 +320,7 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
           />
 
           {toolId === "strip-metadata" && (
-            <MetadataPreview paths={jobs.map((j) => j.info.path)} />
+            <MetadataPreview paths={[...new Set(jobs.map((j) => j.info.path))]} />
           )}
         </>
       )}

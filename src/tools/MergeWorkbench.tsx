@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useI18n } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
 import { extOk } from "./FilePicker";
@@ -18,7 +19,6 @@ export default function MergeWorkbench({
   const meta = getTool(tool)!;
   const accepts = meta.accepts;
   const [files, setFiles] = useState<string[]>([]);
-  const dropRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     tasks.registerDropHandler((paths) => {
@@ -31,13 +31,13 @@ export default function MergeWorkbench({
 
   const job = useMemo(() => {
     return tasks.jobs
-      .filter((j) => j.toolId === tool && (j.phase === "running" || j.phase === "done" || j.phase === "error"))
+      .filter((j) => j.toolId === tool && (j.phase === "running" || j.phase === "queued" || j.phase === "done" || j.phase === "error"))
       .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))[0];
   }, [tasks.jobs, tool]);
+  const inFlight = job?.phase === "running" || job?.phase === "queued";
 
   const pick = async () => {
-    const mod = await import("@tauri-apps/plugin-dialog");
-    const selected = await mod.open({
+    const selected = await open({
       multiple: true,
       title: t("merge.select"),
       filters: [{ name: t(`dz.filter.${meta.mediaType}`), extensions: accepts }],
@@ -51,8 +51,19 @@ export default function MergeWorkbench({
 
   const removeAt = (i: number) => setFiles((prev) => prev.filter((_, idx) => idx !== i));
 
+  // concat order == output order; let the user reorder entries.
+  const move = (i: number, dir: -1 | 1) => {
+    setFiles((prev) => {
+      const j = i + dir;
+      if (j < 0 || j >= prev.length) return prev;
+      const next = [...prev];
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
+  };
+
   const run = () => {
-    if (files.length >= 2) tasks.mergeAndStart(tool as never, files);
+    if (!inFlight && files.length >= 2) tasks.mergeAndStart(tool as never, files);
   };
 
   return (
@@ -81,19 +92,7 @@ export default function MergeWorkbench({
         </p>
       </div>
 
-      <div
-        ref={dropRef}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => {
-          e.preventDefault();
-          const paths = (e.dataTransfer as unknown as { files?: unknown }).files
-            ? Array.from(e.dataTransfer.files).map((f) => (f as unknown as { path: string }).path)
-            : [];
-          const valid = paths.filter((p) => extOk(p, accepts));
-          if (valid.length) setFiles((prev) => Array.from(new Set([...prev, ...valid])));
-        }}
-        className="rounded-2xl border-2 border-dashed border-neutral-200 bg-neutral-50/40 p-6 text-center dark:border-neutral-700 dark:bg-neutral-800/40"
-      >
+      <div className="rounded-2xl border-2 border-dashed border-neutral-200 bg-neutral-50/40 p-6 text-center dark:border-neutral-700 dark:bg-neutral-800/40">
         <p className="text-sm text-neutral-500 dark:text-neutral-400">{t("merge.hint")}</p>
         <button
           type="button"
@@ -112,16 +111,43 @@ export default function MergeWorkbench({
               className="flex items-center justify-between rounded-xl bg-white px-3 py-2 text-sm ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-800"
             >
               <span className="truncate text-neutral-700 dark:text-neutral-200">{f.split(/[\\/]/).pop()}</span>
-              <button
-                type="button"
-                onClick={() => removeAt(i)}
-                className="ml-3 shrink-0 rounded p-1 text-neutral-400 hover:text-error-500"
-                aria-label={t("job.remove")}
-              >
-                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                  <path d="M6 6l12 12M18 6 6 18" />
-                </svg>
-              </button>
+              <span className="ml-3 flex shrink-0 items-center gap-0.5">
+                <button
+                  type="button"
+                  onClick={() => move(i, -1)}
+                  disabled={i === 0}
+                  className="rounded p-1 text-neutral-400 transition hover:text-brand-600 disabled:cursor-not-allowed disabled:opacity-30"
+                  aria-label={t("merge.moveUp")}
+                  title={t("merge.moveUp")}
+                >
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="m18 15-6-6-6 6" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => move(i, 1)}
+                  disabled={i === files.length - 1}
+                  className="rounded p-1 text-neutral-400 transition hover:text-brand-600 disabled:cursor-not-allowed disabled:opacity-30"
+                  aria-label={t("merge.moveDown")}
+                  title={t("merge.moveDown")}
+                >
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="m6 9 6 6 6-6" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => removeAt(i)}
+                  disabled={inFlight}
+                  className="rounded p-1 text-neutral-400 transition hover:text-error-500 disabled:cursor-not-allowed disabled:opacity-30"
+                  aria-label={t("job.remove")}
+                >
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <path d="M6 6l12 12M18 6 6 18" />
+                  </svg>
+                </button>
+              </span>
             </li>
           ))}
         </ul>
@@ -130,10 +156,10 @@ export default function MergeWorkbench({
       <button
         type="button"
         onClick={run}
-        disabled={files.length < 2}
+        disabled={files.length < 2 || inFlight}
         className="mt-4 w-full rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-brand-600"
       >
-        {t("merge.run", { n: files.length })}
+        {inFlight ? t("merge.merging") : t("merge.run", { n: files.length })}
       </button>
 
       {job && (

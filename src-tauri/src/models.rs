@@ -51,17 +51,6 @@ pub struct VideoParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ImageParams {
-    /// source (keep input format) | jpeg | png | webp | avif
-    pub format: String,
-    /// 1..100 (higher = better quality)
-    pub quality: u8,
-    /// longest side in px; None = keep original
-    pub max_dimension: Option<u32>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct AudioParams {
     /// source (keep input codec family) | mp3 | aac | m4a | opus | flac
     pub format: String,
@@ -106,14 +95,6 @@ fn default_trim_segments() -> Vec<TrimSegment> {
     Vec::new()
 }
 
-/// Params for the rotate/flip tool.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RotateParams {
-    /// "90c" | "90cc" | "180" | "hflip" | "vflip"
-    pub transform: String,
-}
-
 /// Params for the remove-audio-track tool (lossless `-an -c copy`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -126,20 +107,6 @@ pub struct ExtractAudioParams {
     /// mp3 | aac | m4a | opus | flac
     pub format: String,
     pub bitrate_kbps: u32,
-}
-
-/// Params for the "gif" tool (video -> animated GIF).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GifParams {
-    /// trim: start offset in seconds
-    pub start_time: Option<f64>,
-    /// trim: clip length in seconds (None = to end)
-    pub duration: Option<f64>,
-    /// GIF frame rate, clamped 5..30; default 12
-    pub fps: Option<u32>,
-    /// output width in px, height auto; default 480
-    pub width: Option<u32>,
 }
 
 /// Params for the "screenshot" tool.
@@ -188,38 +155,7 @@ pub struct WatermarkParams {
     pub margin_percent: Option<u32>,
 }
 
-/* ── New toolbox tools (video / audio / image) ──────────────── */
-
-/// Params for the "video-crop" tool (visual crop to an aspect ratio or a
-/// custom rectangle). Re-encodes with H.264+AAC.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CropParams {
-    /// "center" (fit an aspect ratio, centered) | "custom" (explicit rect)
-    pub mode: String,
-    /// target aspect ratio for center mode: "1:1" | "16:9" | "9:16" | "4:3" | "3:2" | "original"
-    pub aspect: Option<String>,
-    /// custom rect (mode == "custom"); all in pixels
-    pub x: Option<u32>,
-    pub y: Option<u32>,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
-}
-
-/// Params for the "video-volume" tool.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VideoVolumeParams {
-    /// "normalize" (loudnorm) | "gain" (linear dB boost)
-    pub mode: String,
-    /// gain in dB for "gain" mode; clamped -20..20
-    pub gain: Option<f32>,
-}
-
-/// Params for the "video-reverse" tool (no options).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VideoReverseParams {}
+/* ── New toolbox tools (video / audio) ───────────────────────── */
 
 /// Params for the "video-subtitle" tool (burn-in subtitles).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -229,18 +165,6 @@ pub struct SubtitleParams {
     pub path: String,
     /// burn into the video (true) vs. mux as a soft stream (false, mkv only)
     pub burn: Option<bool>,
-}
-
-/// Params for the "video-addaudio" tool (replace or mix a background track).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AddAudioParams {
-    /// path to the replacement / background audio file (inputs[1])
-    pub audio_path: String,
-    /// "replace" (swap the audio track) | "mix" (overlay under original)
-    pub mode: String,
-    /// mix level 0..1 applied to the added track (mix mode only)
-    pub volume: Option<f32>,
 }
 
 /// Params for the "video-merge" tool (concatenate multiple clips).
@@ -298,76 +222,6 @@ pub struct SilenceParams {
     pub threshold_db: Option<f32>,
     /// minimum silence length in seconds, default 0.5
     pub min_len: Option<f32>,
-}
-
-/// Params for the "image-resize" tool.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ImageResizeParams {
-    /// "longest" (fit longest side) | "exact" (force WxH) | "percent" (scale %)
-    pub mode: String,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
-    pub percent: Option<u32>,
-}
-
-/// Params for the "image-rotate" tool.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ImageRotateParams {
-    /// "90c" | "90cc" | "180" | "hflip" | "vflip"
-    pub transform: String,
-}
-
-/// Params for the "image-crop" tool.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ImageCropParams {
-    pub mode: String,
-    pub aspect: Option<String>,
-    pub x: Option<u32>,
-    pub y: Option<u32>,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
-}
-
-/// Params for the "image-watermark" tool (text or image overlay).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ImageWatermarkParams {
-    /// "text" | "image"
-    pub mode: String,
-    /// text content for text mode
-    pub text: Option<String>,
-    /// path to overlay image for image mode (inputs[1])
-    pub image_path: Option<String>,
-    /// nine-grid position tl|tc|tr|ml|mc|mr|bl|bc|br
-    pub position: String,
-    /// overlay width as % of main width; default 25
-    pub scale_percent: u32,
-    pub opacity: Option<f32>,
-    pub margin_percent: Option<u32>,
-    /// font size for text mode, default 36
-    pub font_size: Option<u32>,
-    /// text color for text mode, default "white"
-    pub color: Option<String>,
-}
-
-/// Params for the "image-pdf" tool (image -> PDF, single image).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ImagePdfParams {}
-
-/// Params for the "image-adjust" tool (brightness/contrast/saturation).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ImageAdjustParams {
-    /// -1.0..1.0
-    pub brightness: Option<f32>,
-    /// -2.0..2.0
-    pub contrast: Option<f32>,
-    /// 0.0..3.0
-    pub saturation: Option<f32>,
 }
 
 /// Params for the "video-frames" tool (sample frames then re-encode into a video).
@@ -446,7 +300,7 @@ pub struct AudioMergeParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobRequest {
-    /// Which tool runs this job: "compress" | "gif" | "screenshot" |
+    /// Which tool runs this job: "compress" | "screenshot" |
     /// "speed" | "watermark".
     pub tool_id: String,
     /// One or more input files. Most tools use inputs[0]; multi-input tools
@@ -465,12 +319,14 @@ pub struct JobRequest {
 }
 
 /// Result of starting a job. `skipped == true` means nothing was encoded
-/// because the output file already existed and the policy was "skip".
+/// because the output file already existed and the policy was "skip";
+/// `output` then carries the existing file.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartJobResult {
     pub id: String,
     pub skipped: bool,
+    pub output: Option<String>,
 }
 
 /* ── Multi-step workflow ─────────────────────────────────────── */
@@ -542,7 +398,7 @@ pub struct DoneEvent {
 #[serde(rename_all = "camelCase")]
 pub struct EstimateRequest {
     pub info: MediaInfo,
-    /// JobParams serialized as JSON (VideoParams | ImageParams | AudioParams).
+    /// JobParams serialized as JSON (VideoParams | AudioParams).
     pub params: serde_json::Value,
     pub media_type: MediaType,
     /// Length of the sample clip in seconds (defaults to 8).

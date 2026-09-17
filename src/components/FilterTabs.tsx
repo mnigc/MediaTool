@@ -1,7 +1,7 @@
 import type { Job } from "../types";
 import { useI18n } from "../i18n";
 
-export type FilterStatus = "all" | "queued" | "running" | "done" | "error";
+export type FilterStatus = "all" | "queued" | "running" | "done" | "error" | "cancelled" | "skipped";
 
 interface FilterTabsProps {
   jobs: Job[];
@@ -15,10 +15,19 @@ const TABS: { value: FilterStatus; key: string }[] = [
   { value: "running", key: "app.filter.running" },
   { value: "done", key: "app.filter.done" },
   { value: "error", key: "app.filter.error" },
+  { value: "cancelled", key: "app.filter.cancelled" },
+  { value: "skipped", key: "app.filter.skipped" },
 ];
 
 export default function FilterTabs({ jobs, active, onChange }: FilterTabsProps) {
   const { t } = useI18n();
+  // Terminal-but-uninteresting phases only get a tab when they exist,
+  // otherwise the bar overflows for the common all-queued/all-done cases.
+  const tabs = TABS.filter(
+    (tab) =>
+      !["cancelled", "skipped"].includes(tab.value) ||
+      jobs.some((j) => j.phase === tab.value)
+  );
   return (
     <nav
       data-od-id="filter-tabs"
@@ -26,7 +35,7 @@ export default function FilterTabs({ jobs, active, onChange }: FilterTabsProps) 
       role="tablist"
       aria-label={t("app.filter.aria")}
     >
-      {TABS.map((tab) => {
+      {tabs.map((tab) => {
         const count =
           tab.value === "all"
             ? jobs.length

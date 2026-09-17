@@ -22,6 +22,11 @@ interface OutputSettingsProps {
   compact?: boolean;
 }
 
+/** The suffix is concatenated into output filenames — strip path separators
+ *  and characters Windows filenames forbid. */
+const sanitizeSuffix = (raw: string) =>
+  raw.replace(/[/\\:*?"<>|]/g, "").replace(/[\x00-\x1f]/g, "");
+
 export default function OutputSettings({ compact = false }: OutputSettingsProps) {
   const { t } = useI18n();
   const tasks = useTasks();
@@ -56,7 +61,7 @@ export default function OutputSettings({ compact = false }: OutputSettingsProps)
         </div>
         <input
           value={tasks.settings.outputSuffix}
-          onChange={(e) => tasks.setOutputSuffix(e.target.value)}
+          onChange={(e) => tasks.setOutputSuffix(sanitizeSuffix(e.target.value))}
           placeholder="_mediatool"
           className="w-24 rounded-lg border border-neutral-200 bg-white px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 focus:border-brand-400 focus:ring-1 focus:ring-brand-100"
           title={t("sidebar.suffix")}
@@ -126,7 +131,7 @@ export default function OutputSettings({ compact = false }: OutputSettingsProps)
           </div>
           <input
             value={tasks.settings.outputSuffix}
-            onChange={(e) => tasks.setOutputSuffix(e.target.value)}
+            onChange={(e) => tasks.setOutputSuffix(sanitizeSuffix(e.target.value))}
             placeholder="_mediatool"
             className="mt-1 w-full rounded-lg border border-neutral-200 bg-white px-2 py-1.5 text-xs dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 focus:border-brand-400 focus:ring-1 focus:ring-brand-100"
           />

@@ -37,12 +37,6 @@ export interface VideoParams {
   gpu?: string; // GPU backend id (nvenc/qsv/videotoolbox/amf/vaapi); "" or unset = CPU
 }
 
-export interface ImageParams {
-  format: string; // source | jpeg | png | webp | avif
-  quality: number; // 1..100
-  maxDimension?: number;
-}
-
 export interface AudioParams {
   format: string; // source | mp3 | aac | m4a | opus | flac
   bitrateKbps: number;
@@ -55,22 +49,14 @@ export type ToolId =
   | "video-convert"
   | "audio-compress"
   | "audio-convert"
-  | "image-compress"
-  | "image-convert"
-  | "gif"
   | "screenshot"
   | "speed"
   | "watermark"
   | "trim"
-  | "rotate"
   | "mute"
   | "extract-audio"
   | "strip-metadata"
-  | "video-crop"
-  | "video-volume"
-  | "video-reverse"
   | "video-subtitle"
-  | "video-addaudio"
   | "video-merge"
   | "video-frames"
   | "video-contact"
@@ -80,20 +66,7 @@ export type ToolId =
   | "audio-volume"
   | "audio-pitch"
   | "audio-silence"
-  | "audio-merge"
-  | "image-resize"
-  | "image-rotate"
-  | "image-crop"
-  | "image-watermark"
-  | "image-pdf"
-  | "image-adjust";
-
-export interface GifParams {
-  startTime?: number;
-  duration?: number;
-  fps: number; // 5..30, default 12
-  width: number; // default 480
-}
+  | "audio-merge";
 
 export interface ScreenshotParams {
   mode: "single" | "interval";
@@ -133,43 +106,12 @@ export interface TrimParams {
   segments?: TrimSegment[];
 }
 
-/** Rotate/flip tool (re-encodes). */
-export interface RotateParams {
-  transform: "90c" | "90cc" | "180" | "hflip" | "vflip";
-}
-
 /* ── New video tools ───────────────────────────────────────── */
-
-/** Crop a video to an aspect ratio (centered) or a custom rectangle. */
-export interface CropParams {
-  mode: "center" | "custom";
-  aspect?: string;
-  x?: number;
-  y?: number;
-  width?: number;
-  height?: number;
-}
-
-/** Adjust the audio level of a video. */
-export interface VideoVolumeParams {
-  mode: "normalize" | "gain";
-  gain?: number; // dB, -20..20
-}
-
-/** Reverse a video (no options). */
-export type VideoReverseParams = Record<string, never>;
 
 /** Burn-in (or soft-mux) subtitles from an external file. */
 export interface SubtitleParams {
   path: string;
   burn?: boolean;
-}
-
-/** Replace or mix an audio track from an external file. */
-export interface AddAudioParams {
-  audioPath: string;
-  mode: "replace" | "mix";
-  volume?: number; // 0..1 applied to the added track in mix mode
 }
 
 /** Concatenate multiple video clips. */
@@ -217,54 +159,6 @@ export interface AudioMergeParams {
   mergeInputs?: string[];
 }
 
-/* ── New image tools ───────────────────────────────────────── */
-
-/** Resize an image. */
-export interface ImageResizeParams {
-  mode: "longest" | "exact" | "percent";
-  width?: number;
-  height?: number;
-  percent?: number;
-}
-
-/** Rotate/flip an image. */
-export interface ImageRotateParams {
-  transform: "90c" | "90cc" | "180" | "hflip" | "vflip";
-}
-
-/** Crop an image. */
-export interface ImageCropParams {
-  mode: "center" | "custom";
-  aspect?: string;
-  x?: number;
-  y?: number;
-  width?: number;
-  height?: number;
-}
-
-/** Add a text or image watermark to an image. */
-export interface ImageWatermarkParams {
-  mode: "text" | "image";
-  text?: string;
-  imagePath?: string;
-  position: "tl" | "tc" | "tr" | "ml" | "mc" | "mr" | "bl" | "bc" | "br";
-  scalePercent: number;
-  opacity?: number;
-  marginPercent?: number;
-  fontSize?: number;
-  color?: string;
-}
-
-/** Convert a single image to PDF. */
-export type ImagePdfParams = Record<string, never>;
-
-/** Adjust brightness / contrast / saturation of an image. */
-export interface ImageAdjustParams {
-  brightness?: number; // -1..1
-  contrast?: number; // -2..2
-  saturation?: number; // 0..3
-}
-
 /** Sample frames at an interval and re-encode them into a (sped-up) video. */
 export interface FrameSampleParams {
   interval: number; // seconds between sampled frames
@@ -304,22 +198,15 @@ export type StripMetadataParams = Record<string, never>;
 
 export type ToolParams =
   | VideoParams
-  | ImageParams
   | AudioParams
-  | GifParams
   | ScreenshotParams
   | SpeedParams
   | WatermarkParams
   | TrimParams
-  | RotateParams
   | MuteParams
   | ExtractAudioParams
   | StripMetadataParams
-  | CropParams
-  | VideoVolumeParams
-  | VideoReverseParams
   | SubtitleParams
-  | AddAudioParams
   | VideoMergeParams
   | AudioTrimParams
   | FadeParams
@@ -327,12 +214,6 @@ export type ToolParams =
   | PitchParams
   | SilenceParams
   | AudioMergeParams
-  | ImageResizeParams
-  | ImageRotateParams
-  | ImageCropParams
-  | ImageWatermarkParams
-  | ImagePdfParams
-  | ImageAdjustParams
   | FrameSampleParams
   | ContactSheetParams
   | VideoSilenceParams;
@@ -408,6 +289,8 @@ export interface StartWorkflowResult {
 export interface StartJobResult {
   id: string;
   skipped: boolean; // output existed and policy = skip; nothing was encoded
+  /** The already-existing output file when `skipped` is true. */
+  output?: string | null;
 }
 
 export interface EstimateRequest {

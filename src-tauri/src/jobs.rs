@@ -7,13 +7,12 @@ use crate::error::{AppError, Result};
 use crate::ffmpeg;
 use crate::media::probe;
 use crate::models::{
-    AddAudioParams, AudioMergeParams, AudioParams, AudioTrimParams, AudioVolumeParams, CropParams,
-    DoneEvent, EstimateRequest, EstimateResult, ExtractAudioParams, FadeParams, GifParams,
-    ImageAdjustParams, ImageCropParams, ImageParams, ImagePdfParams, ImageResizeParams,
-    ImageRotateParams, ImageWatermarkParams, JobRequest, MediaInfo, MediaType, MuteParams,
-    PitchParams, ProgressEvent, RotateParams, ScreenshotParams, SilenceParams, SpeedParams,
+    AudioMergeParams, AudioParams, AudioTrimParams, AudioVolumeParams,
+    DoneEvent, EstimateRequest, EstimateResult, ExtractAudioParams, FadeParams,
+    JobRequest, MediaInfo, MediaType, MuteParams,
+    PitchParams, ProgressEvent, ScreenshotParams, SilenceParams, SpeedParams,
     StartJobResult, StartWorkflowResult, StripMetadataParams, SubtitleParams, TrimParams,
-    TrimSegment, VideoMergeParams, VideoParams, VideoReverseParams, VideoVolumeParams, WatermarkParams,
+    TrimSegment, VideoMergeParams, VideoParams, WatermarkParams,
     ContactSheetParams, FrameSampleParams, VideoSilenceParams,
     WorkflowRequest, WorkflowStepInput,
 };
@@ -113,7 +112,13 @@ fn resolution_vf(res: &str) -> Option<String> {
         custom if custom.contains('x') => {
             let parts: Vec<&str> = custom.split('x').collect();
             if parts.len() == 2 {
-                Some(format!("scale={}:{}", parts[0], parts[1]))
+                // Even-align both sides: yuv420p encoders reject odd dimensions.
+                match (parts[0].trim().parse::<i64>(), parts[1].trim().parse::<i64>()) {
+                    (Ok(w), Ok(h)) if w >= 2 && h >= 2 => {
+                        Some(format!("scale={}:{}", even(w), even(h)))
+                    }
+                    _ => None,
+                }
             } else {
                 None
             }
@@ -175,29 +180,38 @@ fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) -> Vec<String
     let is_vaapi = vcodec == "h264_vaapi";
     let mut a: Vec<String> = vec![];
 
-    if is_vaapi {
-        a.push("-vaapi_device".into());
-        a.push("/dev/dri/renderD128".into());
-    }
+    let vf = resolution_vf(&p.resolution).filter(|_| vcodec != "copy");
     if let Some(hw) = &hwaccel {
         a.push("-hwaccel".into());
         a.push(hw.clone());
-        if hw == "qsv" {
+        // A software `-vf` chain needs frames in system memory; locking QSV
+        // frames in video memory makes the scale filter fail with
+        // "Impossible to convert between the formats".
+        if hw == "qsv" && vf.is_none() {
             a.push("-hwaccel_output_format".into());
             a.push("qsv".into());
         }
     }
 
+    if is_vaapi {
+        a.push("-vaapi_device".into());
+        a.push("/dev/dri/renderD128".into());
+    }
+
     a.push("-i".into());
     a.push(info.path.clone());
 
-    let mut vf = resolution_vf(&p.resolution);
-    if is_vaapi {
-        vf = Some(match vf {
-            Some(s) => format!("{},format=nv12,hwupload", s),
-            None => "format=nv12,hwupload".to_string(),
-        });
-    }
+    let vf = if is_vaapi {
+        vf.map(|s| {
+            if s.is_empty() {
+                "format=nv12,hwupload".to_string()
+            } else {
+                format!("{},format=nv12,hwupload", s)
+            }
+        })
+    } else {
+        vf
+    };
     if let Some(vf) = vf {
         a.push("-vf".into());
         a.push(vf);
@@ -347,62 +361,6 @@ fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) -> Vec<String
     a
 }
 
-fn image_scale_vf(max_dim: u32) -> String {
-    format!(
-        "scale='if(gt(iw,ih),-2,trunc(min(ih,{0})/2)*2)':'if(gt(iw,ih),trunc(min(iw,{0})/2)*2,-2)'",
-        max_dim
-    )
-}
-
-fn map_jpeg_q(quality: u8) -> u8 {
-    let q = 31 - ((quality.clamp(1, 100) as u32 - 1) * 29 / 99);
-    q as u8
-}
-
-fn map_png_level(quality: u8) -> u8 {
-    let l = ((100 - quality.clamp(1, 100) as u32) * 9 / 99) as u8;
-    l.min(9)
-}
-
-fn build_image_args(info: &MediaInfo, p: &ImageParams, out: &Path) -> Vec<String> {
-    let mut a: Vec<String> = vec!["-i".into(), info.path.clone()];
-
-    if let Some(d) = p.max_dimension {
-        if d > 0 {
-            a.push("-vf".into());
-            a.push(image_scale_vf(d));
-        }
-    }
-
-    let fmt = if p.format == "source" || p.format.is_empty() {
-        source_image_format(&info.path)
-    } else {
-        p.format.clone()
-    };
-
-    match fmt.as_str() {
-        "jpeg" => {
-            a.push("-q:v".into());
-            a.push(map_jpeg_q(p.quality).to_string());
-        }
-        "png" => {
-            a.push("-compression_level".into());
-            a.push(map_png_level(p.quality).to_string());
-        }
-        "webp" | "avif" => {
-            a.push("-quality".into());
-            a.push(p.quality.clamp(1, 100).to_string());
-        }
-        _ => {}
-    }
-
-    a.push("-progress".into());
-    a.push("pipe:1".into());
-    a.push("-y".into());
-    a.push(out.to_string_lossy().to_string());
-    a
-}
-
 /// Infer the image format family from the input file extension.
 fn source_image_format(path: &str) -> String {
     let ext = Path::new(path)
@@ -493,8 +451,13 @@ fn source_audio_format(path: &str) -> String {
 const SAFE_CONTAINERS: [&str; 3] = ["mp4", "mkv", "mov"];
 
 /// For re-encode tools that hardcode H.264+AAC, pick an output container that
-/// can actually carry them (WebM/AVI/WMV etc. cannot).
+/// can actually carry them (WebM/AVI/WMV etc. cannot). Audio-only inputs get
+/// an audio container (`.m4a`) so e.g. speeding up `song.mp3` doesn't yield
+/// a `.mp4` file.
 fn safe_container_ext(info: &MediaInfo) -> String {
+    if info.media_type == MediaType::Audio {
+        return "m4a".to_string();
+    }
     let ext = input_ext(info, "mp4");
     if SAFE_CONTAINERS.contains(&ext.as_str()) {
         ext
@@ -504,8 +467,13 @@ fn safe_container_ext(info: &MediaInfo) -> String {
 }
 
 /// Lossless stream-removal / metadata strip: `-c copy` with optional `-an`.
+/// `-map 0` keeps every stream (extra audio tracks, subtitles, attachments) —
+/// ffmpeg's default stream selection would silently drop all but the "best"
+/// stream per type.
 fn build_remux_args(info: &MediaInfo, drop_audio: bool, out: &Path) -> Vec<String> {
     let mut a: Vec<String> = vec!["-i".into(), info.path.clone()];
+    a.push("-map".into());
+    a.push("0".into());
     a.extend(metadata_strip_args(true, true));
     if drop_audio {
         a.push("-an".into());
@@ -527,6 +495,10 @@ fn build_strip_metadata_args(info: &MediaInfo, _p: &StripMetadataParams, out: &P
         MediaType::Video | MediaType::Audio => build_remux_args(info, false, out),
         MediaType::Image => {
             let mut a: Vec<String> = vec!["-i".into(), info.path.clone()];
+            // Re-encoding inherits container-level metadata by default, which
+            // would carry EXIF/GPS straight into the "cleaned" output.
+            a.push("-map_metadata".into());
+            a.push("-1".into());
             match source_image_format(&info.path).as_str() {
                 "jpeg" => {
                     a.push("-q:v".into());
@@ -552,9 +524,16 @@ fn build_strip_metadata_args(info: &MediaInfo, _p: &StripMetadataParams, out: &P
     }
 }
 
-/// Remove the audio track losslessly (`-an` + `-c copy`).
+/// Remove the audio track losslessly (`-an` + `-c copy`). `-map 0` keeps all
+/// non-audio streams (subtitles, attachments) instead of just the best video.
 fn build_mute_args(info: &MediaInfo, _p: &MuteParams, out: &Path) -> Vec<String> {
-    let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-an".into()];
+    let mut a: Vec<String> = vec![
+        "-i".into(),
+        info.path.clone(),
+        "-map".into(),
+        "0".into(),
+        "-an".into(),
+    ];
     a.push("-c".into());
     a.push("copy".into());
     a.push("-progress".into());
@@ -592,6 +571,11 @@ fn build_trim_segment_args(
         }
     }
 
+    // Keep every stream: default stream selection would drop secondary audio
+    // tracks / subtitles / attachments from the cut.
+    a.push("-map".into());
+    a.push("0".into());
+
     if mode == "encode" {
         a.push("-c:v".into());
         a.push("libx264".into());
@@ -615,41 +599,6 @@ fn build_trim_segment_args(
     a.push("-y".into());
     a.push(out.to_string_lossy().to_string());
     a
-}
-
-/// Rotate 90° CW/CCW, 180°, or flip horizontally/vertically. Requires
-/// re-encoding (output container is chosen to safely hold H.264+AAC).
-fn build_rotate_args(info: &MediaInfo, p: &RotateParams, out: &Path) -> Vec<String> {
-    let vf = match p.transform.as_str() {
-        "90cc" => "transpose=2",
-        "180" => "transpose=1,transpose=1",
-        "hflip" => "hflip",
-        "vflip" => "vflip",
-        _ => "transpose=1", // "90c"
-    };
-
-    vec![
-        "-i".into(),
-        info.path.clone(),
-        "-vf".into(),
-        vf.to_string(),
-        "-c:v".into(),
-        "libx264".into(),
-        "-crf".into(),
-        "18".into(),
-        "-preset".into(),
-        "medium".into(),
-        "-c:a".into(),
-        "aac".into(),
-        "-b:a".into(),
-        "192k".into(),
-        "-threads".into(),
-        "0".into(),
-        "-progress".into(),
-        "pipe:1".into(),
-        "-y".into(),
-        out.to_string_lossy().to_string(),
-    ]
 }
 
 /// Build an atempo factor chain for arbitrary rates. atempo only accepts
@@ -705,6 +654,28 @@ fn pattern_prefix(out: &Path) -> Option<String> {
         .map(String::from)
 }
 
+fn pattern_ext(out: &Path) -> String {
+    out.extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png")
+        .to_ascii_lowercase()
+}
+
+/// True when `name` is a member of the `%03d` sequence for `out`:
+/// `<prefix><digits>.<ext>`. Plain prefix matching would also swallow
+/// unrelated files like `clip_mediatool_final.png`.
+fn is_sequence_file(name: &str, prefix: &str, ext: &str) -> bool {
+    let Some(rest) = name.strip_prefix(prefix) else {
+        return false;
+    };
+    match rest.rsplit_once('.') {
+        Some((num, e)) => {
+            e.eq_ignore_ascii_case(ext) && !num.is_empty() && num.chars().all(|c| c.is_ascii_digit())
+        }
+        None => false,
+    }
+}
+
 fn scan_pattern_outputs(out: &Path) -> Vec<PathBuf> {
     let Some(prefix) = pattern_prefix(out) else {
         return vec![];
@@ -712,10 +683,12 @@ fn scan_pattern_outputs(out: &Path) -> Vec<PathBuf> {
     let Some(dir) = out.parent() else {
         return vec![];
     };
+    let ext = pattern_ext(out);
     let mut found = vec![];
     if let Ok(entries) = std::fs::read_dir(dir) {
         for e in entries.flatten() {
-            if e.file_name().to_string_lossy().starts_with(&prefix) {
+            let name = e.file_name().to_string_lossy().to_string();
+            if is_sequence_file(&name, &prefix, &ext) {
                 found.push(e.path());
             }
         }
@@ -738,46 +711,6 @@ fn cleanup_pattern_outputs(out: &Path) {
     for p in scan_pattern_outputs(out) {
         let _ = std::fs::remove_file(p);
     }
-}
-
-/// Video -> GIF via a single-pass palettegen/paletteuse filter graph.
-fn build_gif_args(info: &MediaInfo, p: &GifParams, out: &Path) -> Vec<String> {
-    let mut a: Vec<String> = vec![];
-
-    if let Some(s) = p.start_time {
-        if s > 0.0 {
-            a.push("-ss".into());
-            a.push(format!("{:.3}", s));
-        }
-    }
-    a.push("-i".into());
-    a.push(info.path.clone());
-    if let Some(d) = p.duration {
-        if d > 0.0 {
-            a.push("-t".into());
-            a.push(format!("{:.3}", d));
-        }
-    }
-
-    let fps = p.fps.unwrap_or(12).clamp(5, 30);
-    let width = p.width.unwrap_or(480).max(16);
-    let fc = format!(
-        "[0:v]fps={f},scale={w}:-2:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5[out]",
-        f = fps,
-        w = width
-    );
-    a.push("-filter_complex".into());
-    a.push(fc);
-    a.push("-map".into());
-    a.push("[out]".into());
-
-    a.push("-threads".into());
-    a.push("0".into());
-    a.push("-progress".into());
-    a.push("pipe:1".into());
-    a.push("-y".into());
-    a.push(out.to_string_lossy().to_string());
-    a
 }
 
 fn build_screenshot_single(info: &MediaInfo, p: &ScreenshotParams, out: &Path) -> Vec<String> {
@@ -982,7 +915,7 @@ fn build_watermark_args(info: &MediaInfo, p: &WatermarkParams, wm_path: &str, ou
     a
 }
 
-/* ── New toolbox tools (video / audio / image) ──────────────── */
+/* ── New toolbox tools (video / audio) ─────────────────────── */
 
 fn even(v: i64) -> i64 {
     if v % 2 == 0 {
@@ -990,62 +923,6 @@ fn even(v: i64) -> i64 {
     } else {
         v - 1
     }
-}
-
-fn parse_aspect(aspect: &str, _iw: u32, _ih: u32) -> Option<(u32, u32)> {
-    if aspect == "original" || aspect.is_empty() {
-        return None;
-    }
-    let mut it = aspect.splitn(2, ':');
-    let w = it.next()?.parse::<u32>().ok()?;
-    let h = it.next()?.parse::<u32>().ok()?;
-    if w == 0 || h == 0 {
-        None
-    } else {
-        Some((w, h))
-    }
-}
-
-/// Compute a crop rectangle (w, h, x, y) — centered to an aspect ratio, or an
-/// explicit custom rectangle. All values are coerced to even integers.
-fn crop_rect(
-    mode: &str,
-    aspect: &Option<String>,
-    custom: Option<(u32, u32, u32, u32)>,
-    iw: u32,
-    ih: u32,
-) -> (i64, i64, i64, i64) {
-    let (cw, ch, x, y) = if mode == "custom" {
-        match custom {
-            Some((cx, cy, cwv, chv)) => (cwv as i64, chv as i64, cx as i64, cy as i64),
-            None => (iw as i64, ih as i64, 0, 0),
-        }
-    } else {
-        let (aw, ah) = match aspect.as_deref().and_then(|a| parse_aspect(a, iw, ih)) {
-            Some(p) => p,
-            None => return (iw as i64, ih as i64, 0, 0),
-        };
-        let w = iw as f64;
-        let h = ih as f64;
-        let src_ar = w / h;
-        let tgt_ar = aw as f64 / ah as f64;
-        let (cw, ch) = if src_ar > tgt_ar {
-            (h * tgt_ar, h)
-        } else {
-            (w, w / tgt_ar)
-        };
-        (
-            cw as i64,
-            ch as i64,
-            ((w as i64 - cw as i64) / 2),
-            ((h as i64 - ch as i64) / 2),
-        )
-    };
-    let cw = cw.clamp(2, iw as i64);
-    let ch = ch.clamp(2, ih as i64);
-    let x = x.clamp(0, (iw as i64 - cw).max(0));
-    let y = y.clamp(0, (ih as i64 - ch).max(0));
-    (even(cw), even(ch), even(x), even(y))
 }
 
 /// Quote a filesystem path for use inside an ffmpeg filtergraph value.
@@ -1069,60 +946,6 @@ fn video_encode_tail(a: &mut Vec<String>) {
     a.push("-progress".into());
     a.push("pipe:1".into());
     a.push("-y".into());
-}
-
-fn build_video_crop_args(info: &MediaInfo, p: &CropParams, out: &Path) -> Vec<String> {
-    let iw = info.width.unwrap_or(1920);
-    let ih = info.height.unwrap_or(1080);
-    let (w, h, x, y) = crop_rect(
-        &p.mode,
-        &p.aspect,
-        match (p.x, p.y, p.width, p.height) {
-            (Some(x), Some(y), Some(w), Some(h)) => Some((x, y, w, h)),
-            _ => None,
-        },
-        iw,
-        ih,
-    );
-    let vf = format!("crop={}:{}:{}:{}", w, h, x, y);
-    let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-vf".into(), vf];
-    video_encode_tail(&mut a);
-    a.push(out.to_string_lossy().to_string());
-    a
-}
-
-fn build_video_volume_args(info: &MediaInfo, p: &VideoVolumeParams, out: &Path) -> Vec<String> {
-    let af = if p.mode == "normalize" {
-        "loudnorm".to_string()
-    } else {
-        let db = p.gain.unwrap_or(0.0).clamp(-20.0, 20.0);
-        format!("volume=volume={:.1}dB", db)
-    };
-    let mut a: Vec<String> = vec![
-        "-i".into(),
-        info.path.clone(),
-        "-af".into(),
-        af,
-        "-c:v".into(),
-        "copy".into(),
-    ];
-    video_encode_tail(&mut a);
-    a.push(out.to_string_lossy().to_string());
-    a
-}
-
-fn build_video_reverse_args(info: &MediaInfo, _p: &VideoReverseParams, out: &Path) -> Vec<String> {
-    let mut a: Vec<String> = vec![
-        "-i".into(),
-        info.path.clone(),
-        "-vf".into(),
-        "reverse".into(),
-        "-af".into(),
-        "areverse".into(),
-    ];
-    video_encode_tail(&mut a);
-    a.push(out.to_string_lossy().to_string());
-    a
 }
 
 fn build_video_subtitle_args(info: &MediaInfo, p: &SubtitleParams, out: &Path) -> Vec<String> {
@@ -1160,48 +983,15 @@ fn build_video_subtitle_args(info: &MediaInfo, p: &SubtitleParams, out: &Path) -
     }
 }
 
-fn build_video_addaudio_args(info: &MediaInfo, p: &AddAudioParams, out: &Path) -> Vec<String> {
-    let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-i".into(), p.audio_path.clone()];
-    if p.mode == "mix" {
-        let vol = p.volume.unwrap_or(1.0).clamp(0.0, 1.0);
-        let fc = format!(
-            "[1:a]volume={:.3}[bg];[0:a][bg]amix=inputs=2:duration=longest:dropout_transition=0[a]",
-            vol
-        );
-        a.push("-filter_complex".into());
-        a.push(fc);
-        a.push("-map".into());
-        a.push("0:v:0".into());
-        a.push("-map".into());
-        a.push("[a]".into());
-        a.push("-c:v".into());
-        a.push("copy".into());
-        a.push("-c:a".into());
-        a.push("aac".into());
-        a.push("-b:a".into());
-        a.push("192k".into());
-    } else {
-        a.push("-map".into());
-        a.push("0:v:0".into());
-        a.push("-map".into());
-        a.push("1:a:0".into());
-        a.push("-c:v".into());
-        a.push("copy".into());
-        a.push("-c:a".into());
-        a.push("aac".into());
-        a.push("-b:a".into());
-        a.push("192k".into());
-    }
-    a.push("-threads".into());
-    a.push("0".into());
-    a.push("-progress".into());
-    a.push("pipe:1".into());
-    a.push("-y".into());
-    a.push(out.to_string_lossy().to_string());
-    a
+/// How to treat audio when concatenating videos.
+enum MergeAudio {
+    /// Every input has an audio track → concat v+a.
+    All,
+    /// No input has audio → concat video only.
+    None,
 }
 
-fn build_video_merge_args(inputs: &[String], out: &Path) -> Vec<String> {
+fn build_video_merge_args(inputs: &[String], audio: MergeAudio, out: &Path) -> Vec<String> {
     let n = inputs.len();
     let mut a: Vec<String> = Vec::new();
     for i in inputs {
@@ -1209,16 +999,31 @@ fn build_video_merge_args(inputs: &[String], out: &Path) -> Vec<String> {
         a.push(i.clone());
     }
     let mut fc = String::new();
-    for (idx, _) in inputs.iter().enumerate() {
-        fc.push_str(&format!("[{}:v][{}:a]", idx, idx));
+    match audio {
+        MergeAudio::All => {
+            for idx in 0..n {
+                fc.push_str(&format!("[{}:v][{}:a]", idx, idx));
+            }
+            fc.push_str(&format!("concat=n={}:v=1:a=1[outv][outa]", n));
+            a.push("-filter_complex".into());
+            a.push(fc);
+            a.push("-map".into());
+            a.push("[outv]".into());
+            a.push("-map".into());
+            a.push("[outa]".into());
+        }
+        MergeAudio::None => {
+            for idx in 0..n {
+                fc.push_str(&format!("[{}:v]", idx));
+            }
+            fc.push_str(&format!("concat=n={}:v=1:a=0[outv]", n));
+            a.push("-filter_complex".into());
+            a.push(fc);
+            a.push("-map".into());
+            a.push("[outv]".into());
+            a.push("-an".into());
+        }
     }
-    fc.push_str(&format!("concat=n={}:v=1:a=1[outv][outa]", n));
-    a.push("-filter_complex".into());
-    a.push(fc);
-    a.push("-map".into());
-    a.push("[outv]".into());
-    a.push("-map".into());
-    a.push("[outa]".into());
     a.push("-c:v".into());
     a.push("libx264".into());
     a.push("-crf".into());
@@ -1391,185 +1196,6 @@ fn build_audio_merge_args(inputs: &[String], out: &Path) -> Vec<String> {
     a
 }
 
-fn build_image_resize_args(info: &MediaInfo, p: &ImageResizeParams, out: &Path) -> Vec<String> {
-    let vf: String;
-    match p.mode.as_str() {
-        "exact" => {
-            let w = p.width.unwrap_or(1280).max(1);
-            let h = p.height.unwrap_or(720).max(1);
-            vf = format!("scale={}:{}", w, h);
-        }
-        "percent" => {
-            let pct = p.percent.unwrap_or(100).clamp(1, 1000) as f64 / 100.0;
-            vf = format!(
-                "scale=trunc(iw*{:.4}):trunc(ih*{:.4})",
-                pct, pct
-            );
-        }
-        _ => {
-            // "longest": fit longest side to width
-            let w = p.width.unwrap_or(1280).max(1);
-            vf = format!(
-                "scale='if(gt(iw,ih),{},-2)':'if(gt(iw,ih),-2,{})'",
-                w, w
-            );
-        }
-    }
-    let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-vf".into(), vf];
-    // keep source format via encoder defaults; quality handled by extension logic in caller
-    a.push("-progress".into());
-    a.push("pipe:1".into());
-    a.push("-y".into());
-    a.push(out.to_string_lossy().to_string());
-    a
-}
-
-fn build_image_rotate_args(info: &MediaInfo, p: &ImageRotateParams, out: &Path) -> Vec<String> {
-    let vf = match p.transform.as_str() {
-        "90cc" => "transpose=2",
-        "180" => "transpose=1,transpose=1",
-        "hflip" => "hflip",
-        "vflip" => "vflip",
-        _ => "transpose=1",
-    };
-    let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-vf".into(), vf.to_string()];
-    a.push("-progress".into());
-    a.push("pipe:1".into());
-    a.push("-y".into());
-    a.push(out.to_string_lossy().to_string());
-    a
-}
-
-fn build_image_crop_args(info: &MediaInfo, p: &ImageCropParams, out: &Path) -> Vec<String> {
-    let iw = info.width.unwrap_or(1920);
-    let ih = info.height.unwrap_or(1080);
-    let (w, h, x, y) = crop_rect(
-        &p.mode,
-        &p.aspect,
-        match (p.x, p.y, p.width, p.height) {
-            (Some(x), Some(y), Some(w), Some(h)) => Some((x, y, w, h)),
-            _ => None,
-        },
-        iw,
-        ih,
-    );
-    let vf = format!("crop={}:{}:{}:{}", w, h, x, y);
-    let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-vf".into(), vf];
-    a.push("-progress".into());
-    a.push("pipe:1".into());
-    a.push("-y".into());
-    a.push(out.to_string_lossy().to_string());
-    a
-}
-
-fn image_watermark_position(pos: &str, margin_px: i64) -> (String, String) {
-    let x = match pos {
-        "tl" | "ml" | "bl" => format!("{}", margin_px),
-        "tc" | "mc" | "bc" => "(main_w-overlay_w)/2".to_string(),
-        _ => format!("main_w-overlay_w-{}", margin_px),
-    };
-    let y = match pos {
-        "tl" | "tc" | "tr" => format!("{}", margin_px),
-        "ml" | "mc" | "mr" => "(main_h-overlay_h)/2".to_string(),
-        _ => format!("main_h-overlay_h-{}", margin_px),
-    };
-    (x, y)
-}
-
-fn build_image_watermark_args(
-    info: &MediaInfo,
-    p: &ImageWatermarkParams,
-    overlay_path: &str,
-    out: &Path,
-) -> Vec<String> {
-    let iw = info.width.unwrap_or(1280) as f64;
-    let ih = info.height.unwrap_or(720) as f64;
-    let scale_pct = p.scale_percent.clamp(1, 100) as f64 / 100.0;
-    let tw = ((iw * scale_pct) as u32).max(8);
-    let margin_pct = p.margin_percent.unwrap_or(3).clamp(0, 30) as f64 / 100.0;
-    let margin = ((iw.min(ih)) * margin_pct) as i64;
-    let (x, y) = image_watermark_position(&p.position, margin);
-    let opacity = p.opacity.unwrap_or(1.0).clamp(0.0, 1.0) as f64;
-
-    if p.mode == "text" {
-        let text = p.text.clone().unwrap_or_default();
-        let color = p.color.clone().unwrap_or_else(|| "white".into());
-        let fs = p.font_size.unwrap_or(36).clamp(8, 400);
-        let quoted = format!("'{}'", text.replace('\'', "'\\''"));
-        let mut chain = format!(
-            "drawtext=text={}:fontcolor={}:fontsize={}:x={}:y={}",
-            quoted, color, fs, x, y
-        );
-        if opacity < 1.0 {
-            chain.push_str(&format!(":alpha={:.3}", opacity));
-        }
-        vec![
-            "-i".into(),
-            info.path.clone(),
-            "-vf".into(),
-            chain,
-            "-progress".into(),
-            "pipe:1".into(),
-            "-y".into(),
-            out.to_string_lossy().to_string(),
-        ]
-    } else {
-        let mut chain = format!("[1:v]scale={}:-2", tw);
-        if opacity < 1.0 {
-            chain.push_str(",format=rgba,colorchannelmixer=aa=");
-            chain.push_str(&format!("{:.6}", opacity));
-        }
-        let fc = format!("{c}[ov];[0:v][ov]overlay=x={x}:y={y}", c = chain, x = x, y = y);
-        vec![
-            "-i".into(),
-            info.path.clone(),
-            "-i".into(),
-            overlay_path.to_string(),
-            "-filter_complex".into(),
-            fc,
-            "-progress".into(),
-            "pipe:1".into(),
-            "-y".into(),
-            out.to_string_lossy().to_string(),
-        ]
-    }
-}
-
-fn build_image_pdf_args(info: &MediaInfo, out: &Path) -> Vec<String> {
-    vec![
-        "-i".into(),
-        info.path.clone(),
-        "-progress".into(),
-        "pipe:1".into(),
-        "-y".into(),
-        out.to_string_lossy().to_string(),
-    ]
-}
-
-fn build_image_adjust_args(info: &MediaInfo, p: &ImageAdjustParams, out: &Path) -> Vec<String> {
-    let mut parts: Vec<String> = Vec::new();
-    if let Some(b) = p.brightness {
-        parts.push(format!("brightness={:.3}", b.clamp(-1.0, 1.0)));
-    }
-    if let Some(c) = p.contrast {
-        parts.push(format!("contrast={:.3}", c.clamp(-2.0, 2.0)));
-    }
-    if let Some(s) = p.saturation {
-        parts.push(format!("saturation={:.3}", s.clamp(0.0, 3.0)));
-    }
-    let vf = if parts.is_empty() {
-        "null".to_string()
-    } else {
-        format!("eq={}", parts.join(":"))
-    };
-    let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-vf".into(), vf];
-    a.push("-progress".into());
-    a.push("pipe:1".into());
-    a.push("-y".into());
-    a.push(out.to_string_lossy().to_string());
-    a
-}
-
 fn build_video_frames_args(info: &MediaInfo, p: &FrameSampleParams, out: &Path) -> Vec<String> {
     let interval = p.interval.max(0.1);
     let width = p.width.max(64);
@@ -1577,7 +1203,7 @@ fn build_video_frames_args(info: &MediaInfo, p: &FrameSampleParams, out: &Path) 
     let mut a: Vec<String> = vec!["-i".into(), info.path.clone()];
     a.push("-vf".into());
     a.push(format!(
-        "fps=1/{},scale={}:-1:force_original_aspect_ratio=decrease,setpts=N/FRAME_RATE/TB",
+        "fps=1/{},scale={}:-2:force_original_aspect_ratio=decrease,setpts=N/FRAME_RATE/TB",
         interval, width
     ));
     a.push("-r".into());
@@ -1622,7 +1248,7 @@ fn build_video_contact_args(info: &MediaInfo, p: &ContactSheetParams, out: &Path
     };
     let mut a: Vec<String> = vec!["-i".into(), info.path.clone()];
     a.push("-vf".into());
-    a.push(format!("fps={},scale={}:-1,tile={}x{}", fps_expr, thumb_w, cols, rows));
+    a.push(format!("fps={},scale={}:-2,tile={}x{}", fps_expr, thumb_w, cols, rows));
     a.push("-frames:v".into());
     a.push("1".into());
     a.push("-progress".into());
@@ -1638,7 +1264,11 @@ fn build_video_silence_args(info: &MediaInfo, p: &VideoSilenceParams, _out: &Pat
     let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-y".into()];
     a.push("-af".into());
     a.push(format!("silencedetect=noise={}dB:d={}", threshold, min_len));
-    // No media output: discard to the null muxer; results are in the ffmpeg log.
+    // Progress on stdout keeps the job's percent moving during long scans;
+    // results are in the ffmpeg log (stderr).
+    a.push("-progress".into());
+    a.push("pipe:1".into());
+    // No media output: discard to the null muxer.
     a.push("-f".into());
     a.push("null".into());
     a.push("-".into());
@@ -1679,15 +1309,9 @@ fn extension_for(tool_id: &str, info: &MediaInfo, params: &serde_json::Value) ->
         )
         .to_string(),
         "trim" | "mute" | "strip-metadata" => input_ext(info, "mp4"),
-        "rotate" => safe_container_ext(info),
-        "video-crop" | "video-volume" | "video-reverse" | "video-subtitle" | "video-addaudio"
-        | "video-merge" => safe_container_ext(info),
+        "video-subtitle" | "video-merge" => safe_container_ext(info),
         "audio-trim" | "audio-fade" | "audio-volume" | "audio-pitch" | "audio-silence"
         | "audio-merge" => source_audio_format(&info.path).to_string(),
-        "image-resize" | "image-rotate" | "image-crop" | "image-watermark" | "image-adjust" => {
-            source_image_format(&info.path)
-        }
-        "image-pdf" => "pdf".to_string(),
         "video-frames" => safe_container_ext(info),
         "video-contact" => "png".to_string(),
         "video-silence" => "txt".to_string(),
@@ -1721,29 +1345,111 @@ fn extension_for(tool_id: &str, info: &MediaInfo, params: &serde_json::Value) ->
     }
 }
 
+/// Collapse encoder names into codec families for container validation.
+fn codec_family<'a>(codec: &'a str) -> &'a str {
+    match codec {
+        "libx264" | "h264_nvenc" | "h264_qsv" | "h264_videotoolbox" | "h264_amf"
+        | "h264_vaapi" | "h264" => "h264",
+        "libvpx-vp9" | "vp9" => "vp9",
+        "libsvtav1" | "libaom-av1" | "av1" => "av1",
+        "libvpx" | "vp8" => "vp8",
+        "aac" => "aac",
+        "libopus" | "opus" => "opus",
+        "libvorbis" | "vorbis" => "vorbis",
+        "flac" => "flac",
+        "libmp3lame" | "mp3" => "mp3",
+        other => other,
+    }
+}
+
+/// Reject codec/container combinations the target muxer cannot carry (or that
+/// produce files most players refuse). Today the restrictive one is WebM:
+/// VP8/VP9/AV1 video and Vorbis/Opus audio only. Without this check the user
+/// only sees a raw "FFmpeg 退出码 1" long after the job started.
+fn validate_video_container(
+    ext: &str,
+    vcodec_param: &str,
+    acodec_param: &str,
+    info: &MediaInfo,
+) -> Result<()> {
+    if !ext.eq_ignore_ascii_case("webm") {
+        return Ok(());
+    }
+    let v_raw = match vcodec_param {
+        "" | "copy" => info.video_codec.as_deref().unwrap_or(""),
+        other => other,
+    };
+    if !matches!(codec_family(v_raw), "vp8" | "vp9" | "av1") {
+        return Err(AppError(format!(
+            "WebM 容器不支持 {} 视频：请改用 VP9/AV1 编码，或将容器换成 MP4/MKV/MOV",
+            if v_raw.is_empty() { "未知" } else { v_raw }
+        )));
+    }
+    if acodec_param != "none" {
+        let a_raw = match acodec_param {
+            "" | "copy" => info.audio_codec.as_deref().unwrap_or(""),
+            other => other,
+        };
+        if !a_raw.is_empty() && !matches!(codec_family(a_raw), "opus" | "vorbis") {
+            return Err(AppError(format!(
+                "WebM 容器不支持 {} 音频：请改用 Opus，或将容器换成 MP4/MKV/MOV",
+                a_raw
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Effective duration of a trimmed window, used as the progress denominator:
+/// ffmpeg's out_time only covers [start, start+duration).
+fn trim_window_secs(total: f64, start: f64, dur: Option<f64>) -> f64 {
+    let s = start.max(0.0);
+    let end = match dur {
+        Some(d) if d > 0.0 => s + d,
+        _ => total,
+    };
+    (end.min(total) - s).max(0.0)
+}
+
 fn parse_params<T: serde::de::DeserializeOwned>(params: &serde_json::Value) -> Result<T> {
     serde_json::from_value(params.clone()).map_err(AppError::from)
 }
 
-/// A fully prepared job: either skipped by the overwrite policy, or ready
-/// to run with a single ffmpeg invocation, or a sequence of invocations that
-/// produce multiple output files (e.g. multi-segment trim).
+/// A fully prepared job: either skipped by the overwrite policy, ready to run
+/// with a single ffmpeg invocation, or a sequence of invocations that produce
+/// multiple output files (e.g. multi-segment trim).
 enum PreparedJob {
-    Skipped,
+    Skipped {
+        /// The existing output file that caused the skip, so callers can chain
+        /// it as the "output" of this step.
+        existing: Option<PathBuf>,
+    },
     Run { args: Vec<String>, out: PathBuf },
     RunMany { runs: Vec<(Vec<String>, PathBuf, f64)> },
 }
 
+/// Create an empty placeholder file so concurrent jobs can't resolve to the
+/// same output name. ffmpeg later overwrites it with -y.
+fn reserve(path: &Path) {
+    let _ = std::fs::OpenOptions::new().write(true).create_new(true).open(path);
+}
+
 /// Resolve an output path applying the rename/skip/overwrite policy.
-/// Returns None when the policy is "skip" and the file already exists.
-fn resolve_policy(out: PathBuf, policy: &str) -> Option<PathBuf> {
+/// Ok = path to use; Err = policy is "skip" and the file already exists (the
+/// existing path is returned so the caller can report/chain it).
+fn resolve_policy(out: PathBuf, policy: &str) -> std::result::Result<PathBuf, PathBuf> {
     if !out.exists() {
-        return Some(out);
+        reserve(&out);
+        return Ok(out);
     }
     match policy {
-        "overwrite" => Some(out),
-        "skip" => None,
-        _ => Some(apply_overwrite_policy(out, "rename")),
+        "overwrite" => Ok(out),
+        "skip" => Err(out),
+        _ => {
+            let candidate = apply_overwrite_policy(out, "rename");
+            reserve(&candidate);
+            Ok(candidate)
+        }
     }
 }
 
@@ -1757,11 +1463,11 @@ fn input_ext(info: &MediaInfo, fallback: &str) -> String {
         .unwrap_or_else(|| fallback.to_string())
 }
 
-/// The frontend uses prefixed ids ("video-compress", "image-convert", …) while
+/// The frontend uses prefixed ids ("video-compress", "audio-convert", …) while
 /// the dispatch below matches the unprefixed tool ("compress", "convert"). This
 /// normalizes both conventions so a single tool id works everywhere.
 fn norm_tool_id(id: &str) -> &str {
-    for media in ["video", "audio", "image"] {
+    for media in ["video", "audio"] {
         let prefix = [media, "-"].concat();
         if let Some(rest) = id.strip_prefix(&prefix) {
             return rest;
@@ -1771,19 +1477,17 @@ fn norm_tool_id(id: &str) -> &str {
 }
 
 /// Unique dispatch id for `prepare_job`. Old tools funnel into a shared
-/// "compress"/"convert"/… id (stripping the media prefix); new tools keep their
-/// full, already-unique id (e.g. "video-crop" vs "image-crop").
+/// "compress"/"convert" id (stripping the media prefix); new tools keep their
+/// full, already-unique id.
 fn tool_dispatch(id: &str) -> &str {
     match id {
-        "video-compress" | "audio-compress" | "image-compress" => "compress",
-        "video-convert" | "audio-convert" | "image-convert" => "convert",
+        "video-compress" | "audio-compress" => "compress",
+        "video-convert" | "audio-convert" => "convert",
         "video-trim" => "trim",
-        "video-rotate" => "rotate",
         "video-speed" => "speed",
         "video-mute" => "mute",
         "video-watermark" => "watermark",
         "video-extract-audio" => "extract-audio",
-        "video-gif" => "gif",
         "video-screenshot" => "screenshot",
         "video-strip-metadata" => "strip-metadata",
         _ => id,
@@ -1791,41 +1495,40 @@ fn tool_dispatch(id: &str) -> &str {
 }
 
 /// Build the args + output path for any tool id, or mark as skipped.
-fn prepare_job(info: &MediaInfo, req: &JobRequest, suffix: &str, policy: &str) -> Result<PreparedJob> {
+/// Blocking (may probe merge inputs / encode a PDF source image); call within
+/// spawn_blocking. `app` is only needed by tools that probe extra inputs
+/// (video-merge); tests pass None.
+fn prepare_job(
+    app: Option<&AppHandle>,
+    info: &MediaInfo,
+    req: &JobRequest,
+    suffix: &str,
+    policy: &str,
+) -> Result<PreparedJob> {
     match tool_dispatch(&req.tool_id) {
         "compress" | "convert" => {
             let ext = extension_for(&req.tool_id, info, &req.params);
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
+            let out = match resolve_policy(out, policy) {
+                Ok(p) => p,
+                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
             };
             let args = match info.media_type {
                 MediaType::Video => {
                     let mut p: VideoParams = parse_params(&req.params)?;
                     p.gpu = req.gpu.clone();
+                    validate_video_container(&ext, &p.video_codec, &p.audio_codec, info)?;
                     build_video_args(info, &p, &out)
-                }
-                MediaType::Image => {
-                    let p: ImageParams = parse_params(&req.params)?;
-                    build_image_args(info, &p, &out)
                 }
                 MediaType::Audio => {
                     let p: AudioParams = parse_params(&req.params)?;
                     build_audio_args(info, &p, &out)
                 }
-                MediaType::Unknown => {
-                    return Err(AppError("无法识别的媒体类型".into()));
+                MediaType::Image | MediaType::Unknown => {
+                    return Err(AppError("不支持的媒体类型".into()));
                 }
             };
             Ok(PreparedJob::Run { args, out })
-        }
-        "gif" => {
-            let p: GifParams = parse_params(&req.params)?;
-            let out = output_path(&info.path, &req.output_dir, "gif", suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
-            };
-            Ok(PreparedJob::Run { args: build_gif_args(info, &p, &out), out })
         }
         "screenshot" => {
             let p: ScreenshotParams = parse_params(&req.params)?;
@@ -1838,8 +1541,9 @@ fn prepare_job(info: &MediaInfo, req: &JobRequest, suffix: &str, policy: &str) -
                 Ok(PreparedJob::Run { args: build_screenshot_interval(info, &p, &out), out })
             } else {
                 let base = output_path(&info.path, &req.output_dir, ext, suffix)?;
-                let Some(out) = resolve_policy(base, policy) else {
-                    return Ok(PreparedJob::Skipped);
+                let out = match resolve_policy(base, policy) {
+                    Ok(p) => p,
+                    Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
                 };
                 Ok(PreparedJob::Run { args: build_screenshot_single(info, &p, &out), out })
             }
@@ -1848,27 +1552,39 @@ fn prepare_job(info: &MediaInfo, req: &JobRequest, suffix: &str, policy: &str) -
             let p: SpeedParams = parse_params(&req.params)?;
             let ext = safe_container_ext(info);
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
+            let out = match resolve_policy(out, policy) {
+                Ok(p) => p,
+                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
             };
             Ok(PreparedJob::Run { args: build_speed_args(info, &p, &out), out })
         }
         "watermark" => {
             let p: WatermarkParams = parse_params(&req.params)?;
+            if p.image_path.trim().is_empty() {
+                return Err(AppError("请先选择水印图片".into()));
+            }
+            if !Path::new(&p.image_path).exists() {
+                return Err(AppError(format!("水印图片不存在：{}", p.image_path)));
+            }
             let ext = safe_container_ext(info);
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
+            let out = match resolve_policy(out, policy) {
+                Ok(p) => p,
+                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
             };
             let wm_path = p.image_path.clone();
             Ok(PreparedJob::Run { args: build_watermark_args(info, &p, &wm_path, &out), out })
         }
         "extract-audio" => {
             let p: ExtractAudioParams = parse_params(&req.params)?;
+            if info.audio_codec.is_none() {
+                return Err(AppError("该视频没有音轨，无法提取音频".into()));
+            }
             let ext = audio_ext_for(&p.format).to_string();
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
+            let out = match resolve_policy(out, policy) {
+                Ok(p) => p,
+                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
             };
             let ap = AudioParams { format: p.format, bitrate_kbps: p.bitrate_kbps };
             Ok(PreparedJob::Run { args: build_audio_args(info, &ap, &out), out })
@@ -1882,8 +1598,9 @@ fn prepare_job(info: &MediaInfo, req: &JobRequest, suffix: &str, policy: &str) -
             };
             let ext = input_ext(info, fallback);
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
+            let out = match resolve_policy(out, policy) {
+                Ok(p) => p,
+                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
             };
             let p: StripMetadataParams = parse_params(&req.params)?;
             Ok(PreparedJob::Run { args: build_strip_metadata_args(info, &p, &out), out })
@@ -1906,8 +1623,9 @@ fn prepare_job(info: &MediaInfo, req: &JobRequest, suffix: &str, policy: &str) -
             for (i, seg) in segments.iter().enumerate() {
                 let label = if multi { format!("_{}", i + 1) } else { String::new() };
                 let out = output_path_labeled(&info.path, &req.output_dir, &ext, &suffix, &label)?;
-                let Some(out) = resolve_policy(out, policy) else {
-                    return Ok(PreparedJob::Skipped);
+                let out = match resolve_policy(out, policy) {
+                    Ok(p) => p,
+                    Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
                 };
                 let args = build_trim_segment_args(info, seg.start_time, seg.duration, &p.mode, &out);
                 let dur = seg.duration.unwrap_or_else(|| (total_dur - seg.start_time).max(0.0));
@@ -1924,105 +1642,95 @@ fn prepare_job(info: &MediaInfo, req: &JobRequest, suffix: &str, policy: &str) -
             parse_params::<MuteParams>(&req.params)?;
             let ext = input_ext(info, "mp4");
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
+            let out = match resolve_policy(out, policy) {
+                Ok(p) => p,
+                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
             };
             let p: MuteParams = parse_params(&req.params)?;
             Ok(PreparedJob::Run { args: build_mute_args(info, &p, &out), out })
         }
-        "rotate" => {
-            let p: RotateParams = parse_params(&req.params)?;
-            let ext = safe_container_ext(info);
-            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
-            };
-            Ok(PreparedJob::Run { args: build_rotate_args(info, &p, &out), out })
-        }
         /* ── New video tools ── */
-        "video-crop" => {
-            let p: CropParams = parse_params(&req.params)?;
-            let ext = safe_container_ext(info);
-            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
-            };
-            Ok(PreparedJob::Run { args: build_video_crop_args(info, &p, &out), out })
-        }
-        "video-volume" => {
-            let p: VideoVolumeParams = parse_params(&req.params)?;
-            let ext = safe_container_ext(info);
-            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
-            };
-            Ok(PreparedJob::Run { args: build_video_volume_args(info, &p, &out), out })
-        }
-        "video-reverse" => {
-            let p: VideoReverseParams = parse_params(&req.params)?;
-            let ext = safe_container_ext(info);
-            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
-            };
-            Ok(PreparedJob::Run { args: build_video_reverse_args(info, &p, &out), out })
-        }
         "video-subtitle" => {
             let p: SubtitleParams = parse_params(&req.params)?;
+            if p.path.trim().is_empty() {
+                return Err(AppError("请先选择字幕文件".into()));
+            }
+            if !Path::new(&p.path).exists() {
+                return Err(AppError(format!("字幕文件不存在：{}", p.path)));
+            }
             let ext = if p.burn.unwrap_or(true) {
                 safe_container_ext(info)
             } else {
                 "mkv".to_string()
             };
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
+            let out = match resolve_policy(out, policy) {
+                Ok(p) => p,
+                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
             };
             Ok(PreparedJob::Run { args: build_video_subtitle_args(info, &p, &out), out })
-        }
-        "video-addaudio" => {
-            let p: AddAudioParams = parse_params(&req.params)?;
-            let ext = safe_container_ext(info);
-            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
-            };
-            Ok(PreparedJob::Run { args: build_video_addaudio_args(info, &p, &out), out })
         }
         "video-merge" => {
             let _p: VideoMergeParams = parse_params(&req.params)?;
             if req.inputs.len() < 2 {
                 return Err(AppError("合并视频需要至少 2 个文件".into()));
             }
+            // The concat filter needs a matching audio configuration across
+            // inputs: all-with-audio or all-without. Mixed input would either
+            // fail ("matches no streams") or desync.
+            let mut any_audio = false;
+            let mut all_audio = true;
+            let app = app.ok_or_else(|| AppError("内部错误：缺少应用句柄".into()))?;
+            for input in &req.inputs {
+                let inf = crate::media::probe_sync(app, input)?;
+                if inf.audio_codec.is_some() {
+                    any_audio = true;
+                } else {
+                    all_audio = false;
+                }
+            }
+            let audio = if all_audio {
+                MergeAudio::All
+            } else if !any_audio {
+                MergeAudio::None
+            } else {
+                return Err(AppError(
+                    "所选视频的音轨不一致（部分有音轨、部分没有），无法直接合并；请先用「移除音轨」处理后再试".into(),
+                ));
+            };
             let ext = safe_container_ext(info);
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
+            let out = match resolve_policy(out, policy) {
+                Ok(p) => p,
+                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
             };
-            Ok(PreparedJob::Run { args: build_video_merge_args(&req.inputs, &out), out })
+            Ok(PreparedJob::Run { args: build_video_merge_args(&req.inputs, audio, &out), out })
         }
         "video-frames" => {
             let p: FrameSampleParams = parse_params(&req.params)?;
             let ext = safe_container_ext(info);
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
+            let out = match resolve_policy(out, policy) {
+                Ok(p) => p,
+                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
             };
             Ok(PreparedJob::Run { args: build_video_frames_args(info, &p, &out), out })
         }
         "video-contact" => {
             let p: ContactSheetParams = parse_params(&req.params)?;
             let out = output_path(&info.path, &req.output_dir, "png", suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
+            let out = match resolve_policy(out, policy) {
+                Ok(p) => p,
+                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
             };
             Ok(PreparedJob::Run { args: build_video_contact_args(info, &p, &out), out })
         }
         "video-silence" => {
             let p: VideoSilenceParams = parse_params(&req.params)?;
             let out = output_path(&info.path, &req.output_dir, "txt", suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
+            let out = match resolve_policy(out, policy) {
+                Ok(p) => p,
+                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
             };
             Ok(PreparedJob::Run { args: build_video_silence_args(info, &p, &out), out })
         }
@@ -2031,8 +1739,9 @@ fn prepare_job(info: &MediaInfo, req: &JobRequest, suffix: &str, policy: &str) -
             let p: AudioTrimParams = parse_params(&req.params)?;
             let ext = source_audio_format(&info.path).to_string();
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
+            let out = match resolve_policy(out, policy) {
+                Ok(p) => p,
+                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
             };
             Ok(PreparedJob::Run { args: build_audio_trim_args(info, &p, &out), out })
         }
@@ -2040,8 +1749,9 @@ fn prepare_job(info: &MediaInfo, req: &JobRequest, suffix: &str, policy: &str) -
             let p: FadeParams = parse_params(&req.params)?;
             let ext = source_audio_format(&info.path).to_string();
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
+            let out = match resolve_policy(out, policy) {
+                Ok(p) => p,
+                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
             };
             Ok(PreparedJob::Run { args: build_audio_fade_args(info, &p, &out), out })
         }
@@ -2049,8 +1759,9 @@ fn prepare_job(info: &MediaInfo, req: &JobRequest, suffix: &str, policy: &str) -
             let p: AudioVolumeParams = parse_params(&req.params)?;
             let ext = source_audio_format(&info.path).to_string();
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
+            let out = match resolve_policy(out, policy) {
+                Ok(p) => p,
+                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
             };
             Ok(PreparedJob::Run { args: build_audio_volume_args(info, &p, &out), out })
         }
@@ -2058,8 +1769,9 @@ fn prepare_job(info: &MediaInfo, req: &JobRequest, suffix: &str, policy: &str) -
             let p: PitchParams = parse_params(&req.params)?;
             let ext = source_audio_format(&info.path).to_string();
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
+            let out = match resolve_policy(out, policy) {
+                Ok(p) => p,
+                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
             };
             Ok(PreparedJob::Run { args: build_audio_pitch_args(info, &p, &out), out })
         }
@@ -2067,8 +1779,9 @@ fn prepare_job(info: &MediaInfo, req: &JobRequest, suffix: &str, policy: &str) -
             let p: SilenceParams = parse_params(&req.params)?;
             let ext = source_audio_format(&info.path).to_string();
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
+            let out = match resolve_policy(out, policy) {
+                Ok(p) => p,
+                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
             };
             Ok(PreparedJob::Run { args: build_audio_silence_args(info, &p, &out), out })
         }
@@ -2079,65 +1792,11 @@ fn prepare_job(info: &MediaInfo, req: &JobRequest, suffix: &str, policy: &str) -
             }
             let ext = source_audio_format(&info.path).to_string();
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
+            let out = match resolve_policy(out, policy) {
+                Ok(p) => p,
+                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
             };
             Ok(PreparedJob::Run { args: build_audio_merge_args(&req.inputs, &out), out })
-        }
-        /* ── New image tools ── */
-        "image-resize" => {
-            let p: ImageResizeParams = parse_params(&req.params)?;
-            let ext = source_image_format(&info.path);
-            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
-            };
-            Ok(PreparedJob::Run { args: build_image_resize_args(info, &p, &out), out })
-        }
-        "image-rotate" => {
-            let p: ImageRotateParams = parse_params(&req.params)?;
-            let ext = source_image_format(&info.path);
-            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
-            };
-            Ok(PreparedJob::Run { args: build_image_rotate_args(info, &p, &out), out })
-        }
-        "image-crop" => {
-            let p: ImageCropParams = parse_params(&req.params)?;
-            let ext = source_image_format(&info.path);
-            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
-            };
-            Ok(PreparedJob::Run { args: build_image_crop_args(info, &p, &out), out })
-        }
-        "image-watermark" => {
-            let p: ImageWatermarkParams = parse_params(&req.params)?;
-            let ext = source_image_format(&info.path);
-            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
-            };
-            let ov = p.image_path.clone().unwrap_or_default();
-            Ok(PreparedJob::Run { args: build_image_watermark_args(info, &p, &ov, &out), out })
-        }
-        "image-adjust" => {
-            let p: ImageAdjustParams = parse_params(&req.params)?;
-            let ext = source_image_format(&info.path);
-            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
-            };
-            Ok(PreparedJob::Run { args: build_image_adjust_args(info, &p, &out), out })
-        }
-        "image-pdf" => {
-            parse_params::<ImagePdfParams>(&req.params)?;
-            let out = output_path(&info.path, &req.output_dir, "pdf", suffix)?;
-            let Some(out) = resolve_policy(out, policy) else {
-                return Ok(PreparedJob::Skipped);
-            };
-            Ok(PreparedJob::Run { args: build_image_pdf_args(info, &out), out })
         }
         other => Err(AppError(format!("未知工具: {}", other))),
     }
@@ -2154,10 +1813,10 @@ enum VideoOp {
 }
 
 /// The composable subset of tools that can be merged into one `ffmpeg -i …`
-/// command. Terminal tools (gif / screenshot / extract-audio) are excluded and
+/// command. Terminal tools (screenshot / extract-audio) are excluded and
 /// fall back to per-step chaining.
-const MERGEABLE_TOOLS: [&str; 8] = [
-    "compress", "convert", "trim", "rotate", "speed", "mute", "watermark", "strip-metadata",
+const MERGEABLE_TOOLS: [&str; 7] = [
+    "compress", "convert", "trim", "speed", "mute", "watermark", "strip-metadata",
 ];
 
 /// Precondition for merging. Rejects terminal tools and combinations that
@@ -2172,6 +1831,11 @@ fn is_mergeable_chain(steps: &[WorkflowStepInput]) -> bool {
         if id == "trim" {
             if let Ok(p) = parse_params::<TrimParams>(&s.params) {
                 if p.mode == "copy" {
+                    return false;
+                }
+                // Multi-segment trims run as several ffmpeg invocations and
+                // cannot fold into the single merged command.
+                if p.segments.len() > 1 {
                     return false;
                 }
             }
@@ -2207,22 +1871,16 @@ fn merged_chain(info: &MediaInfo, steps: &[WorkflowStepInput]) -> Option<MergedC
                 if let Some(res) = resolution_vf(&p.resolution) {
                     ops.push(VideoOp::Filter(res));
                 }
+                // "none" means drop the audio track — same as the single-job
+                // compress path, which maps it to -an.
+                if p.audio_codec == "none" {
+                    drop_audio = true;
+                }
                 encode = Some(p);
             }
             "trim" => {
                 let p: TrimParams = parse_params(&s.params).ok()?;
                 trim = Some((p.start_time.max(0.0), p.duration));
-            }
-            "rotate" => {
-                let p: RotateParams = parse_params(&s.params).ok()?;
-                let f = match p.transform.as_str() {
-                    "90cc" => "transpose=2",
-                    "180" => "transpose=1,transpose=1",
-                    "hflip" => "hflip",
-                    "vflip" => "vflip",
-                    _ => "transpose=1",
-                };
-                ops.push(VideoOp::Filter(f.to_string()));
             }
             "speed" => {
                 let p: SpeedParams = parse_params(&s.params).ok()?;
@@ -2230,7 +1888,9 @@ fn merged_chain(info: &MediaInfo, steps: &[WorkflowStepInput]) -> Option<MergedC
                 ops.push(VideoOp::Filter(format!("setpts=PTS/{:.6}", rate)));
                 if p.mute_audio.unwrap_or(false) {
                     drop_audio = true;
-                } else if (rate - 1.0).abs() > 1e-9 {
+                } else if (rate - 1.0).abs() > 1e-9 && info.audio_codec.is_some() {
+                    // atempo needs an audio stream; a silent input just gets
+                    // the video speed change.
                     audio_atempo = Some(rate);
                 }
             }
@@ -2653,25 +2313,53 @@ pub async fn start_workflow(app: AppHandle, req: WorkflowRequest) -> Result<Star
         None => return Ok(StartWorkflowResult { id, merged: false, skipped: false }),
     };
     let out = output_path(&input, &req.output_dir, &ext, &suffix)?;
-    let Some(out) = resolve_policy(out, policy) else {
-        // Output already existed and policy = "skip": signal a no-op via the
-        // `skipped` flag instead of emitting a synchronous done event (which
-        // the frontend would race and miss). The caller finishes immediately.
-        return Ok(StartWorkflowResult { id, merged: true, skipped: true });
+    let out = match resolve_policy(out, policy) {
+        Ok(p) => p,
+        Err(_existing) => {
+            // Output already existed and policy = "skip": signal a no-op via the
+            // `skipped` flag instead of emitting a synchronous done event (which
+            // the frontend would race and miss). The caller finishes immediately.
+            return Ok(StartWorkflowResult { id, merged: true, skipped: true });
+        }
     };
 
     let Some(chain) = merged_chain(&info, &req.steps) else {
         return Ok(StartWorkflowResult { id, merged: false, skipped: false });
     };
+
+    // Codec/container sanity for the final encode (e.g. H.264 into WebM).
+    {
+        let (vc, ac) = match &chain.encode {
+            Some(p) => (p.video_codec.as_str(), p.audio_codec.as_str()),
+            None => ("copy", "copy"),
+        };
+        validate_video_container(&chain.ext, vc, ac, &info)?;
+    }
+
+    // Progress denominator: when the chain starts with a trim, out_time only
+    // covers the trimmed window, so normalizing against the full duration
+    // would keep the percent near 0 the whole time.
+    let total = info.duration_secs.unwrap_or(0.0);
+    let duration = match chain.trim {
+        Some((start, dur)) => trim_window_secs(total, start, dur),
+        None => total,
+    };
     let args = merged_args(&info, &chain, &out, &req.gpu);
 
-    let (child, stdout, stderr_buf) = ffmpeg::spawn(&app, "ffmpeg", &args)?;
+    let (child, stdout, stderr_buf, stderr_drain) = ffmpeg::spawn(&app, "ffmpeg", &args)?;
     let input_size = info.size_bytes;
-    let duration = info.duration_secs.unwrap_or(0.0);
     let task_id = id.clone();
 
     let child = std::sync::Arc::new(std::sync::Mutex::new(child));
-    app.state::<JobManager>().register(&task_id, child.clone());
+    let manager = app.state::<JobManager>();
+    manager.register(&task_id, child.clone());
+    // If cancel arrived between spawn and register the kill above missed the
+    // child; kill it now so the cancel is honored immediately.
+    if manager.is_cancelled(&task_id) {
+        if let Ok(mut c) = child.lock() {
+            let _ = c.kill();
+        }
+    }
     emit_progress(&app, &task_id, 0.0, "running", None);
 
     std::thread::spawn(move || {
@@ -2717,6 +2405,9 @@ pub async fn start_workflow(app: AppHandle, req: WorkflowRequest) -> Result<Star
                 "已取消".to_string()
             } else {
                 let detail = {
+                    // Make sure the drain thread has flushed the tail of stderr
+                    // before reading the captured buffer.
+                    let _ = stderr_drain.join();
                     let buf = stderr_buf.lock().unwrap();
                     if buf.is_empty() {
                         String::new()
@@ -2767,20 +2458,47 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult
         .clone()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "_mediatool".to_string());
-    let policy = req.overwrite_policy.as_deref().unwrap_or("rename");
+    let policy = req
+        .overwrite_policy
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "rename".to_string());
+    // prepare_job may block (probing merge inputs, converting a PDF source
+    // image) — keep it off the async runtime workers.
+    let prepared = {
+        let app2 = app.clone();
+        let info2 = info.clone();
+        let req2 = req.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            prepare_job(Some(&app2), &info2, &req2, &suffix, &policy)
+        })
+            .await
+            .map_err(|e| AppError(e.to_string()))??
+    };
 
-    let runs: Vec<(Vec<String>, PathBuf, f64)> = match prepare_job(&info, &req, &suffix, policy)? {
-        PreparedJob::Skipped => {
+    let runs: Vec<(Vec<String>, PathBuf, f64)> = match prepared {
+        PreparedJob::Skipped { existing } => {
             // Nothing was started; the frontend treats this as a terminal
-            // "skipped" phase via the command's return value.
-            return Ok(StartJobResult { id, skipped: true });
+            // "skipped" phase via the command's return value. The existing
+            // file lets the workflow fallback chain keep its input->output
+            // semantics for skipped steps.
+            return Ok(StartJobResult {
+                id,
+                skipped: true,
+                output: existing.map(|p| p.to_string_lossy().to_string()),
+            });
         }
-        PreparedJob::Run { args, out } => vec![(args, out, info.duration_secs.unwrap_or(0.0))],
+        PreparedJob::Run { args, out } => {
+            // Trim-aware progress denominator (gif / screenshot interval /
+            // trimmed single-segment jobs only reach a fraction of the file).
+            let dur = effective_duration(&req, &info);
+            vec![(args, out, dur)]
+        }
         PreparedJob::RunMany { runs } => runs,
     };
 
     if runs.is_empty() {
-        return Ok(StartJobResult { id, skipped: true });
+        return Ok(StartJobResult { id, skipped: true, output: None });
     }
     let input_size = info.size_bytes;
     let total_dur: f64 = runs.iter().map(|r| r.2.max(0.0)).sum();
@@ -2801,7 +2519,7 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult
         'runs: for (_idx, (rargs, out, dur)) in runs.iter().enumerate() {
             let mut args = rargs.clone();
             args.insert(0, "-nostats".into());
-            let (child, stdout, stderr_buf) = match ffmpeg::spawn(&app, "ffmpeg", &args) {
+            let (child, stdout, stderr_buf, stderr_drain) = match ffmpeg::spawn(&app, "ffmpeg", &args) {
                 Ok(v) => v,
                 Err(e) => {
                     ok = false;
@@ -2811,7 +2529,14 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult
             };
 
             let child = std::sync::Arc::new(std::sync::Mutex::new(child));
-            app.state::<JobManager>().register(&task_id, child.clone());
+            let manager = app.state::<JobManager>();
+            manager.register(&task_id, child.clone());
+            // Honor a cancel that arrived between spawn and register.
+            if manager.is_cancelled(&task_id) {
+                if let Ok(mut c) = child.lock() {
+                    let _ = c.kill();
+                }
+            }
 
             let reader = BufReader::new(stdout);
             for line in reader.lines() {
@@ -2854,6 +2579,9 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult
                     "已取消".to_string()
                 } else {
                     let detail = {
+                        // Wait for the drain thread so the tail of stderr is
+                        // captured before reporting the error.
+                        let _ = stderr_drain.join();
                         let buf = stderr_buf.lock().unwrap();
                         if buf.is_empty() {
                             String::new()
@@ -2881,6 +2609,9 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult
             accum += dur.max(0.0);
             let is_pattern = out.to_string_lossy().contains("%03d");
             if !is_pattern && out.to_string_lossy().ends_with(".txt") {
+                // Join the drain thread first — the silencedetect results live
+                // in stderr and the thread may still hold the last lines.
+                let _ = stderr_drain.join();
                 let log = {
                     let buf = stderr_buf.lock().unwrap();
                     String::from_utf8_lossy(&buf).to_string()
@@ -2912,14 +2643,36 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult
         }
     });
 
-    Ok(StartJobResult { id, skipped: false })
+    Ok(StartJobResult { id, skipped: false, output: None })
+}
+
+/// Effective duration a single-output job will actually encode, used as the
+/// progress denominator. Falls back to the full duration.
+fn effective_duration(req: &JobRequest, info: &MediaInfo) -> f64 {
+    let total = info.duration_secs.unwrap_or(0.0);
+    match tool_dispatch(&req.tool_id) {
+        "screenshot" => parse_params::<ScreenshotParams>(&req.params)
+            .map(|p| {
+                if p.mode == "interval" {
+                    let start = p.start_sec.unwrap_or(0.0).max(0.0);
+                    trim_window_secs(total, start, p.end_sec.map(|e| e - start))
+                } else {
+                    total
+                }
+            })
+            .unwrap_or(total),
+        "trim" => parse_params::<TrimParams>(&req.params)
+            .map(|p| trim_window_secs(total, p.start_time, p.duration))
+            .unwrap_or(total),
+        _ => total,
+    }
 }
 
 /// Refined size estimate via a short real encode of a sample clip.
 ///
 /// Reuses the exact same argument builders as `start_job`, but encodes only a
-/// few seconds (or the whole image) to a temp file, then extrapolates the
-/// produced byte count over the total duration.
+/// few seconds to a temp file, then extrapolates the produced byte count over
+/// the total duration.
 pub async fn estimate_size(app: AppHandle, req: EstimateRequest) -> Result<EstimateResult> {
     let sample_secs = req.sample_secs.unwrap_or(8.0).max(0.1);
     let info = req.info;
@@ -2944,15 +2697,13 @@ pub async fn estimate_size(app: AppHandle, req: EstimateRequest) -> Result<Estim
             let p: VideoParams = parse_params(&req.params)?;
             build_video_args(&info, &p, &tmp)
         }
-        MediaType::Image => {
-            let p: ImageParams = parse_params(&req.params)?;
-            build_image_args(&info, &p, &tmp)
+        MediaType::Image | MediaType::Unknown => {
+            return Err(AppError("不支持的媒体类型".into()))
         }
         MediaType::Audio => {
             let p: AudioParams = parse_params(&req.params)?;
             build_audio_args(&info, &p, &tmp)
         }
-        MediaType::Unknown => return Err(AppError("无法识别的媒体类型".into())),
     };
 
     // Drop the progress pipe so we don't have to drain stdout.
@@ -2970,11 +2721,19 @@ pub async fn estimate_size(app: AppHandle, req: EstimateRequest) -> Result<Estim
     final_args.push(format!("{:.3}", offset));
     final_args.extend(base_args);
 
-    let (mut child, _stdout, _stderr) = ffmpeg::spawn(&app, "ffmpeg", &final_args)?;
-    let code = child.wait().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
-
-    let sampled_bytes = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
-    let _ = std::fs::remove_file(&tmp);
+    let (child, _stdout, _stderr, _drain) = ffmpeg::spawn(&app, "ffmpeg", &final_args)?;
+    // Sample-encoding a real clip blocks for seconds — keep it off the async
+    // runtime workers.
+    let waited = tauri::async_runtime::spawn_blocking(move || {
+        let mut child = child;
+        let code = child.wait().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+        let sampled_bytes = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
+        let _ = std::fs::remove_file(&tmp);
+        (code, sampled_bytes)
+    })
+    .await
+    .map_err(|e| AppError(e.to_string()))?;
+    let (code, sampled_bytes) = waited;
 
     if code != 0 || sampled_bytes == 0 {
         return Err(AppError("采样编码失败，无法精确估算".into()));
@@ -2982,16 +2741,6 @@ pub async fn estimate_size(app: AppHandle, req: EstimateRequest) -> Result<Estim
 
     // Whole clip was sampled -> exact.
     let clip_len = total.unwrap_or(sample_dur);
-
-    if req.media_type == MediaType::Image {
-        return Ok(EstimateResult {
-            sampled_bytes,
-            sampled_secs: 1.0,
-            total_secs: None,
-            bytes: sampled_bytes,
-            exact: true,
-        });
-    }
 
     let exact = sample_dur >= clip_len - 1e-6;
     let bytes = if total.is_some() {
@@ -3053,11 +2802,16 @@ fn emit_done(
 }
 
 fn uuid() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    format!("job-{:x}", nanos)
+    // Nanos alone can collide when two jobs start within one clock tick;
+    // pid + monotonic counter make the id unique.
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("job-{:x}-{}-{}", nanos, std::process::id(), n)
 }
 
 
@@ -3136,31 +2890,6 @@ mod tests {
         assert!(args.contains(&"-crf".to_string()));
         assert!(args.contains(&"-cpu-used".to_string()));
         assert_eq!(args.last().unwrap(), "o.webm");
-    }
-
-    #[test]
-    fn image_webp_quality_and_scale() {
-        let p = ImageParams {
-            format: "webp".into(),
-            quality: 80,
-            max_dimension: Some(1280),
-        };
-        let args = build_image_args(&sample_info(), &p, Path::new("o.webp"));
-        assert!(args.contains(&"-quality".to_string()));
-        assert!(args.contains(&"80".to_string()));
-        assert!(args.contains(&"-vf".to_string()));
-        assert!(args.iter().any(|a| a.contains("scale=")));
-    }
-
-    #[test]
-    fn image_source_format_uses_input_codec_flags() {
-        let mut info = sample_info();
-        info.media_type = MediaType::Image;
-        info.path = "photo.jpg".into();
-        let p = ImageParams { format: "source".into(), quality: 80, max_dimension: None };
-        let args = build_image_args(&info, &p, Path::new("o.jpg"));
-        // jpeg source -> -q:v mapping applies
-        assert!(args.contains(&"-q:v".to_string()));
     }
 
     #[test]
@@ -3295,25 +3024,6 @@ mod tests {
     }
 
     #[test]
-    fn rotate_transform_mapping() {
-        let cases = [
-            ("90c", "transpose=1"),
-            ("90cc", "transpose=2"),
-            ("180", "transpose=1,transpose=1"),
-            ("hflip", "hflip"),
-            ("vflip", "vflip"),
-        ];
-        for (transform, expected_vf) in cases {
-            let p = RotateParams { transform: transform.into() };
-            let args = build_rotate_args(&sample_info(), &p, Path::new("o.mp4"));
-            let vf_idx = args.iter().position(|a| a == "-vf").unwrap();
-            assert_eq!(args[vf_idx + 1], expected_vf, "transform {}", transform);
-            assert!(args.contains(&"libx264".to_string()));
-            assert!(args.contains(&"aac".to_string()));
-        }
-    }
-
-    #[test]
     fn extension_source_keeps_input() {
         let mut info = sample_info();
         info.path = "clip.mkv".into();
@@ -3364,22 +3074,11 @@ mod tests {
     }
 
     #[test]
-    fn prepare_rotate_picks_safe_container() {
-        let mut info = sample_info();
-        info.path = "clip.webm".into();
-        match prepare_job(&info, &req("rotate", serde_json::json!({"transform":"90c"})), "_mediatool", "rename").unwrap() {
-            PreparedJob::Run { out, .. } => {
-                assert!(out.to_string_lossy().ends_with(".mp4"), "got {:?}", out);
-            }
-            _ => panic!("expected Run"),
-        }
-    }
-
-    #[test]
     fn prepare_extract_audio_args_and_ext() {
         let mut info = sample_info();
         info.path = "movie.mp4".into();
         match prepare_job(
+            None,
             &info,
             &req("extract-audio", serde_json::json!({"format":"opus","bitrateKbps":128})),
             "_mediatool",
@@ -3400,7 +3099,7 @@ mod tests {
     fn prepare_strip_metadata_video_remux() {
         let mut info = sample_info();
         info.path = "clip.mp4".into();
-        match prepare_job(&info, &req("strip-metadata", serde_json::json!({})), "_mediatool", "rename").unwrap() {
+        match prepare_job(None, &info, &req("strip-metadata", serde_json::json!({})), "_mediatool", "rename").unwrap() {
             PreparedJob::Run { args, out } => {
                 assert!(out.to_string_lossy().ends_with(".mp4"), "got {:?}", out);
                 assert!(args.contains(&"copy".to_string()));
@@ -3431,23 +3130,6 @@ mod tests {
         assert_eq!(apply_overwrite_policy(base.clone(), "skip"), base);
 
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    fn gif_params() -> GifParams {
-        GifParams { start_time: None, duration: None, fps: None, width: None }
-    }
-
-    #[test]
-    fn gif_args_palette() {
-        let p = gif_params();
-        let args = build_gif_args(&sample_info(), &p, Path::new("o.gif"));
-        let fc = args.iter().position(|a| a == "-filter_complex").unwrap();
-        let fc_val = &args[fc + 1];
-        assert!(fc_val.contains("palettegen"));
-        assert!(fc_val.contains("paletteuse"));
-        assert!(fc_val.contains("fps=12"));
-        assert!(fc_val.contains("scale=480"));
-        assert_eq!(args.last().unwrap(), "o.gif");
     }
 
     fn shot_params(mode: &str) -> ScreenshotParams {
@@ -3578,7 +3260,6 @@ mod tests {
     fn norm_tool_id_maps_prefixed_tools() {
         assert_eq!(norm_tool_id("video-compress"), "compress");
         assert_eq!(norm_tool_id("audio-compress"), "compress");
-        assert_eq!(norm_tool_id("image-convert"), "convert");
         assert_eq!(norm_tool_id("trim"), "trim");
         assert_eq!(norm_tool_id("extract-audio"), "extract-audio");
     }
@@ -3644,40 +3325,8 @@ mod tests {
     }
 
     #[test]
-    fn merge_rotate_watermark_filter_complex() {
-        let steps = vec![
-            step("rotate", serde_json::json!({"transform": "90c"})),
-            step(
-                "watermark",
-                serde_json::json!({"imagePath":"wm.png","position":"br","scalePercent":20,"opacity":0.5,"marginPercent":3}),
-            ),
-        ];
-        let info = sample_info();
-        let chain = merged_chain(&info, &steps).expect("mergeable");
-        let args = merged_args(&info, &chain, Path::new("out.mp4"), &None);
-
-        let fc_idx = args.iter().position(|a| a == "-filter_complex").unwrap();
-        let fc = &args[fc_idx + 1];
-        assert!(fc.contains("[0:v]transpose=1[vm];"), "fc = {}", fc);
-        assert!(fc.contains("[1:v]scale=384:-2"), "fc = {}", fc);
-        assert!(fc.contains("[vm][wms]overlay=x=main_w-overlay_w-32"), "fc = {}", fc);
-        assert!(fc.contains("y=main_h-overlay_h-32"), "fc = {}", fc);
-        assert!(fc.contains("[vout]"), "fc = {}", fc);
-
-        // extra -i for the watermark image
-        assert_eq!(args.iter().filter(|a| *a == "-i").count(), 2);
-        assert!(args.contains(&"[vout]".to_string()));
-        assert!(args.contains(&"0:a?".to_string()));
-        assert!(args.contains(&"libx264".to_string()));
-    }
-
-    #[test]
     fn merge_rejects_terminal_tools() {
         let info = sample_info();
-        let gif = vec![step("gif", serde_json::json!({"fps": 12, "width": 480}))];
-        assert!(merged_output_ext(&info, &gif).is_none());
-        assert!(!is_mergeable_chain(&gif));
-
         let shot = vec![step("screenshot", serde_json::json!({"mode":"single","atSec":1.0,"format":"png"}))];
         assert!(merged_output_ext(&info, &shot).is_none());
     }
@@ -3716,5 +3365,53 @@ mod tests {
         assert_eq!(args[t + 1], "10.000");
         assert!(args.contains(&"-an".to_string()), "speed muted audio keeps -an");
         assert!(args.last().unwrap() == &"out.mp4".to_string());
+    }
+
+    #[test]
+    fn webm_container_rejects_incompatible_codecs() {
+        let mut info = sample_info();
+        info.video_codec = Some("h264".into());
+        info.audio_codec = Some("aac".into());
+        assert!(validate_video_container("webm", "libx264", "aac", &info).is_err());
+        assert!(validate_video_container("webm", "copy", "copy", &info).is_err());
+        assert!(validate_video_container("webm", "libvpx-vp9", "opus", &info).is_ok());
+        assert!(validate_video_container("webm", "libsvtav1", "none", &info).is_ok());
+        // MP4 accepts H.264/AAC.
+        assert!(validate_video_container("mp4", "libx264", "aac", &info).is_ok());
+        // mkv accepts anything.
+        assert!(validate_video_container("mkv", "libx264", "aac", &info).is_ok());
+        // GPU encoders are h264 too.
+        assert!(validate_video_container("webm", "h264_nvenc", "aac", &info).is_err());
+    }
+
+    #[test]
+    fn trim_window_progress_denominator() {
+        assert_eq!(trim_window_secs(7200.0, 10.0, Some(10.0)), 10.0);
+        assert_eq!(trim_window_secs(100.0, 0.0, Some(500.0)), 100.0);
+        assert_eq!(trim_window_secs(100.0, 40.0, None), 60.0);
+        assert_eq!(trim_window_secs(100.0, 120.0, None), 0.0);
+    }
+
+    #[test]
+    fn sequence_file_matching_is_precise() {
+        assert!(is_sequence_file("clip_mediatool_001.png", "clip_mediatool_", "png"));
+        assert!(is_sequence_file("clip_mediatool_042.PNG", "clip_mediatool_", "png"));
+        assert!(!is_sequence_file("clip_mediatool_final.png", "clip_mediatool_", "png"));
+        assert!(!is_sequence_file("other_mediatool_001.png", "clip_mediatool_", "png"));
+        assert!(!is_sequence_file("clip_mediatool_jpg", "clip_mediatool_", "png"));
+    }
+
+    #[test]
+    fn merged_chain_maps_audio_none_to_drop() {
+        let steps = vec![step(
+            "compress",
+            serde_json::json!({"videoCodec":"libx264","qualityMode":"crf","crf":23,"audioCodec":"none","resolution":"original","format":"source","preset":"medium"}),
+        )];
+        let info = sample_info();
+        let chain = merged_chain(&info, &steps).expect("mergeable");
+        assert!(chain.drop_audio, "audioCodec none must map to drop_audio");
+        let args = merged_args(&info, &chain, Path::new("out.mp4"), &None);
+        assert!(args.contains(&"-an".to_string()));
+        assert!(!args.contains(&"aac".to_string()));
     }
 }

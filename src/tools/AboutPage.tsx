@@ -21,7 +21,7 @@ interface AboutPageProps {
 
 export default function AboutPage({ currentVersion, updater, onToast }: AboutPageProps) {
   const { t } = useI18n();
-  const { phase, update, progress, checkForUpdates, download, installAndRelaunch } =
+  const { phase, update, progress, error, dismiss, checkForUpdates, download, installAndRelaunch } =
     updater;
 
   const handleCheck = useCallback(async () => {
@@ -54,9 +54,7 @@ export default function AboutPage({ currentVersion, updater, onToast }: AboutPag
     <div className="mx-auto max-w-2xl space-y-6">
       {/* App identity */}
       <div className="flex items-center gap-4 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-800">
-        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl brand-gradient shadow-sm">
-          <LogoIcon className="h-8 w-8" />
-        </div>
+        <LogoIcon className="h-14 w-14 shrink-0 drop-shadow-sm" />
         <div className="min-w-0">
           <div className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
             MediaTool
@@ -122,6 +120,22 @@ export default function AboutPage({ currentVersion, updater, onToast }: AboutPag
         </div>
 
         <div className="mt-4 space-y-4">
+          {error && (
+            <div className="flex items-start justify-between gap-3 rounded-xl bg-error-50 p-3 text-sm text-error-700 ring-1 ring-error-200 dark:bg-error-900/20 dark:text-error-300 dark:ring-error-900/40">
+              <div className="min-w-0">
+                <p className="font-medium">{t("updater.failed")}</p>
+                <p className="mt-0.5 break-all text-xs opacity-80">{error}</p>
+              </div>
+              <button
+                onClick={dismiss}
+                className="shrink-0 rounded-lg px-2 py-1 text-xs font-medium text-error-600 transition hover:bg-error-100 dark:text-error-300 dark:hover:bg-error-900/40"
+                aria-label={t("a11y.close")}
+              >
+                {t("confirm.cancel")}
+              </button>
+            </div>
+          )}
+
           {phase === "downloading" && (
             <div>
               <div className="mb-2 flex items-center justify-between text-sm">
