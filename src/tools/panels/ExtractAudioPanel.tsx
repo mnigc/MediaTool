@@ -1,4 +1,5 @@
 import { useI18n } from "../../i18n";
+import Select from "../../components/Select";
 import type { ExtractAudioParams } from "../../types";
 import { Field, FieldRow, NumInput, sel } from "./ui";
 
@@ -24,17 +25,17 @@ export default function ExtractAudioPanel({
     <div className="space-y-3">
       <FieldRow>
         <Field label={t("opt.format")}>
-          <select
-            className={sel}
+          <Select
+            className="w-full"
             value={params.format}
-            onChange={(e) => set({ format: e.target.value })}
+            onChange={(v) => set({ format: v })}
           >
             {FORMATS.map((f) => (
               <option key={f.value} value={f.value}>
                 {f.label}
               </option>
             ))}
-          </select>
+          </Select>
         </Field>
         <Field label={t("opt.bitrate")}>
           {params.format === "flac" ? (

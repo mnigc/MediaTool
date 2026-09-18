@@ -4,31 +4,40 @@ import { useTasks } from "../contexts/TaskCenter";
 import { MODULES, toolToModule, type ModuleId, type Route } from "../tools/registry";
 import {
   ChartIcon,
+  DownloadIcon,
   FilmIcon,
+  GlobeIcon,
   InfoIcon,
   MusicIcon,
+  RadioIcon,
   SettingsIcon,
   SlidersIcon,
   WorkflowIcon,
 } from "./icons";
 
 const MODULE_ICONS: Record<ModuleId, ComponentType<{ className?: string }>> = {
+  download: DownloadIcon,
+  record: RadioIcon,
   video: FilmIcon,
   audio: MusicIcon,
   workflow: WorkflowIcon,
   tools: SettingsIcon,
   tasks: ChartIcon,
   presets: SlidersIcon,
+  settings: GlobeIcon,
   about: InfoIcon,
 };
 
 const MODULE_LABEL: Record<ModuleId, string> = {
+  download: "nav.module.download",
+  record: "nav.module.record",
   video: "nav.module.video",
   audio: "nav.module.audio",
   workflow: "nav.module.workflow",
   tools: "nav.module.tools",
   tasks: "nav.module.tasks",
   presets: "nav.module.presets",
+  settings: "nav.module.settings",
   about: "nav.module.about",
 };
 

@@ -3,8 +3,8 @@ import FilterTabs, { type FilterStatus } from "../components/FilterTabs";
 import JobList from "../components/JobList";
 import SkeletonJobCard from "../components/SkeletonJobCard";
 import PresetManager from "../components/PresetManager";
-import MetadataPreview from "../components/MetadataPreview";
 import OutputSettings from "../components/OutputSettings";
+import Select from "../components/Select";
 import DropZone from "../components/DropZone";
 import { useConfirm } from "../components/ConfirmDialog";
 import { openOutputFolder } from "../lib/tauri";
@@ -160,11 +160,11 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
       <div className="mb-4 flex flex-wrap items-center gap-2">
         {showGpu && (
           <>
-            <select
+            <Select
               value={tasks.settings.gpu}
-              onChange={(e) => tasks.setGpu(e.target.value)}
+              onChange={(v) => tasks.setGpu(v)}
               disabled={!tasks.gpuInfo.available}
-              className="rounded-lg border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-700 transition focus:border-brand-400 focus:outline-none dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-50"
+              className="w-44"
               title={t("sidebar.gpu")}
             >
               <option value="">{t("gpu.cpu")}</option>
@@ -173,7 +173,7 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
                   {t(`gpu.${b.id}`)}
                 </option>
               ))}
-            </select>
+            </Select>
             <span
               className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
                 tasks.gpuInfo.available
@@ -318,10 +318,6 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
             onReorderOver={tasks.reorderOver}
             onReorderDrop={tasks.reorderDrop}
           />
-
-          {toolId === "strip-metadata" && (
-            <MetadataPreview paths={[...new Set(jobs.map((j) => j.info.path))]} />
-          )}
         </>
       )}
 

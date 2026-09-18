@@ -11,16 +11,12 @@ import {
   CameraIcon,
   ConvertIcon,
   ExtractAudioIcon,
-  FadeIcon,
   MergeIcon,
   MuteIcon,
-  PitchIcon,
   ScissorsIcon,
   SearchIcon,
-  SilenceIcon,
   SlidersIcon,
   SpeedIcon,
-  StripMetadataIcon,
   SubtitleIcon,
   VolumeIcon,
   WatermarkIcon,
@@ -46,35 +42,23 @@ const TOOL_ICONS: Record<WorkbenchId, ComponentType<{ className?: string }>> = {
   "audio-compress": SlidersIcon,
   "audio-convert": ConvertIcon,
   "extract-audio": ExtractAudioIcon,
-  "audio-trim": ScissorsIcon,
-  "audio-fade": FadeIcon,
   "audio-volume": VolumeIcon,
-  "audio-pitch": PitchIcon,
-  "audio-silence": SilenceIcon,
   "audio-merge": MergeIcon,
-  "strip-metadata": StripMetadataIcon,
   inspect: SearchIcon,
   workflow: WorkflowIcon,
 };
 
 const MODULE_TITLE: Record<ModuleId, string> = {
+  download: "nav.module.download",
+  record: "nav.module.record",
   video: "module.video.title",
   audio: "module.audio.title",
   tools: "module.tools.title",
   tasks: "module.tasks.title",
   presets: "module.presets.title",
   workflow: "module.workflow.title",
+  settings: "settings.title",
   about: "module.about.title",
-};
-
-const MODULE_DESC: Record<ModuleId, string> = {
-  video: "module.video.desc",
-  audio: "module.audio.desc",
-  tools: "module.tools.desc",
-  tasks: "module.tasks.desc",
-  presets: "module.presets.desc",
-  workflow: "module.workflow.desc",
-  about: "module.about.desc",
 };
 
 function ToolCard({ tool, onOpen, pending }: { tool: ToolMeta; onOpen: (id: WorkbenchId) => void; pending: number }) {
@@ -130,9 +114,6 @@ export default function ModulePage({
         <h2 className="text-xl font-semibold text-neutral-800 dark:text-neutral-100">
           {t(MODULE_TITLE[module])}
         </h2>
-        <p className="mt-1 text-xs text-neutral-400 dark:text-neutral-500">
-          {t(MODULE_DESC[module])}
-        </p>
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-3">

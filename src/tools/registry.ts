@@ -4,18 +4,24 @@ export type ToolCategory = "video" | "audio" | "tools";
 
 /** Top-level navigation modules. "tasks" and "presets" are full pages, the
  *  rest (video/audio/tools) render a function-card grid. "workflow" is a
- *  full-page multi-step pipeline builder. */
+ *  full-page multi-step pipeline builder. "download"/"record" are the
+ *  yt-dlp powered acquisition pages. */
 export type ModuleId =
+  | "download"
+  | "record"
   | "video"
   | "audio"
   | "tools"
   | "tasks"
   | "presets"
   | "workflow"
+  | "settings"
   | "about";
 
-/** Pseudo-tool rendered as a panel but never queued as a job. */
-export type WorkbenchId = ToolId | "inspect" | "workflow";
+/** Pseudo-tool rendered as a panel but never queued as a job.
+ *  "strip-metadata" is also no longer a workbench: it is triggered from the
+ *  inspect page as a plain job. */
+export type WorkbenchId = Exclude<ToolId, "strip-metadata"> | "inspect" | "workflow";
 
 /** App navigation state: either a module landing page, or a concrete tool. */
 export type Route =
@@ -45,12 +51,15 @@ export const IMAGE_EXTS = [
 export const ALL_EXTS = [...VIDEO_EXTS, ...AUDIO_EXTS, ...IMAGE_EXTS];
 
 export const MODULES: ModuleId[] = [
+  "download",
+  "record",
   "video",
   "audio",
   "workflow",
   "tools",
   "tasks",
   "presets",
+  "settings",
   "about",
 ];
 
@@ -72,14 +81,9 @@ export const TOOLS: ToolMeta[] = [
   { id: "audio-compress", category: "audio", accepts: AUDIO_EXTS, multiFile: true, mediaType: "audio" },
   { id: "audio-convert", category: "audio", accepts: AUDIO_EXTS, multiFile: true, mediaType: "audio" },
   { id: "extract-audio", category: "audio", accepts: VIDEO_EXTS, multiFile: true },
-  { id: "audio-trim", category: "audio", accepts: AUDIO_EXTS, multiFile: false, mediaType: "audio" },
-  { id: "audio-fade", category: "audio", accepts: AUDIO_EXTS, multiFile: false, mediaType: "audio" },
   { id: "audio-volume", category: "audio", accepts: AUDIO_EXTS, multiFile: false, mediaType: "audio" },
-  { id: "audio-pitch", category: "audio", accepts: AUDIO_EXTS, multiFile: false, mediaType: "audio" },
-  { id: "audio-silence", category: "audio", accepts: AUDIO_EXTS, multiFile: false, mediaType: "audio" },
   { id: "audio-merge", category: "audio", accepts: AUDIO_EXTS, multiFile: true, mediaType: "audio" },
   // tools (utilities)
-  { id: "strip-metadata", category: "tools", accepts: ALL_EXTS, multiFile: true },
   { id: "inspect", category: "tools", accepts: ALL_EXTS, multiFile: false },
 ];
 

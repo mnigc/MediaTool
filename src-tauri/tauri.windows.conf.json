@@ -3,7 +3,9 @@
     "targets": ["nsis", "msi"],
     "resources": {
       "binaries/ffmpeg.exe": "binaries/",
-      "binaries/ffprobe.exe": "binaries/"
+      "binaries/ffprobe.exe": "binaries/",
+      "binaries/yt-dlp.exe": "binaries/",
+      "binaries/streamlink.zip": "binaries/"
     }
   }
 }

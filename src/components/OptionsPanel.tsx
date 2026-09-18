@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import type { AudioParams, JobParams, VideoParams } from "../types";
 import PresetsBar from "./PresetsBar";
 import { useI18n } from "../i18n";
+import Select from "./Select";
 
 interface Props {
   toolId: string;
@@ -133,26 +134,26 @@ export function VideoCompressOptions({
 
       <FieldRow>
         <Field label={t("opt.format")}>
-          <select className={sel} value={v.format} onChange={(e) => set({ format: e.target.value })}>
+          <Select className="w-full" value={v.format} onChange={(v) => set({ format: v })}>
             <option value="source">{t("opt.format.source")}</option>
             <option value="mp4">MP4</option>
             <option value="mkv">MKV</option>
-          </select>
+          </Select>
         </Field>
         <Field label={t("opt.codec")}>
-          <select className={sel} value={v.videoCodec} onChange={(e) => set({ videoCodec: e.target.value })}>
+          <Select className="w-full" value={v.videoCodec} onChange={(v) => set({ videoCodec: v })}>
             <option value="libx264">H.264</option>
             <option value="libvpx-vp9">VP9</option>
             <option value="libsvtav1">AV1</option>
             <option value="copy">{t("opt.copy")}</option>
-          </select>
+          </Select>
         </Field>
         <Field label={t("opt.qualityMode")}>
-          <select className={sel} value={v.qualityMode} onChange={(e) => set({ qualityMode: e.target.value })}>
+          <Select className="w-full" value={v.qualityMode} onChange={(v) => set({ qualityMode: v })}>
             <option value="crf">{t("opt.crf")}</option>
             <option value="target_size">{t("opt.targetSize")}</option>
             <option value="bitrate">{t("opt.fixedBitrate")}</option>
-          </select>
+          </Select>
         </Field>
       </FieldRow>
 
@@ -188,17 +189,17 @@ export function VideoCompressOptions({
         )}
         <FieldRow>
           <Field label={t("opt.resolution")}>
-            <select className={sel} value={v.resolution} onChange={(e) => set({ resolution: e.target.value })}>
+            <Select className="w-full" value={v.resolution} onChange={(v) => set({ resolution: v })}>
               <option value="original">{t("opt.res.original")}</option>
               <option value="2160p">2160p</option>
               <option value="1440p">1440p</option>
               <option value="1080p">1080p</option>
               <option value="720p">720p</option>
               <option value="480p">480p</option>
-            </select>
+            </Select>
           </Field>
           <Field label={t("opt.speed")}>
-            <select className={sel} value={v.preset} onChange={(e) => set({ preset: e.target.value })}>
+            <Select className="w-full" value={v.preset} onChange={(v) => set({ preset: v })}>
               <option value="veryfast">{t("opt.speed.veryfast")}</option>
               <option value="faster">{t("opt.speed.faster")}</option>
               <option value="fast">{t("opt.speed.fast")}</option>
@@ -206,23 +207,19 @@ export function VideoCompressOptions({
               <option value="slow">{t("opt.speed.slow")}</option>
               <option value="slower">{t("opt.speed.slower")}</option>
               <option value="veryslow">{t("opt.speed.veryslow")}</option>
-            </select>
+            </Select>
           </Field>
         </FieldRow>
         <FieldRow>
           <Field label={t("opt.fps")}>
-            <select
-              className={sel}
-              value={v.fps ? String(v.fps) : ""}
-              onChange={(e) => set({ fps: e.target.value ? Number(e.target.value) : undefined })}
-            >
+            <Select className="w-full" value={v.fps ? String(v.fps) : ""} onChange={(v) => set({ fps: v ? Number(v) : undefined })}>
               <option value="">{t("opt.fps.original")}</option>
               <option value="60">60</option>
               <option value="50">50</option>
               <option value="30">30</option>
               <option value="24">24</option>
               <option value="15">15</option>
-            </select>
+            </Select>
           </Field>
         </FieldRow>
       </div>
@@ -230,12 +227,12 @@ export function VideoCompressOptions({
       <SectionDivider label={t("opt.audio")} />
       <FieldRow>
         <Field label={t("opt.audioCodec")}>
-          <select className={sel} value={v.audioCodec} onChange={(e) => set({ audioCodec: e.target.value })}>
+          <Select className="w-full" value={v.audioCodec} onChange={(v) => set({ audioCodec: v })}>
             <option value="aac">AAC</option>
             <option value="opus">Opus</option>
             <option value="copy">{t("opt.copy")}</option>
             <option value="none">{t("opt.remove")}</option>
-          </select>
+          </Select>
         </Field>
         {v.audioCodec !== "none" && v.audioCodec !== "copy" && (
           <Field label={t("opt.audioBitrate")}>
@@ -353,12 +350,12 @@ export function VideoConvertOptions({
     <div className="space-y-3">
       <FieldRow>
         <Field label={t("opt.format")}>
-          <select className={sel} value={v.format} onChange={(e) => changeFormat(e.target.value)}>
+          <Select className="w-full" value={v.format} onChange={(v) => changeFormat(v)}>
             <option value="mp4">MP4</option>
             <option value="webm">WebM</option>
             <option value="mkv">MKV</option>
             <option value="mov">MOV</option>
-          </select>
+          </Select>
         </Field>
         <Field label={t("opt.tier")}>
           <TierPicker value={tierOfVideo(v)} onChange={changeTier} />
@@ -410,13 +407,13 @@ export function AudioConvertOptions({ params, onChange }: {
   return (
     <div className="space-y-3">
       <Field label={t("opt.format")}>
-        <select className={sel} value={params.format} onChange={(e) => changeFormat(e.target.value)}>
+        <Select className="w-full" value={params.format} onChange={(v) => changeFormat(v)}>
           <option value="mp3">MP3</option>
           <option value="aac">AAC</option>
           <option value="m4a">M4A</option>
           <option value="opus">Opus</option>
           <option value="flac">FLAC</option>
-        </select>
+        </Select>
       </Field>
       <p className="text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-500">
         {t("opt.audio.autoBitrate")}

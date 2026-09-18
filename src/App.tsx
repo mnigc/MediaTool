@@ -7,11 +7,15 @@ import { useTheme, type ThemeMode } from "./hooks/useTheme";
 import { useToasts, type ToastItem } from "./hooks/useToasts";
 import { useUpdater } from "./hooks/useUpdater";
 import { TaskCenterProvider } from "./contexts/TaskCenter";
+import { DownloadCenterProvider } from "./contexts/DownloadCenter";
 import ToolWorkbench from "./tools/ToolWorkbench";
 import ModulePage from "./tools/ModulePage";
 import TaskPage from "./tools/TaskPage";
 import PresetsPage from "./tools/PresetsPage";
 import WorkflowPage from "./tools/WorkflowPage";
+import DownloadPage from "./download/DownloadPage";
+import RecordPage from "./download/RecordPage";
+import SettingsPage from "./tools/SettingsPage";
 import AboutPage from "./tools/AboutPage";
 import { toolToModule, type Route, type WorkbenchId } from "./tools/registry";
 
@@ -61,6 +65,16 @@ function AppShell({
         return <PresetsPage onOpenTool={openTool} />;
       case "workflow":
         return <WorkflowPage />;
+      case "download":
+        return (
+          <DownloadPage onOpenSettings={() => setRoute({ kind: "module", id: "settings" })} />
+        );
+      case "record":
+        return (
+          <RecordPage onOpenSettings={() => setRoute({ kind: "module", id: "settings" })} />
+        );
+      case "settings":
+        return <SettingsPage themeMode={themeMode} onThemeChange={setThemeMode} />;
       case "about":
         return (
           <AboutPage currentVersion={currentVersion} updater={updater} onToast={onToast} />
@@ -76,7 +90,7 @@ function AppShell({
 
   return (
     <div className="flex h-screen flex-col">
-      <Header themeMode={themeMode} onThemeChange={setThemeMode} />
+      <Header />
       <div className="flex min-h-0 flex-1">
         <ToolNav route={route} onNavigate={setRoute} />
         <main className="app-main min-w-0 flex-1 overflow-y-auto p-5">
@@ -94,13 +108,15 @@ export default function App() {
 
   return (
     <TaskCenterProvider onToast={pushToast}>
-      <AppShell
-        themeMode={themeMode}
-        setThemeMode={setThemeMode}
-        toasts={toasts}
-        dismissToast={dismissToast}
-        onToast={pushToast}
-      />
+      <DownloadCenterProvider>
+        <AppShell
+          themeMode={themeMode}
+          setThemeMode={setThemeMode}
+          toasts={toasts}
+          dismissToast={dismissToast}
+          onToast={pushToast}
+        />
+      </DownloadCenterProvider>
     </TaskCenterProvider>
   );
 }

@@ -75,9 +75,6 @@ export default function TaskPage() {
         <h2 className="text-xl font-semibold text-neutral-800 dark:text-neutral-100">
           {t("module.tasks.title")}
         </h2>
-        <p className="mt-1 text-xs text-neutral-400 dark:text-neutral-500">
-          {t("module.tasks.desc")}
-        </p>
       </div>
 
       {jobs.length === 0 ? (

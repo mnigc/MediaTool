@@ -8,6 +8,7 @@ import {
 import { defaultParamsFor } from "../lib/defaults";
 import { useI18n } from "../i18n";
 import { usePrompt } from "./PromptDialog";
+import Select from "./Select";
 import type { JobParams, ToolId } from "../types";
 
 const DEFAULT_PRESET = "__default__";
@@ -88,10 +89,9 @@ export default function PresetsBar({
         }`}
       >
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          <select
+          <Select
             value={selected === DEFAULT_PRESET ? "" : selected}
-            onChange={(e) => {
-              const v = e.target.value;
+            onChange={(v) => {
               if (!v) {
                 setSelected(DEFAULT_PRESET);
                 apply(DEFAULT_PRESET);
@@ -100,7 +100,8 @@ export default function PresetsBar({
                 apply(v);
               }
             }}
-            className="min-w-[110px] rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs text-neutral-700 transition focus:border-brand-400 focus:ring-1 focus:ring-brand-100 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 dark:focus:border-brand-500"
+            className="min-w-[130px]"
+            triggerClassName="px-2.5 py-1.5"
           >
             <option value="">{t("opt.selectPreset")}</option>
             {myPresets.map((p) => (
@@ -108,7 +109,7 @@ export default function PresetsBar({
                 {presetDisplayName(p, t)}
               </option>
             ))}
-          </select>
+          </Select>
           <button
             type="button"
             onClick={save}

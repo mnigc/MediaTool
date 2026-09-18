@@ -7,10 +7,10 @@ use crate::error::{AppError, Result};
 use crate::ffmpeg;
 use crate::media::probe;
 use crate::models::{
-    AudioMergeParams, AudioParams, AudioTrimParams, AudioVolumeParams,
-    DoneEvent, EstimateRequest, EstimateResult, ExtractAudioParams, FadeParams,
+    AudioMergeParams, AudioParams, AudioVolumeParams,
+    DoneEvent, EstimateRequest, EstimateResult, ExtractAudioParams,
     JobRequest, MediaInfo, MediaType, MuteParams,
-    PitchParams, ProgressEvent, ScreenshotParams, SilenceParams, SpeedParams,
+    ProgressEvent, ScreenshotParams, SpeedParams,
     StartJobResult, StartWorkflowResult, StripMetadataParams, SubtitleParams, TrimParams,
     TrimSegment, VideoMergeParams, VideoParams, WatermarkParams,
     ContactSheetParams, FrameSampleParams, VideoSilenceParams,
@@ -1043,52 +1043,6 @@ fn build_video_merge_args(inputs: &[String], audio: MergeAudio, out: &Path) -> V
     a
 }
 
-fn build_audio_trim_args(info: &MediaInfo, p: &AudioTrimParams, out: &Path) -> Vec<String> {
-    let mut a: Vec<String> = vec![
-        "-ss".into(),
-        format!("{:.3}", p.start_time.max(0.0)),
-        "-i".into(),
-        info.path.clone(),
-    ];
-    if let Some(d) = p.duration {
-        if d > 0.0 {
-            a.push("-t".into());
-            a.push(format!("{:.3}", d));
-        }
-    }
-    a.push("-c".into());
-    a.push("copy".into());
-    a.push("-progress".into());
-    a.push("pipe:1".into());
-    a.push("-y".into());
-    a.push(out.to_string_lossy().to_string());
-    a
-}
-
-fn build_audio_fade_args(info: &MediaInfo, p: &FadeParams, out: &Path) -> Vec<String> {
-    let dur = info.duration_secs.unwrap_or(0.0);
-    let in_d = p.in_sec.max(0.0);
-    let out_d = p.out_sec.max(0.0);
-    let mut expr = format!("afade=t=in:st=0:d={:.3}", in_d);
-    if out_d > 0.0 && dur > out_d {
-        expr.push_str(&format!(
-            ",afade=t=out:st={:.3}:d={:.3}",
-            (dur - out_d).max(0.0),
-            out_d
-        ));
-    }
-    let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-af".into(), expr];
-    a.push("-c:a".into());
-    a.push("aac".into());
-    a.push("-b:a".into());
-    a.push("192k".into());
-    a.push("-progress".into());
-    a.push("pipe:1".into());
-    a.push("-y".into());
-    a.push(out.to_string_lossy().to_string());
-    a
-}
-
 fn build_audio_volume_args(info: &MediaInfo, p: &AudioVolumeParams, out: &Path) -> Vec<String> {
     let af = if p.mode == "normalize" {
         "loudnorm".to_string()
@@ -1101,65 +1055,6 @@ fn build_audio_volume_args(info: &MediaInfo, p: &AudioVolumeParams, out: &Path) 
     a.push("aac".into());
     a.push("-b:a".into());
     a.push("192k".into());
-    a.push("-progress".into());
-    a.push("pipe:1".into());
-    a.push("-y".into());
-    a.push(out.to_string_lossy().to_string());
-    a
-}
-
-fn build_audio_pitch_args(info: &MediaInfo, p: &PitchParams, out: &Path) -> Vec<String> {
-    let speed = p.speed.clamp(0.5, 2.0);
-    let pitch = p.pitch.clamp(-12.0, 12.0);
-    let mut chain: Vec<String> = Vec::new();
-    if (pitch.abs()) > 1e-6 {
-        let rate = 48000.0 * 2f64.powf(pitch / 12.0);
-        chain.push(format!("asetrate={:.0}", rate));
-        chain.push("aresample=48000".into());
-    }
-    if (speed - 1.0).abs() > 1e-6 {
-        for f in atempo_chain(speed) {
-            chain.push(format!("atempo={}", f));
-        }
-    }
-    let af = if chain.is_empty() {
-        "anull".to_string()
-    } else {
-        chain.join(",")
-    };
-    let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-af".into(), af];
-    a.push("-c:a".into());
-    a.push("aac".into());
-    a.push("-b:a".into());
-    a.push("192k".into());
-    a.push("-progress".into());
-    a.push("pipe:1".into());
-    a.push("-y".into());
-    a.push(out.to_string_lossy().to_string());
-    a
-}
-
-fn build_audio_silence_args(info: &MediaInfo, p: &SilenceParams, out: &Path) -> Vec<String> {
-    let th = p.threshold_db.unwrap_or(-35.0);
-    let min = p.min_len.unwrap_or(0.5).max(0.05);
-    let af = if p.mode == "detect" {
-        format!("silencedetect=n={:.1}dB:d={:.3}", th, min)
-    } else {
-        format!(
-            "silenceremove=start_periods=-1:start_threshold={:.1}dB:start_duration={:.3}:stop_threshold={:.1}dB:stop_duration={:.3}",
-            th, min, th, min
-        )
-    };
-    let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-af".into(), af];
-    if p.mode == "detect" {
-        a.push("-c".into());
-        a.push("copy".into());
-    } else {
-        a.push("-c:a".into());
-        a.push("aac".into());
-        a.push("-b:a".into());
-        a.push("192k".into());
-    }
     a.push("-progress".into());
     a.push("pipe:1".into());
     a.push("-y".into());
@@ -1229,13 +1124,19 @@ fn build_video_frames_args(info: &MediaInfo, p: &FrameSampleParams, out: &Path) 
 fn build_video_contact_args(info: &MediaInfo, p: &ContactSheetParams, out: &Path) -> Vec<String> {
     let thumb_w = p.thumb_w.max(32);
     // In "count" mode spread the requested number of thumbnails evenly across
-    // the whole video and auto-fit a near-square grid; otherwise honor the
-    // user's sampling interval and explicit columns/rows.
+    // the whole video; an explicit `countCols` fixes the grid width (the wide,
+    // short layout player hover-previews expect), otherwise auto-fit a
+    // near-square grid. Interval mode honors the user's sampling rate and
+    // explicit columns/rows.
     let (cols, rows) = if p.mode == "count" {
         let n = p.count.max(1) as u32;
-        let c = (n as f64).sqrt().ceil().max(1.0) as u32;
-        let r = n.div_ceil(c);
-        (c, r)
+        match p.count_cols.filter(|c| *c > 0) {
+            Some(c) => (c.max(1), n.div_ceil(c.max(1))),
+            None => {
+                let c = (n as f64).sqrt().ceil().max(1.0) as u32;
+                (c, n.div_ceil(c))
+            }
+        }
     } else {
         (p.cols.max(1), p.rows.max(1))
     };
@@ -1310,8 +1211,7 @@ fn extension_for(tool_id: &str, info: &MediaInfo, params: &serde_json::Value) ->
         .to_string(),
         "trim" | "mute" | "strip-metadata" => input_ext(info, "mp4"),
         "video-subtitle" | "video-merge" => safe_container_ext(info),
-        "audio-trim" | "audio-fade" | "audio-volume" | "audio-pitch" | "audio-silence"
-        | "audio-merge" => source_audio_format(&info.path).to_string(),
+        "audio-volume" | "audio-merge" => source_audio_format(&info.path).to_string(),
         "video-frames" => safe_container_ext(info),
         "video-contact" => "png".to_string(),
         "video-silence" => "txt".to_string(),
@@ -1494,6 +1394,29 @@ fn tool_dispatch(id: &str) -> &str {
     }
 }
 
+/// Tasks/monitors saved by older versions may still reference the removed
+/// "video-sprite" tool; map it onto the contact sheet's count mode with the
+/// same fixed grid width so legacy pipelines keep working.
+fn legacy_tool_request(req: &JobRequest) -> JobRequest {
+    if req.tool_id != "video-sprite" {
+        return req.clone();
+    }
+    let count = req.params.get("count").and_then(|v| v.as_u64()).unwrap_or(100) as u32;
+    let cols = req.params.get("cols").and_then(|v| v.as_u64()).unwrap_or(10) as u32;
+    let thumb_w = req.params.get("thumbW").and_then(|v| v.as_u64()).unwrap_or(160) as u32;
+    let rows = count.div_ceil(cols.max(1));
+    let params = serde_json::json!({
+        "mode": "count",
+        "interval": 5,
+        "count": count,
+        "countCols": cols,
+        "cols": cols,
+        "rows": rows,
+        "thumbW": thumb_w,
+    });
+    JobRequest { tool_id: "video-contact".into(), params, ..req.clone() }
+}
+
 /// Build the args + output path for any tool id, or mark as skipped.
 /// Blocking (may probe merge inputs / encode a PDF source image); call within
 /// spawn_blocking. `app` is only needed by tools that probe extra inputs
@@ -1505,6 +1428,7 @@ fn prepare_job(
     suffix: &str,
     policy: &str,
 ) -> Result<PreparedJob> {
+    let req = legacy_tool_request(req);
     match tool_dispatch(&req.tool_id) {
         "compress" | "convert" => {
             let ext = extension_for(&req.tool_id, info, &req.params);
@@ -1735,26 +1659,6 @@ fn prepare_job(
             Ok(PreparedJob::Run { args: build_video_silence_args(info, &p, &out), out })
         }
         /* ── New audio tools ── */
-        "audio-trim" => {
-            let p: AudioTrimParams = parse_params(&req.params)?;
-            let ext = source_audio_format(&info.path).to_string();
-            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let out = match resolve_policy(out, policy) {
-                Ok(p) => p,
-                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
-            };
-            Ok(PreparedJob::Run { args: build_audio_trim_args(info, &p, &out), out })
-        }
-        "audio-fade" => {
-            let p: FadeParams = parse_params(&req.params)?;
-            let ext = source_audio_format(&info.path).to_string();
-            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let out = match resolve_policy(out, policy) {
-                Ok(p) => p,
-                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
-            };
-            Ok(PreparedJob::Run { args: build_audio_fade_args(info, &p, &out), out })
-        }
         "audio-volume" => {
             let p: AudioVolumeParams = parse_params(&req.params)?;
             let ext = source_audio_format(&info.path).to_string();
@@ -1764,26 +1668,6 @@ fn prepare_job(
                 Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
             };
             Ok(PreparedJob::Run { args: build_audio_volume_args(info, &p, &out), out })
-        }
-        "audio-pitch" => {
-            let p: PitchParams = parse_params(&req.params)?;
-            let ext = source_audio_format(&info.path).to_string();
-            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let out = match resolve_policy(out, policy) {
-                Ok(p) => p,
-                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
-            };
-            Ok(PreparedJob::Run { args: build_audio_pitch_args(info, &p, &out), out })
-        }
-        "audio-silence" => {
-            let p: SilenceParams = parse_params(&req.params)?;
-            let ext = source_audio_format(&info.path).to_string();
-            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
-            let out = match resolve_policy(out, policy) {
-                Ok(p) => p,
-                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
-            };
-            Ok(PreparedJob::Run { args: build_audio_silence_args(info, &p, &out), out })
         }
         "audio-merge" => {
             let _p: AudioMergeParams = parse_params(&req.params)?;
@@ -2414,7 +2298,7 @@ pub async fn start_workflow(app: AppHandle, req: WorkflowRequest) -> Result<Star
                     } else {
                         let s = String::from_utf8_lossy(&buf);
                         if s.len() > 1500 {
-                            format!("\n\n{}", &s[s.len() - 1500..])
+                            format!("\n\n{}", tail_chars(&s, 4000))
                         } else {
                             format!("\n\n{}", s)
                         }
@@ -2588,7 +2472,7 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult
                         } else {
                             let s = String::from_utf8_lossy(&buf);
                             if s.len() > 1500 {
-                                format!("\n\n{}", &s[s.len() - 1500..])
+                                format!("\n\n{}", tail_chars(&s, 4000))
                             } else {
                                 format!("\n\n{}", s)
                             }
@@ -2761,6 +2645,19 @@ pub async fn estimate_size(app: AppHandle, req: EstimateRequest) -> Result<Estim
         bytes,
         exact,
     })
+}
+
+/// Tail of a (possibly multi-byte) log string, safe on char boundaries.
+fn tail_chars(s: &str, max_bytes: usize) -> String {
+    let s = s.trim();
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+    let mut start = s.len() - max_bytes;
+    while !s.is_char_boundary(start) {
+        start += 1;
+    }
+    s[start..].to_string()
 }
 
 fn emit_progress(app: &AppHandle, id: &str, percent: f64, phase: &str, speed: Option<String>) {

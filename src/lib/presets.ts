@@ -50,6 +50,8 @@ const BUILTIN_NAME_KEYS: Record<string, string> = {
   /* ── 提取音频 ── */
   "手机听歌 MP3 128k": "preset.p_pocket_mp3",
   "省空间 AAC 96k": "preset.p_small_aac",
+  /* ── 雪碧图 ── */
+  "播放器预览": "preset.p_player_preview",
 };
 
 /** Localized display name for a preset. Builtin presets resolve through i18n;
@@ -303,6 +305,13 @@ export const BUILTIN_PRESETS: Preset[] = [
     toolId: "extract-audio",
     builtin: true,
     params: { format: "aac", bitrateKbps: 96 },
+  },
+  // ── 雪碧图 ────────────────────────────────
+  {
+    name: "播放器预览",
+    toolId: "video-contact",
+    builtin: true,
+    params: { mode: "count", interval: 5, count: 100, countCols: 10, cols: 10, rows: 10, thumbW: 160 },
   },
 ];
 

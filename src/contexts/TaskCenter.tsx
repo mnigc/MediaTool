@@ -15,7 +15,7 @@ import { readStorage, writeStorage } from "../lib/storage";
 import { useI18n } from "../i18n";
 import { isBatchEditable } from "../tools/kinds";
 import { extOk } from "../tools/FilePicker";
-import { getTool } from "../tools/registry";
+import { getTool, type WorkbenchId } from "../tools/registry";
 import type { GpuInfo } from "../types";
 import type { Job, JobParams, ToolId, ToolParams } from "../types";
 
@@ -126,7 +126,7 @@ interface TaskCenterValue {
   totalOut: number;
   registerDropHandler: (fn: ((paths: string[]) => void) | null) => void;
   addCompressFiles: (paths: string[], toolId: ToolId, multiFile?: boolean) => void;
-  mergeAndStart: (toolId: ToolId, paths: string[]) => void;
+  mergeAndStart: (toolId: WorkbenchId, paths: string[]) => void;
   pickFiles: (filters?: Array<{ name: string; extensions: string[] }>) => Promise<void>;
   chooseOutput: () => Promise<void>;
   setOutputDir: (dir: string | null) => void;
@@ -398,7 +398,7 @@ export function TaskCenterProvider({
   }
 
   /** Create a single merge job from multiple input files and start it. */
-  async function mergeAndStart(toolId: ToolId, paths: string[]) {
+  async function mergeAndStart(toolId: WorkbenchId, paths: string[]) {
     setError(null);
     const valid = paths.filter((p) => extOk(p, getTool(toolId)?.accepts ?? []));
     if (valid.length < 2) {
@@ -408,7 +408,7 @@ export function TaskCenterProvider({
     try {
       const info = await probeFile(valid[0]);
       uiCounter += 1;
-      const params = defaultParamsFor(toolId) as Record<string, unknown> & { mergeInputs?: string[] };
+      const params = defaultParamsFor(toolId as ToolId) as Record<string, unknown> & { mergeInputs?: string[] };
       params.mergeInputs = valid;
       const job: Job = {
         uiId: `ui-${uiCounter}`,

@@ -1,6 +1,7 @@
 import { useI18n } from "../../i18n";
+import Select from "../../components/Select";
 import type { AudioVolumeParams } from "../../types";
-import { Field, NumInput, sel } from "./ui";
+import { Field, NumInput } from "./ui";
 
 export default function AudioVolumePanel({
   params,
@@ -14,14 +15,14 @@ export default function AudioVolumePanel({
   return (
     <div className="space-y-3">
       <Field label={t("opt.mode")}>
-        <select
-          className={sel}
-          value={params.mode}
-          onChange={(e) => set({ mode: e.target.value as AudioVolumeParams["mode"] })}
-        >
+        <Select
+            className="w-full"
+            value={params.mode}
+            onChange={(v) => set({ mode: v as AudioVolumeParams["mode"] })}
+          >
           <option value="normalize">{t("opt.mode.normalize")}</option>
           <option value="gain">{t("opt.mode.gain")}</option>
-        </select>
+        </Select>
       </Field>
       {params.mode === "gain" && (
         <Field label={t("opt.gainDb")}>

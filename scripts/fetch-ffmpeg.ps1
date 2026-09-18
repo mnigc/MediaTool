@@ -113,6 +113,67 @@ else {
     }
 }
 
+# ── yt-dlp ─────────────────────────────────────────────────────────
+# Single-file official builds; bundled so the download/record features work
+# out of the box. The app's in-app updater can still replace it later.
+Write-Host "Downloading yt-dlp..."
+$ytdlpName = if ($os -eq "windows") { "yt-dlp.exe" } else { "yt-dlp" }
+$ytdlpAsset = switch ($os) {
+    "windows" { "yt-dlp.exe" }
+    "macos"   { "yt-dlp_macos" }
+    "linux"   { "yt-dlp_linux" }
+}
+$ytdlpUrl = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/$ytdlpAsset"
+$ytdlpTmp = Join-Path $binDir "$ytdlpName.download"
+Invoke-WebRequest -Uri $ytdlpUrl -OutFile $ytdlpTmp -UseBasicParsing
+Move-Item $ytdlpTmp (Join-Path $binDir $ytdlpName) -Force
+if ($os -ne "windows") {
+    chmod +x (Join-Path $binDir $ytdlpName)
+    if ($os -eq "macos") {
+        # Ad-hoc signature: Apple Silicon refuses to run unsigned binaries.
+        codesign --force --sign - (Join-Path $binDir $ytdlpName)
+    }
+}
+Write-Host "  -> $(Join-Path $binDir $ytdlpName)"
+
+# ── streamlink ─────────────────────────────────────────────────────
+# Live-recording engine, bundled so live capture works out of the box. Only
+# Windows has official standalone builds (a portable embedded-Python bundle);
+# elsewhere streamlink needs pip, so the app keeps recording live streams with
+# yt-dlp there.
+if ($os -eq "windows") {
+    Write-Host "Downloading streamlink (portable bundle)..."
+    $api = "https://api.github.com/repos/streamlink/windows-builds/releases/latest"
+    $release = Invoke-RestMethod -Uri $api -Headers @{
+        "User-Agent" = "mediatool-build"
+        Accept       = "application/vnd.github+json"
+    }
+    $asset = $release.assets | Where-Object { $_.name -like "*-x86_64.zip" } | Select-Object -First 1
+    if (-not $asset) { throw "No Windows x64 portable asset in $($release.tag_name)" }
+
+    $zip = Join-Path $binDir "streamlink.zip"
+    $tmp = Join-Path $binDir "streamlink-extracted"
+    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip -UseBasicParsing
+
+    # Drop the ffmpeg the bundle carries: the app always passes --ffmpeg-ffmpeg
+    # pointing at its own build, so a second copy only bloats the installer.
+    # System32's bsdtar is used by name because Git's GNU tar cannot read zips.
+    $bsdtar = Join-Path $env:SystemRoot "System32\tar.exe"
+    Reset-Tmp $tmp
+    & $bsdtar -xf $zip -C $tmp
+    if ($LASTEXITCODE -ne 0) { throw "Failed to extract $zip" }
+    $top = Get-ChildItem -Directory $tmp | Select-Object -First 1
+    $inner = Join-Path $top.FullName "ffmpeg"
+    if (Test-Path $inner) { Remove-Item -Recurse -Force $inner }
+
+    $stripped = Join-Path $binDir "streamlink-stripped.zip"
+    & $bsdtar -a -cf $stripped -C $tmp $top.Name
+    if ($LASTEXITCODE -ne 0) { throw "Failed to repack $zip" }
+    Remove-Item -Recurse -Force $tmp
+    Move-Item $stripped $zip -Force
+    Write-Host ("  -> {0} ({1:N1} MB)" -f $zip, ((Get-Item $zip).Length / 1MB))
+}
+
 # Also place them next to the compiled binary so `npm run tauri dev` / build
 # find ffmpeg via the "next to the executable" lookup.
 $exeExt = if ($os -eq "windows") { ".exe" } else { "" }
@@ -122,6 +183,7 @@ foreach ($profile in @("debug", "release")) {
     if (Test-Path $dest) {
         Save-Binary (Join-Path $binDir "ffmpeg$exeExt")  (Join-Path $dest "ffmpeg$exeExt")
         Save-Binary (Join-Path $binDir "ffprobe$exeExt") (Join-Path $dest "ffprobe$exeExt")
+        Save-Binary (Join-Path $binDir $ytdlpName)       (Join-Path $dest $ytdlpName)
     }
 }
 

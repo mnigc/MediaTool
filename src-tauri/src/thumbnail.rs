@@ -53,12 +53,15 @@ fn wait_with_timeout(mut child: Child, timeout: Duration) -> bool {
 }
 
 /// Run one ffmpeg invocation that writes `tmp`, then return its bytes as a
-/// PNG data URL. Attempts `args` once; on failure runs `retry_args` if given.
+/// data URL. `mime` must match the container the filter writes (`tmp`'s
+/// extension is chosen by the caller). Attempts `args` once; on failure runs
+/// `retry_args` if given.
 fn render_thumbnail(
     app: &tauri::AppHandle,
     args: Vec<String>,
     retry_args: Option<Vec<String>>,
     tmp: &Path,
+    mime: &str,
 ) -> Result<Option<String>> {
     let run = |args: Vec<String>| -> bool {
         let Ok((child, _stdout, _stderr, _drain)) = ffmpeg::spawn(app, "ffmpeg", &args) else {
@@ -83,15 +86,15 @@ fn render_thumbnail(
     let read = std::fs::File::open(tmp).ok().and_then(|mut f| f.read_to_end(&mut buf).ok());
     let _ = std::fs::remove_file(tmp);
     match read {
-        Some(_) if !buf.is_empty() => {
-            Ok(Some(format!("data:image/png;base64,{}", base64_encode(&buf))))
-        }
+        Some(_) if !buf.is_empty() => Ok(Some(format!("data:{mime};base64,{}", base64_encode(&buf)))),
         _ => Ok(None),
     }
 }
 
+/// Images stay PNG: user art (logos in the watermark tool) often carries
+/// transparency, which a JPEG would flatten to black.
 fn image_thumbnail(app: &tauri::AppHandle, path: &Path) -> Result<Option<String>> {
-    let tmp = temp_png("mediatool_imgthumb");
+    let tmp = temp_thumb("mediatool_imgthumb", "png");
     let args: Vec<String> = vec![
         "-i".into(),
         path.to_string_lossy().to_string(),
@@ -103,11 +106,14 @@ fn image_thumbnail(app: &tauri::AppHandle, path: &Path) -> Result<Option<String>
         tmp.to_string_lossy().to_string(),
     ];
     // Images need no retry pass.
-    render_thumbnail(app, args, None, &tmp)
+    render_thumbnail(app, args, None, &tmp, "image/png")
 }
 
+/// Video frames go out as JPEG: a 320px PNG frame runs ~10x larger, and these
+/// are cached per download card — batches and the startup backfill pull a
+/// dozen of them.
 fn video_thumbnail(app: &tauri::AppHandle, path: &Path) -> Result<Option<String>> {
-    let tmp = temp_png("mediatool_thumb");
+    let tmp = temp_thumb("mediatool_thumb", "jpg");
     let args: Vec<String> = vec![
         "-ss".into(),
         "1".into(),
@@ -117,6 +123,8 @@ fn video_thumbnail(app: &tauri::AppHandle, path: &Path) -> Result<Option<String>
         "1".into(),
         "-vf".into(),
         "scale=320:-2".into(),
+        "-q:v".into(),
+        "6".into(),
         "-y".into(),
         tmp.to_string_lossy().to_string(),
     ];
@@ -128,20 +136,23 @@ fn video_thumbnail(app: &tauri::AppHandle, path: &Path) -> Result<Option<String>
         "1".into(),
         "-vf".into(),
         "scale=320:-2".into(),
+        "-q:v".into(),
+        "6".into(),
         "-y".into(),
         tmp.to_string_lossy().to_string(),
     ];
-    render_thumbnail(app, args, Some(retry), &tmp)
+    render_thumbnail(app, args, Some(retry), &tmp, "image/jpeg")
 }
 
-fn temp_png(prefix: &str) -> PathBuf {
+fn temp_thumb(prefix: &str, ext: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
-        "{}_{}.png",
+        "{}_{}.{}",
         prefix,
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
-            .unwrap_or(0)
+            .unwrap_or(0),
+        ext
     ))
 }
 

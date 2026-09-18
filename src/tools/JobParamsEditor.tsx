@@ -9,6 +9,7 @@ import { isBatchEditable } from "./kinds";
 const SCENARIO_TOOLS = new Set<string>([
   "watermark",
   "extract-audio",
+  "video-contact",
 ]);
 import ScreenshotPanel from "./panels/ScreenshotPanel";
 import SpeedPanel from "./panels/SpeedPanel";
@@ -16,25 +17,17 @@ import WatermarkPanel from "./panels/WatermarkPanel";
 import TrimPanel from "./panels/TrimPanel";
 import ExtractAudioPanel from "./panels/ExtractAudioPanel";
 import type {
-  AudioTrimParams,
   AudioVolumeParams,
   ContactSheetParams,
   ExtractAudioParams,
-  FadeParams,
   FrameSampleParams,
-  PitchParams,
   ScreenshotParams,
-  SilenceParams,
   SpeedParams,
   SubtitleParams,
   TrimParams,
   VideoSilenceParams,
   WatermarkParams,
 } from "../types";
-import AudioFadePanel from "./panels/AudioFadePanel";
-import AudioPitchPanel from "./panels/AudioPitchPanel";
-import AudioSilencePanel from "./panels/AudioSilencePanel";
-import AudioTrimPanel from "./panels/AudioTrimPanel";
 import AudioVolumePanel from "./panels/AudioVolumePanel";
 import VideoSubtitlePanel from "./panels/VideoSubtitlePanel";
 import VideoFramesPanel from "./panels/VideoFramesPanel";
@@ -79,16 +72,8 @@ export default function JobParamsEditor({
     case "video-silence":
       return <VideoSilencePanel params={params as VideoSilenceParams} onChange={(p) => onChange(p)} />;
     /* ── New audio tools ── */
-    case "audio-trim":
-      return <AudioTrimPanel params={params as AudioTrimParams} onChange={(p) => onChange(p)} />;
-    case "audio-fade":
-      return <AudioFadePanel params={params as FadeParams} onChange={(p) => onChange(p)} />;
     case "audio-volume":
       return <AudioVolumePanel params={params as AudioVolumeParams} onChange={(p) => onChange(p)} />;
-    case "audio-pitch":
-      return <AudioPitchPanel params={params as PitchParams} onChange={(p) => onChange(p)} />;
-    case "audio-silence":
-      return <AudioSilencePanel params={params as SilenceParams} onChange={(p) => onChange(p)} />;
     default:
       return null;
     }

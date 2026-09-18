@@ -50,10 +50,16 @@ pub fn detect_gpu(app: AppHandle) -> Result<crate::gpu::GpuInfo> {
 #[tauri::command]
 pub fn open_output_folder(app: AppHandle, path: String) -> Result<()> {
     use tauri_plugin_opener::OpenerExt;
-    let dir = std::path::Path::new(&path)
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    // Files open their parent folder; directories are opened as-is (the
+    // download page's save-location bar passes a folder).
+    let p = std::path::Path::new(&path);
+    let dir = if p.is_dir() {
+        p.to_path_buf()
+    } else {
+        p.parent()
+            .map(|d| d.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+    };
     app.opener()
         .open_path(dir.to_string_lossy().to_string(), None::<&str>)
         .map_err(|e| crate::error::AppError(e.to_string()))?;

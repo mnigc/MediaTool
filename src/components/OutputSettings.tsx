@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { useI18n } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
+import Select from "./Select";
 import { FolderIcon, XIcon } from "./icons";
 
 function Tooltip({ label, children }: { label: string; children: ReactNode }) {
@@ -66,28 +67,26 @@ export default function OutputSettings({ compact = false }: OutputSettingsProps)
           className="w-24 rounded-lg border border-neutral-200 bg-white px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 focus:border-brand-400 focus:ring-1 focus:ring-brand-100"
           title={t("sidebar.suffix")}
         />
-        <select
+        <Select
           value={tasks.settings.overwritePolicy}
-          onChange={(e) =>
-            tasks.setOverwritePolicy(e.target.value as "overwrite" | "rename" | "skip")
-          }
-          className="rounded-lg border border-neutral-200 bg-white px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 focus:border-brand-400 focus:ring-1 focus:ring-brand-100"
+          onChange={(v) => tasks.setOverwritePolicy(v as "overwrite" | "rename" | "skip")}
+          className="w-28"
           title={t("sidebar.overwritePolicy")}
         >
           <option value="rename">{t("sidebar.ov.rename")}</option>
           <option value="skip">{t("sidebar.ov.skip")}</option>
           <option value="overwrite">{t("sidebar.ov.overwrite")}</option>
-        </select>
-        <select
-          value={tasks.settings.maxConcurrent}
-          onChange={(e) => tasks.setMaxConcurrent(Number(e.target.value))}
-          className="rounded-lg border border-neutral-200 bg-white px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 focus:border-brand-400 focus:ring-1 focus:ring-brand-100"
+        </Select>
+        <Select
+          value={String(tasks.settings.maxConcurrent)}
+          onChange={(v) => tasks.setMaxConcurrent(Number(v))}
+          className="w-16"
           title={t("sidebar.parallel")}
         >
           <option value={1}>1</option>
           <option value={2}>2</option>
           <option value={4}>4</option>
-        </select>
+        </Select>
       </div>
     );
   }
@@ -140,31 +139,29 @@ export default function OutputSettings({ compact = false }: OutputSettingsProps)
           <div className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
             {t("sidebar.overwritePolicy")}
           </div>
-          <select
+          <Select
             value={tasks.settings.overwritePolicy}
-            onChange={(e) =>
-              tasks.setOverwritePolicy(e.target.value as "overwrite" | "rename" | "skip")
-            }
-            className="mt-1 w-full rounded-lg border border-neutral-200 bg-white px-2 py-1.5 text-xs dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 focus:border-brand-400 focus:ring-1 focus:ring-brand-100"
+            onChange={(v) => tasks.setOverwritePolicy(v as "overwrite" | "rename" | "skip")}
+            className="mt-1 w-full"
           >
             <option value="rename">{t("sidebar.ov.rename")}</option>
             <option value="skip">{t("sidebar.ov.skip")}</option>
             <option value="overwrite">{t("sidebar.ov.overwrite")}</option>
-          </select>
+          </Select>
         </div>
         <div>
           <div className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
             {t("sidebar.parallel")}
           </div>
-          <select
-            value={tasks.settings.maxConcurrent}
-            onChange={(e) => tasks.setMaxConcurrent(Number(e.target.value))}
-            className="mt-1 w-full rounded-lg border border-neutral-200 bg-white px-2 py-1.5 text-xs dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 focus:border-brand-400 focus:ring-1 focus:ring-brand-100"
+          <Select
+            value={String(tasks.settings.maxConcurrent)}
+            onChange={(v) => tasks.setMaxConcurrent(Number(v))}
+            className="mt-1 w-full"
           >
             <option value={1}>1</option>
             <option value={2}>2</option>
             <option value={4}>4</option>
-          </select>
+          </Select>
         </div>
       </div>
     </div>

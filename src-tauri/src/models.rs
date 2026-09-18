@@ -175,24 +175,6 @@ pub struct VideoMergeParams {
     pub mode: String,
 }
 
-/// Params for the "audio-trim" tool (lossless stream copy).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AudioTrimParams {
-    pub start_time: f64,
-    pub duration: Option<f64>,
-}
-
-/// Params for the "audio-fade" tool (fade in / out).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FadeParams {
-    /// fade-in length in seconds
-    pub in_sec: f64,
-    /// fade-out length in seconds
-    pub out_sec: f64,
-}
-
 /// Params for the "audio-volume" tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -200,28 +182,6 @@ pub struct AudioVolumeParams {
     /// "normalize" (loudnorm) | "gain" (linear dB boost)
     pub mode: String,
     pub gain: Option<f32>,
-}
-
-/// Params for the "audio-pitch" tool (speed + pitch shift).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PitchParams {
-    /// playback speed multiplier 0.5..2.0 (atempo)
-    pub speed: f64,
-    /// pitch shift in semitones, -12..12 (asetrate + aresample)
-    pub pitch: f64,
-}
-
-/// Params for the "audio-silence" tool (remove silent passages).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SilenceParams {
-    /// "remove" (cut silence) | "detect" (annotate, passthrough)
-    pub mode: String,
-    /// silence threshold in dB (negative), default -35
-    pub threshold_db: Option<f32>,
-    /// minimum silence length in seconds, default 0.5
-    pub min_len: Option<f32>,
 }
 
 /// Params for the "video-frames" tool (sample frames then re-encode into a video).
@@ -248,6 +208,9 @@ pub struct ContactSheetParams {
     /// total number of thumbnails (count mode, grid auto-fits)
     #[serde(default = "default_contact_count")]
     pub count: u32,
+    /// fixed grid width in count mode (player-preview layout); None = auto-fit
+    #[serde(default)]
+    pub count_cols: Option<u32>,
     pub cols: u32,
     pub rows: u32,
     /// width of each thumbnail (px)
@@ -280,7 +243,15 @@ impl Default for FrameSampleParams {
 
 impl Default for ContactSheetParams {
     fn default() -> Self {
-        Self { mode: "interval".into(), interval: 5.0, count: 20, cols: 4, rows: 4, thumb_w: 160 }
+        Self {
+            mode: "interval".into(),
+            interval: 5.0,
+            count: 20,
+            count_cols: None,
+            cols: 4,
+            rows: 4,
+            thumb_w: 160,
+        }
     }
 }
 

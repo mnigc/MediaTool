@@ -79,7 +79,7 @@ pub fn resolve(app: &tauri::AppHandle, base: &str) -> Option<PathBuf> {
 /// Walk the PATH environment explicitly instead of letting CreateProcess
 /// resolve a bare executable name (which also searches the current working
 /// directory first — a hijack vector when launched from a downloaded folder).
-fn find_in_path(name: &str) -> Option<PathBuf> {
+pub(crate) fn find_in_path(name: &str) -> Option<PathBuf> {
     let dirs = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&dirs) {
         let cand = dir.join(name);

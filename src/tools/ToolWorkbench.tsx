@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { inspectMedia } from "../lib/tauri";
 import { useI18n } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
+import { useConfirm } from "../components/ConfirmDialog";
+import MetadataPreview from "../components/MetadataPreview";
 import { getTool, type WorkbenchId } from "./registry";
 import FilePicker from "./FilePicker";
 import TaskWorkbench from "./TaskWorkbench";
@@ -42,6 +44,7 @@ function WorkbenchHeader({ tool, onBack }: { tool: WorkbenchId; onBack?: () => v
 function InspectWorkbench({ onBack }: { onBack?: () => void }) {
   const { t } = useI18n();
   const tasks = useTasks();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const meta = getTool("inspect")!;
   const [file, setFile] = useState<string | null>(null);
   const [report, setReport] = useState<MediaReport | null>(null);
@@ -77,6 +80,19 @@ function InspectWorkbench({ onBack }: { onBack?: () => void }) {
     };
   }, [file]);
 
+  const handleStrip = async () => {
+    if (!file) return;
+    const ok = await confirm({
+      title: t("tool.strip-metadata.name"),
+      message: t("inspect.strip.confirm"),
+      confirmLabel: t("confirm.ok"),
+      cancelLabel: t("confirm.cancel"),
+    });
+    if (!ok) return;
+    await tasks.addTasks("strip-metadata", [file], {});
+    await tasks.startAll("strip-metadata");
+  };
+
   return (
     <div className="mx-auto max-w-2xl">
       <WorkbenchHeader tool="inspect" onBack={onBack} />
@@ -95,7 +111,23 @@ function InspectWorkbench({ onBack }: { onBack?: () => void }) {
           </div>
         )}
         {report && <InspectReport report={report} />}
+        {report && file && (
+          <div className="mt-4 border-t border-neutral-200 pt-4 dark:border-neutral-700/60">
+            <button
+              type="button"
+              onClick={handleStrip}
+              className="rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+            >
+              {t("inspect.strip.btn")}
+            </button>
+            <p className="mt-1.5 text-[11px] text-neutral-400 dark:text-neutral-500">
+              {t("inspect.strip.hint")}
+            </p>
+            <MetadataPreview paths={[file]} />
+          </div>
+        )}
       </div>
+      {confirmDialog}
     </div>
   );
 }

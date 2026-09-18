@@ -1,27 +1,10 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { ComponentType } from "react";
-import type { ThemeMode } from "../hooks/useTheme";
-import { AutoIcon, LogoIcon, MaximizeIcon, MinimizeIcon, MoonIcon, SunIcon, XIcon, GlobeIcon } from "./icons";
+import { LogoIcon, MaximizeIcon, MinimizeIcon, XIcon } from "./icons";
 import { useI18n } from "../i18n";
-import { LOCALES, LOCALE_NAMES } from "../i18n/translations";
 
-interface HeaderProps {
-  themeMode: ThemeMode;
-  onThemeChange: (mode: ThemeMode) => void;
-}
-
-const THEME_ICONS: Record<ThemeMode, ComponentType<{ className?: string }>> = {
-  light: SunIcon,
-  auto: AutoIcon,
-  dark: MoonIcon,
-};
-
-export default function Header({
-  themeMode,
-  onThemeChange,
-}: HeaderProps) {
+export default function Header() {
   const appWindow = getCurrentWindow();
-  const { t, locale, setLocale } = useI18n();
+  const { t } = useI18n();
 
   return (
     <header className="sticky top-0 z-10 border-b border-neutral-200 bg-white/80 dark:border-neutral-800 dark:bg-neutral-950/80 backdrop-blur-md">
@@ -45,51 +28,6 @@ export default function Header({
         <span className="hidden rounded-full border border-brand-200 bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700 dark:border-brand-800 dark:bg-brand-950/50 dark:text-brand-300 sm:inline">
           {t("header.tagline")}
         </span>
-
-        {/* Language selector */}
-        <div className="relative hidden sm:block">
-          <select
-            value={locale}
-            onChange={(e) => setLocale(e.target.value as typeof locale)}
-            title={t("header.language")}
-            className="appearance-none h-9 rounded-xl border border-neutral-200 bg-white px-3 pr-10 text-xs text-neutral-700 transition hover:border-brand-300 focus:border-brand-400 focus:ring-1 focus:ring-brand-100 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:border-brand-700 bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiIgdmlld0JveD0iMCAwIDE2IDE2IiBmaWxsPSJub25lIj48cGF0aCBkPSJNNCA4bDQtNCA0IDQiIHN0cm9rZT0iIzk5OSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz48L3N2Zz4=')] bg-[right_8px_center] bg-no-repeat"
-          >
-            {LOCALES.map((l) => (
-              <option key={l} value={l}>
-                {LOCALE_NAMES[l]}
-              </option>
-            ))}
-          </select>
-          <GlobeIcon className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-400 pointer-events-none" />
-        </div>
-
-        {/* Theme toggle */}
-        <div className="flex items-center rounded-xl border border-neutral-200 bg-neutral-50/50 p-1 dark:border-neutral-700 dark:bg-neutral-800/50">
-          {(["light", "auto", "dark"] as const).map((opt) => {
-            const Icon = THEME_ICONS[opt];
-            const label =
-              opt === "light"
-                ? t("header.theme.light")
-                : opt === "auto"
-                ? t("header.theme.auto")
-                : t("header.theme.dark");
-            return (
-              <button
-                key={opt}
-                onClick={() => onThemeChange(opt)}
-                title={label}
-                aria-label={label}
-                className={`flex h-8 w-8 items-center justify-center rounded-lg transition-all duration-200 ${
-                  themeMode === opt
-                    ? "bg-brand-100/70 text-brand-700 dark:bg-brand-900/70 dark:text-brand-200"
-                    : "text-neutral-500 hover:text-neutral-700 hover:bg-neutral-200/50 dark:text-neutral-400 dark:hover:text-neutral-200 dark:hover:bg-neutral-700/50"
-                }`}
-              >
-                <Icon className="h-4.5 w-4.5" />
-              </button>
-            );
-          })}
-        </div>
 
         {/* Window controls */}
         <div className="flex items-center gap-1 pl-1">

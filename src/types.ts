@@ -10,6 +10,31 @@ export interface GpuInfo {
   backends: GpuBackend[];
 }
 
+/** One bucket of app-owned scratch data reported by `cache_report`. */
+export interface CacheBucket {
+  key: string;
+  /** i18n key of the display label. */
+  labelKey: string;
+  path: string;
+  sizeBytes: number;
+  fileCount: number;
+  /** Whether "清除缓存" removes this bucket. */
+  removable: boolean;
+}
+
+export interface CacheReport {
+  totalBytes: number;
+  removableBytes: number;
+  buckets: CacheBucket[];
+}
+
+export interface CacheCleanResult {
+  freedBytes: number;
+  removed: number;
+  /** Entries that existed but could not be deleted (usually in use). */
+  failed: number;
+}
+
 export interface MediaInfo {
   path: string;
   mediaType: MediaType;
@@ -61,11 +86,7 @@ export type ToolId =
   | "video-frames"
   | "video-contact"
   | "video-silence"
-  | "audio-trim"
-  | "audio-fade"
   | "audio-volume"
-  | "audio-pitch"
-  | "audio-silence"
   | "audio-merge";
 
 export interface ScreenshotParams {
@@ -122,35 +143,10 @@ export interface VideoMergeParams {
 
 /* ── New audio tools ───────────────────────────────────────── */
 
-/** Lossless audio trim. */
-export interface AudioTrimParams {
-  startTime: number;
-  duration?: number;
-}
-
-/** Fade audio in / out. */
-export interface FadeParams {
-  inSec: number;
-  outSec: number;
-}
-
 /** Adjust the audio level of an audio file. */
 export interface AudioVolumeParams {
   mode: "normalize" | "gain";
   gain?: number;
-}
-
-/** Change speed and/or pitch of an audio file. */
-export interface PitchParams {
-  speed: number; // 0.5..2.0
-  pitch: number; // semitones, -12..12
-}
-
-/** Remove (or detect) silent passages. */
-export interface SilenceParams {
-  mode: "remove" | "detect";
-  thresholdDb?: number;
-  minLen?: number; // seconds
 }
 
 /** Concatenate multiple audio files. */
@@ -168,11 +164,13 @@ export interface FrameSampleParams {
 
 /** Build a contact sheet / sprite grid of thumbnails from the video.
  *  mode "interval": capture every `interval` seconds. mode "count": capture
- *  `count` thumbnails spread evenly across the whole video (grid auto-fits). */
+ *  `count` thumbnails spread evenly across the whole video (grid auto-fits,
+ *  or a fixed `countCols` width for the player-preview layout). */
 export interface ContactSheetParams {
   mode: "interval" | "count";
   interval: number; // seconds between thumbnails (interval mode)
   count: number; // total thumbnails (count mode)
+  countCols?: number; // count mode: fixed grid columns (0/undefined = auto-fit)
   cols: number;
   rows: number;
   thumbW: number; // thumbnail width (px)
@@ -208,11 +206,7 @@ export type ToolParams =
   | StripMetadataParams
   | SubtitleParams
   | VideoMergeParams
-  | AudioTrimParams
-  | FadeParams
   | AudioVolumeParams
-  | PitchParams
-  | SilenceParams
   | AudioMergeParams
   | FrameSampleParams
   | ContactSheetParams
@@ -346,4 +340,120 @@ export interface Job {
   speed?: string | null;
   sizeEstimate?: { bytes: number; exact: boolean } | null;
   estimating?: boolean;
+}
+
+/* ── yt-dlp download / record ─────────────────────────────────── */
+
+export interface YtdlpStatus {
+  installed: boolean;
+  version?: string | null;
+  path?: string | null;
+  ffmpegFound: boolean;
+}
+
+export interface YtdlpInstallProgress {
+  stage: string; // downloading | done | error
+  message: string;
+}
+
+/** streamlink: the live-recording engine (VOD stays on yt-dlp). */
+export interface StreamlinkStatus {
+  installed: boolean;
+  version?: string | null;
+  path?: string | null;
+  ffmpegFound: boolean;
+  /** Whether the in-app installer supports this platform (Windows x64 only). */
+  installable: boolean;
+}
+
+/** GitHub release pointer used by "检查更新": the tag plus the asset URL. */
+export interface StreamlinkRelease {
+  tag: string;
+  url: string;
+}
+
+export interface NetOptions {
+  cookiesBrowser?: string | null;
+  proxy?: string | null;
+}
+
+export interface DownloadRequest {
+  url: string;
+  quality: string; // best | 2160p | 1080p | 720p | 480p | audio
+  audioFormat?: string | null; // mp3 | m4a | opus | flac (quality=audio)
+  outputDir: string;
+  filenameTemplate?: string | null;
+  cookiesBrowser?: string | null;
+  proxy?: string | null;
+  subtitles?: boolean;
+  kind?: "download" | "record";
+  maxDurationSec?: number | null;
+  title?: string | null;
+}
+
+export interface DownloadProgressEvent {
+  id: string;
+  percent: number;
+  phase: string; // running | done
+  speed?: string | null;
+  eta?: string | null;
+  downloadedBytes?: number | null;
+  totalBytes?: number | null;
+  postprocessing?: boolean | null;
+}
+
+export interface DownloadDoneEvent {
+  id: string;
+  ok: boolean;
+  cancelled: boolean;
+  kind: string; // download | record
+  output?: string | null;
+  error?: string | null;
+  limitReached?: boolean | null;
+}
+
+export interface DownloadStartedEvent {
+  id: string;
+  url: string;
+  title: string;
+  kind: string;
+  pipeline?: WorkflowStepInput[];
+}
+
+export interface MonitorRequest {
+  url: string;
+  name?: string | null;
+  intervalSec: number;
+  autoRecord: boolean;
+  quality: string;
+  outputDir: string;
+  cookiesBrowser?: string | null;
+  proxy?: string | null;
+  pipeline?: WorkflowStepInput[];
+}
+
+export interface MonitorEdit {
+  name?: string;
+  intervalSec?: number;
+  autoRecord?: boolean;
+  quality?: string;
+}
+
+export interface MonitorInfo {
+  id: string;
+  url: string;
+  name: string;
+  intervalSec: number;
+  autoRecord: boolean;
+  quality: string;
+  outputDir: string;
+  cookiesBrowser?: string | null;
+  proxy?: string | null;
+  status: string; // watching | recording | stopped
+  title?: string | null;
+  author?: string | null;
+  liveStatus?: string | null; // is_live | not_live | post_live | unknown
+  lastChecked?: number | null;
+  currentJob?: string | null;
+  pipeline: WorkflowStepInput[];
 }

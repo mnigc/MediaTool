@@ -12,6 +12,7 @@ import {
 import { defaultParamsFor } from "../lib/defaults";
 import PresetParamsEditor from "../components/PresetParamsEditor";
 import { useConfirm } from "../components/ConfirmDialog";
+import Select from "../components/Select";
 import { XIcon } from "../components/icons";
 import type { JobParams, ToolId } from "../types";
 import type { WorkbenchId } from "./registry";
@@ -111,9 +112,6 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
           <h2 className="text-xl font-semibold text-neutral-800 dark:text-neutral-100">
             {t("module.presets.title")}
           </h2>
-          <p className="mt-1 text-xs text-neutral-400 dark:text-neutral-500">
-            {t("module.presets.desc")}
-          </p>
         </div>
         <button
           type="button"
@@ -242,18 +240,19 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
                     <span className="text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
                       {t("pm.toolType")}
                     </span>
-                    <select
+                    <Select
                       value={editing.toolId}
-                      onChange={(e) => handleToolChange(e.target.value)}
+                      onChange={(v) => handleToolChange(v)}
                       disabled={!isNew}
-                      className="rounded-lg border border-neutral-300 bg-white px-2 py-1 text-sm text-neutral-700 shadow-sm focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-100 disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+                      className="w-full"
+                      triggerClassName="text-sm py-1.5"
                     >
                       {ORDER.map((toolId) => (
                         <option key={toolId} value={toolId}>
                           {t(`tool.${toolId}.name`)}
                         </option>
                       ))}
-                    </select>
+                    </Select>
                   </label>
                 </div>
 

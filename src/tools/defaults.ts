@@ -1,17 +1,12 @@
 import type {
   AudioMergeParams,
-  AudioTrimParams,
   AudioVolumeParams,
   ContactSheetParams,
   ExtractAudioParams,
-  FadeParams,
   FrameSampleParams,
   MuteParams,
-  PitchParams,
-  SilenceParams,
   ScreenshotParams,
   SpeedParams,
-  StripMetadataParams,
   SubtitleParams,
   ToolParams,
   TrimParams,
@@ -48,8 +43,6 @@ export function blankToolParams(tool: WorkbenchId): ToolParams | null {
       return {} satisfies MuteParams;
     case "extract-audio":
       return { format: "mp3", bitrateKbps: 128 } satisfies ExtractAudioParams;
-    case "strip-metadata":
-      return {} satisfies StripMetadataParams;
     /* ── New video tools ── */
     case "video-subtitle":
       return { path: "", burn: true } satisfies SubtitleParams;
@@ -62,16 +55,8 @@ export function blankToolParams(tool: WorkbenchId): ToolParams | null {
     case "video-silence":
       return { threshold: -35, minLen: 2 } satisfies VideoSilenceParams;
     /* ── New audio tools ── */
-    case "audio-trim":
-      return { startTime: 0, duration: undefined } satisfies AudioTrimParams;
-    case "audio-fade":
-      return { inSec: 1, outSec: 1 } satisfies FadeParams;
     case "audio-volume":
       return { mode: "normalize" } satisfies AudioVolumeParams;
-    case "audio-pitch":
-      return { speed: 1, pitch: 0 } satisfies PitchParams;
-    case "audio-silence":
-      return { mode: "remove", thresholdDb: -35, minLen: 0.5 } satisfies SilenceParams;
     case "audio-merge":
       return { mode: "concat" } satisfies AudioMergeParams;
     default:

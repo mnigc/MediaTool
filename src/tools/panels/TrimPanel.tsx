@@ -1,6 +1,7 @@
 import { useI18n } from "../../i18n";
+import Select from "../../components/Select";
 import type { TrimParams, TrimSegment } from "../../types";
-import { Field, NumInput, sel } from "./ui";
+import { Field, NumInput } from "./ui";
 
 export default function TrimPanel({
   params,
@@ -97,14 +98,14 @@ export default function TrimPanel({
       </button>
 
       <Field label={t("tool.trim.mode")}>
-        <select
-          className={sel}
-          value={params.mode}
-          onChange={(e) => onChange({ ...params, mode: e.target.value as TrimParams["mode"] })}
-        >
+        <Select
+            className="w-full"
+            value={params.mode}
+            onChange={(v) => onChange({ ...params, mode: v as TrimParams["mode"] })}
+          >
           <option value="copy">{t("tool.trim.quick")}</option>
           <option value="encode">{t("tool.trim.precise")}</option>
-        </select>
+        </Select>
       </Field>
       <p className="text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-500">
         {params.mode === "copy" ? t("tool.trim.quickHint") : t("tool.trim.preciseHint")}

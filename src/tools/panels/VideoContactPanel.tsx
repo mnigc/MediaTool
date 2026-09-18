@@ -36,15 +36,27 @@ export default function VideoContactPanel({
       </div>
 
       {isCount ? (
-        <Field label={t("opt.contactCount")}>
-          <NumInput
-            value={params.count}
-            min={1}
-            max={400}
-            step={1}
-            onChange={(v) => set({ count: v ?? 20 })}
-          />
-        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label={t("opt.contactCount")}>
+            <NumInput
+              value={params.count}
+              min={1}
+              max={400}
+              step={1}
+              onChange={(v) => set({ count: v ?? 20 })}
+            />
+          </Field>
+          <Field label={t("opt.contactCountCols")}>
+            <NumInput
+              value={params.countCols}
+              min={1}
+              max={20}
+              step={1}
+              placeholder={t("opt.contactAutoFit")}
+              onChange={(v) => set({ countCols: v })}
+            />
+          </Field>
+        </div>
       ) : (
         <>
           <Field label={t("opt.contactInterval")}>

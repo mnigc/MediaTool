@@ -1,6 +1,7 @@
 import { useI18n } from "../../i18n";
+import Select from "../../components/Select";
 import type { ScreenshotParams } from "../../types";
-import { Field, FieldRow, NumInput, sel } from "./ui";
+import { Field, FieldRow, NumInput } from "./ui";
 
 export default function ScreenshotPanel({
   params,
@@ -16,24 +17,24 @@ export default function ScreenshotPanel({
     <div className="space-y-3">
       <FieldRow>
         <Field label={t("tool.shot.mode")}>
-          <select
-            className={sel}
+          <Select
+            className="w-full"
             value={params.mode}
-            onChange={(e) => set({ mode: e.target.value as ScreenshotParams["mode"] })}
+            onChange={(v) => set({ mode: v as ScreenshotParams["mode"] })}
           >
             <option value="single">{t("tool.shot.single")}</option>
             <option value="interval">{t("tool.shot.interval")}</option>
-          </select>
+          </Select>
         </Field>
         <Field label={t("opt.format")}>
-          <select
-            className={sel}
+          <Select
+            className="w-full"
             value={params.format}
-            onChange={(e) => set({ format: e.target.value })}
+            onChange={(v) => set({ format: v })}
           >
             <option value="png">PNG</option>
             <option value="jpeg">JPEG</option>
-          </select>
+          </Select>
         </Field>
       </FieldRow>
 

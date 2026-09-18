@@ -12,6 +12,7 @@ import {
 import { defaultParamsFor } from "../lib/defaults";
 import PresetParamsEditor from "./PresetParamsEditor";
 import { useConfirm } from "./ConfirmDialog";
+import Select from "./Select";
 import { XIcon } from "./icons";
 import { useI18n } from "../i18n";
 
@@ -237,18 +238,19 @@ function PresetEditor({
           <span className="text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
             {t("pm.toolType")}
           </span>
-          <select
+          <Select
             value={preset.toolId}
-            onChange={(e) => onToolChange(e.target.value as ToolId)}
+            onChange={(v) => onToolChange(v as ToolId)}
             disabled={!isNew}
-            className="rounded-lg border border-neutral-300 bg-white px-2 py-1 text-sm text-neutral-700 shadow-sm focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-100 disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+            className="w-full"
+            triggerClassName="text-sm py-1.5"
           >
             {PRESET_TOOLS.map((toolId) => (
               <option key={toolId} value={toolId}>
                 {t(`tool.${toolId}.name`)}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
       </div>
 

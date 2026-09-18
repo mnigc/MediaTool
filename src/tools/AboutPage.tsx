@@ -2,7 +2,15 @@ import { useCallback } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useI18n } from "../i18n";
 import { DEV_UNAVAILABLE, useUpdater } from "../hooks/useUpdater";
-import { CheckCircleIcon, CheckIcon, DownloadIcon, LogoIcon, SpinnerIcon } from "../components/icons";
+import { useDownloads } from "../contexts/DownloadCenter";
+import {
+  CheckCircleIcon,
+  CheckIcon,
+  DownloadIcon,
+  GitHubIcon,
+  LogoIcon,
+  SpinnerIcon,
+} from "../components/icons";
 
 const GITHUB_URL = "https://github.com/mnigc/MediaTool";
 
@@ -12,6 +20,219 @@ const FEATURES = [
   "about.features.privacy",
   "about.features.batch",
 ] as const;
+
+/** yt-dlp engine status — rendered in the top half of the combined
+ *  engine/update card, so both stay visible without two cards. */
+function YtdlpSection() {
+  const { t } = useI18n();
+  const dl = useDownloads();
+  const s = dl.ytdlp;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-4">
+        <h2 className="text-sm font-semibold text-neutral-800 dark:text-neutral-200">
+          {t("about.ytdlp.title")}
+        </h2>
+        {s?.installed && (
+          <span className="rounded-lg bg-success-50 px-2.5 py-1 text-xs font-medium text-success-600 dark:bg-success-950/40 dark:text-success-400">
+            v{s.version}
+          </span>
+        )}
+      </div>
+      <p className="mt-1.5 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
+        {t("about.ytdlp.desc")}
+      </p>
+
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        {!s ? (
+          <span className="flex items-center gap-2 text-sm text-neutral-500 dark:text-neutral-400">
+            <SpinnerIcon className="h-4 w-4 animate-spin" />
+            {t("dl.checking")}
+          </span>
+        ) : s.installed ? (
+          <button
+            onClick={() => void dl.checkYtdlpUpdate()}
+            disabled={dl.ytdlpChecking || dl.ytdlpInstalling}
+            className="inline-flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-1.5 text-sm font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700 disabled:opacity-50"
+          >
+            {dl.ytdlpChecking ? (
+              <SpinnerIcon className="h-4 w-4 animate-spin" />
+            ) : (
+              <DownloadIcon className="h-4 w-4" />
+            )}
+            {dl.ytdlpChecking ? t("updater.checking") : t("dl.update")}
+          </button>
+        ) : (
+          <>
+            <span className="flex-1 text-sm text-warning-700 dark:text-warning-400">
+              {t("dl.missing")}
+            </span>
+            <button
+              onClick={() => void dl.installYtdlp()}
+              disabled={dl.ytdlpInstalling}
+              className="rounded-xl bg-warning-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-warning-700 disabled:opacity-50"
+            >
+              {dl.ytdlpInstalling ? t("dl.installing") : t("dl.install")}
+            </button>
+          </>
+        )}
+        {s?.installed && dl.ytdlpLatest === s.version && !dl.ytdlpChecking && (
+          <span className="text-sm text-neutral-500 dark:text-neutral-400">
+            {t("dl.latestAlready")}
+          </span>
+        )}
+        {s?.installed && !s.ffmpegFound && (
+          <span className="text-xs text-warning-600 dark:text-warning-400">
+            {t("dl.noFfmpeg")}
+          </span>
+        )}
+      </div>
+
+      {s?.installed && dl.ytdlpLatest && dl.ytdlpLatest !== s.version && (
+        <div className="mt-3 flex items-center justify-between gap-4 rounded-xl bg-brand-50 p-3 ring-1 ring-brand-200 dark:bg-brand-900/20 dark:ring-brand-900/40">
+          <div className="min-w-0 text-sm">
+            <div className="font-semibold text-brand-700 dark:text-brand-300">
+              {t("about.newVersion")}
+            </div>
+            <div className="mt-0.5 text-brand-600/80 dark:text-brand-300/80">
+              {t("updater.current")} v{s.version} → v{dl.ytdlpLatest}
+            </div>
+          </div>
+          <button
+            onClick={() => void dl.installYtdlp()}
+            disabled={dl.ytdlpInstalling}
+            className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-brand-600 disabled:opacity-50"
+          >
+            <DownloadIcon className="h-4 w-4" />
+            {t("dl.upgradeTo", { version: dl.ytdlpLatest })}
+          </button>
+        </div>
+      )}
+
+      {dl.ytdlpInstallMessage && (
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-neutral-500 dark:text-neutral-400">
+          <span className="min-w-0 break-words">{dl.ytdlpInstallMessage}</span>
+          {s?.installed && !dl.ytdlpInstalling && !dl.ytdlpChecking && !dl.ytdlpLatest && (
+            <button
+              onClick={() => void dl.installYtdlp()}
+              className="shrink-0 rounded-lg border border-neutral-200 px-2.5 py-1 text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+            >
+              {t("dl.upgradeAnyway")}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** streamlink engine status — the live-recording half of the engine card.
+ *  Recordings fall back to yt-dlp when this engine is absent, so an absent
+ *  engine is a suggestion rather than a blocker. */
+function StreamlinkSection() {
+  const { t } = useI18n();
+  const dl = useDownloads();
+  const s = dl.streamlink;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-4">
+        <h2 className="text-sm font-semibold text-neutral-800 dark:text-neutral-200">
+          {t("about.streamlink.title")}
+        </h2>
+        {s?.installed && (
+          <span className="rounded-lg bg-success-50 px-2.5 py-1 text-xs font-medium text-success-600 dark:bg-success-950/40 dark:text-success-400">
+            v{s.version}
+          </span>
+        )}
+      </div>
+      <p className="mt-1.5 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
+        {t("about.streamlink.desc")}
+      </p>
+
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        {!s ? (
+          <span className="flex items-center gap-2 text-sm text-neutral-500 dark:text-neutral-400">
+            <SpinnerIcon className="h-4 w-4 animate-spin" />
+            {t("dl.checking")}
+          </span>
+        ) : s.installed ? (
+          <button
+            onClick={() => void dl.checkStreamlinkUpdate()}
+            disabled={dl.streamlinkChecking || dl.streamlinkInstalling}
+            className="inline-flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-1.5 text-sm font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700 disabled:opacity-50"
+          >
+            {dl.streamlinkChecking ? (
+              <SpinnerIcon className="h-4 w-4 animate-spin" />
+            ) : (
+              <DownloadIcon className="h-4 w-4" />
+            )}
+            {dl.streamlinkChecking ? t("updater.checking") : t("dl.update")}
+          </button>
+        ) : (
+          <>
+            <span className="flex-1 text-sm text-neutral-500 dark:text-neutral-400">
+              {t("dl.streamlink.missing")}
+            </span>
+            {s.installable && (
+              <button
+                onClick={() => void dl.installStreamlink()}
+                disabled={dl.streamlinkInstalling}
+                className="rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-brand-600 disabled:opacity-50 dark:bg-brand-600 dark:hover:bg-brand-700"
+              >
+                {dl.streamlinkInstalling ? t("dl.installing") : t("dl.install")}
+              </button>
+            )}
+          </>
+        )}
+        {s?.installed && dl.streamlinkLatest === s.version && !dl.streamlinkChecking && (
+          <span className="text-sm text-neutral-500 dark:text-neutral-400">
+            {t("dl.latestAlready")}
+          </span>
+        )}
+        {s?.installed && !s.ffmpegFound && (
+          <span className="text-xs text-warning-600 dark:text-warning-400">
+            {t("dl.noFfmpeg")}
+          </span>
+        )}
+      </div>
+
+      {s?.installed && dl.streamlinkLatest && dl.streamlinkLatest !== s.version && (
+        <div className="mt-3 flex items-center justify-between gap-4 rounded-xl bg-brand-50 p-3 ring-1 ring-brand-200 dark:bg-brand-900/20 dark:ring-brand-900/40">
+          <div className="min-w-0 text-sm">
+            <div className="font-semibold text-brand-700 dark:text-brand-300">
+              {t("about.newVersion")}
+            </div>
+            <div className="mt-0.5 text-brand-600/80 dark:text-brand-300/80">
+              {t("updater.current")} v{s.version} → v{dl.streamlinkLatest}
+            </div>
+          </div>
+          {s.installable ? (
+            <button
+              onClick={() => void dl.installStreamlink()}
+              disabled={dl.streamlinkInstalling}
+              className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-brand-600 disabled:opacity-50"
+            >
+              <DownloadIcon className="h-4 w-4" />
+              {t("dl.upgradeTo", { version: dl.streamlinkLatest })}
+            </button>
+          ) : (
+            <span className="shrink-0 text-xs text-brand-700/80 dark:text-brand-300/80">
+              {t("dl.streamlink.manualUpgrade")}
+            </span>
+          )}
+        </div>
+      )}
+
+      {dl.streamlinkInstallMessage && (
+        <div className="mt-3 text-xs text-neutral-500 dark:text-neutral-400">
+          {dl.streamlinkInstallMessage}
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface AboutPageProps {
   currentVersion: string;
@@ -49,6 +270,8 @@ export default function AboutPage({ currentVersion, updater, onToast }: AboutPag
   }, [installAndRelaunch]);
 
   const hasUpdate = update !== null;
+  // Hide the (possibly empty) state block instead of leaving its margin behind.
+  const showUpdateState = error !== null || phase !== "idle" || hasUpdate;
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -66,6 +289,17 @@ export default function AboutPage({ currentVersion, updater, onToast }: AboutPag
             </span>
           </div>
         </div>
+        <a
+          href={GITHUB_URL}
+          onClick={(e) => {
+            e.preventDefault();
+            openUrl(GITHUB_URL).catch(() => {});
+          }}
+          className="ml-auto inline-flex shrink-0 items-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-brand-600 active:bg-brand-700"
+        >
+          <GitHubIcon className="h-4 w-4" />
+          {t("about.github")}
+        </a>
       </div>
 
       {/* Features */}
@@ -88,38 +322,32 @@ export default function AboutPage({ currentVersion, updater, onToast }: AboutPag
         </ul>
       </section>
 
-      {/* GitHub */}
-      <section className="flex items-center justify-between gap-4 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-800">
-        <div>
-          <h2 className="text-sm font-semibold text-neutral-800 dark:text-neutral-200">
-            {t("about.github.hint")}
-          </h2>
-        </div>
-        <a
-          href={GITHUB_URL}
-          onClick={(e) => {
-            e.preventDefault();
-            openUrl(GITHUB_URL).catch(() => {});
-          }}
-          className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-brand-600 active:bg-brand-700"
-        >
-          <DownloadIcon className="h-4 w-4" />
-          {t("about.github")}
-        </a>
-      </section>
-
-      {/* Update */}
+      {/* Download engine + in-app update, in one card */}
       <section className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-800">
-        <div className="flex items-center justify-between gap-4">
-          <h2 className="text-sm font-semibold text-neutral-800 dark:text-neutral-200">
-            {t("about.update.title")}
-          </h2>
-          <span className="rounded-lg bg-neutral-100 px-2.5 py-1 text-xs font-medium text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
-            v{currentVersion}
-          </span>
+        <YtdlpSection />
+
+        <div className="mt-5 border-t border-neutral-200 pt-5 dark:border-neutral-800">
+          <StreamlinkSection />
         </div>
 
-        <div className="mt-4 space-y-4">
+        <div className="mt-5 border-t border-neutral-200 pt-5 dark:border-neutral-800">
+          <div className="flex items-center justify-between gap-4">
+            <h2 className="text-sm font-semibold text-neutral-800 dark:text-neutral-200">
+              {t("about.update.title")}
+            </h2>
+            {phase === "idle" && !hasUpdate && (
+              <button
+                onClick={handleCheck}
+                className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-1.5 text-sm font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+              >
+                <DownloadIcon className="h-4 w-4" />
+                {t("updater.check")}
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className={showUpdateState ? "mt-4 space-y-4" : "hidden"}>
           {error && (
             <div className="flex items-start justify-between gap-3 rounded-xl bg-error-50 p-3 text-sm text-error-700 ring-1 ring-error-200 dark:bg-error-900/20 dark:text-error-300 dark:ring-error-900/40">
               <div className="min-w-0">
@@ -205,19 +433,17 @@ export default function AboutPage({ currentVersion, updater, onToast }: AboutPag
               </div>
             </div>
           )}
-
-          {phase === "idle" && !hasUpdate && (
-            <div className="flex items-center justify-end">
-              <button
-                onClick={handleCheck}
-                className="inline-flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-4 py-2.5 text-sm font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
-              >
-                <DownloadIcon className="h-4 w-4" />
-                {t("updater.check")}
-              </button>
-            </div>
-          )}
         </div>
+      </section>
+
+      {/* Disclaimer */}
+      <section className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-800">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+          {t("about.disclaimer.title")}
+        </h2>
+        <p className="mt-3 text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
+          {t("about.disclaimer.body")}
+        </p>
       </section>
     </div>
   );

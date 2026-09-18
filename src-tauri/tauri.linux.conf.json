@@ -3,7 +3,8 @@
     "targets": ["deb", "rpm", "appimage"],
     "resources": {
       "binaries/ffmpeg": "binaries/",
-      "binaries/ffprobe": "binaries/"
+      "binaries/ffprobe": "binaries/",
+      "binaries/yt-dlp": "binaries/"
     }
   }
 }
