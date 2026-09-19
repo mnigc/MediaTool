@@ -1,5 +1,6 @@
 import type {
   AudioParams,
+  ContactSheetParams,
   ExtractAudioParams,
   JobParams,
   VideoParams,
@@ -11,6 +12,7 @@ import {
 } from "./OptionsPanel";
 import ExtractAudioPanel from "../tools/panels/ExtractAudioPanel";
 import WatermarkPanel from "../tools/panels/WatermarkPanel";
+import VideoContactPanel from "../tools/panels/VideoContactPanel";
 
 /** Renders the correct param editor for a preset by its tool id. Used by the
  *  preset manager so builtin/default params can be modified in place. */
@@ -32,6 +34,8 @@ export default function PresetParamsEditor({
       return <ExtractAudioPanel params={params as ExtractAudioParams} onChange={onChange} />;
     case "watermark":
       return <WatermarkPanel params={params as WatermarkParams} onChange={onChange} />;
+    case "video-contact":
+      return <VideoContactPanel params={params as ContactSheetParams} onChange={onChange} />;
     default:
       return null;
   }

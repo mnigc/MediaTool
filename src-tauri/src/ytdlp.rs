@@ -989,7 +989,7 @@ pub async fn ytdlp_start_download(
     std::thread::spawn(move || {
         run_download_blocking(&app2, &bin, request, &id2, Vec::new());
     });
-    Ok(StartJobResult { id, skipped: false, output: None })
+    Ok(StartJobResult { id, skipped: false, output: None, note: None })
 }
 
 fn req_output_dir_missing(req: &DownloadRequest) -> bool {
@@ -1145,9 +1145,34 @@ fn clean_field(s: &str) -> String {
     }
 }
 
+/// Douyin room links come in two shapes: the canonical `live.douyin.com/<room_id>`
+/// that the recording engine's matcher requires (a non-empty path segment), and
+/// referral forms like `live.douyin.com/?anchor_id=…` with no room id in the
+/// path — monitors on those would probe "unknown" forever. Reject the referral
+/// shape with guidance instead of adding a monitor that can never go live.
+fn validate_live_url(url: &str) -> Result<()> {
+    let lower = url.to_ascii_lowercase();
+    let douyin_path = lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"))
+        .map(|host| host.strip_prefix("live.").unwrap_or(host))
+        .and_then(|host| host.strip_prefix("douyin.com/"));
+    let Some(path) = douyin_path else {
+        return Ok(());
+    };
+    let room = path.split(['?', '#']).next().unwrap_or("");
+    if room.is_empty() || !room.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(AppError(
+            "抖音直播仅支持直播间链接（live.douyin.com/房间号）：带 ?anchor_id= 参数的推荐页链接无法解析，请进入直播间后从地址栏复制".into(),
+        ));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn monitor_add(app: AppHandle, request: MonitorRequest) -> Result<MonitorInfo> {
     let bin = resolve(&app).ok_or_else(|| AppError("尚未安装 yt-dlp".into()))?;
+    validate_live_url(&request.url)?;
     let id = format!("mon-{:x}", std::time::SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
     let info = MonitorInfo::from_request(&id, &request);
     let mgr = app.state::<MonitorManager>();
@@ -1447,5 +1472,34 @@ pub fn resume_monitors(app: &AppHandle) {
         let id = info.id.clone();
         let handle = spawn_monitor(app.clone(), bin.clone(), info);
         mgr.monitors.lock().unwrap().insert(id, handle);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn douyin_room_urls_pass_validation() {
+        assert!(validate_live_url("https://live.douyin.com/969060865386").is_ok());
+        assert!(validate_live_url("https://live.douyin.com/969060865386?from=share").is_ok());
+        assert!(validate_live_url("http://douyin.com/123456").is_ok());
+    }
+
+    #[test]
+    fn douyin_referral_urls_are_rejected() {
+        // Recommend-page shapes: no room id in the path.
+        assert!(validate_live_url("https://live.douyin.com/?anchor_id=80188783996&category_name=all").is_err());
+        assert!(validate_live_url("https://live.douyin.com/?activity_name=&anchor_id=1873170450364324").is_err());
+        assert!(validate_live_url("https://live.douyin.com/").is_err());
+        // Non-digit path segments are not room ids either.
+        assert!(validate_live_url("https://live.douyin.com/enter").is_err());
+    }
+
+    #[test]
+    fn other_sites_are_not_judged() {
+        assert!(validate_live_url("https://live.bilibili.com/123").is_ok());
+        assert!(validate_live_url("https://www.twitch.tv/x").is_ok());
+        assert!(validate_live_url("https://www.douyin.com/video/123").is_ok());
     }
 }

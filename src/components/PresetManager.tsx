@@ -19,7 +19,9 @@ import { useI18n } from "../i18n";
 const PRESET_TOOLS: ToolId[] = [
   "video-compress",
   "audio-compress",
+  "watermark",
   "extract-audio",
+  "video-contact",
 ];
 
 interface PresetManagerProps {

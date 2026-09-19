@@ -77,6 +77,8 @@ export interface PipelineRun {
   percent: number;
   output?: string | null;
   error?: string | null;
+  /** Non-fatal adjustment (remux auto-fallback), shown on completion. */
+  note?: string | null;
 }
 
 export interface DownloadSettings {
@@ -439,6 +441,7 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
                   percent: 0,
                   output: null,
                   error: null,
+                  note: null,
                 },
               }
             : x
@@ -453,6 +456,10 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
           gpu: "",
           overwritePolicy: "rename",
         },
+        // Bound pipelines auto-fallback: a lossless-remux step whose source
+        // codecs don't fit MP4 is swapped for the transcode recipe; the run
+        // finishes with a note explaining it.
+        allowCopyFallback: true,
         onUpdate: (r) => {
           setTasks((prev) =>
             prev.map((x) =>
@@ -472,7 +479,7 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
             )
           );
         },
-        onFinish: (ok, error, output) => {
+        onFinish: (ok, error, output, note) => {
           setTasks((prev) =>
             prev.map((x) =>
               x.id === taskId && x.pipeline
@@ -488,6 +495,7 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
                       percent: ok ? 100 : x.pipeline.percent,
                       output: output ?? null,
                       error: error ?? null,
+                      note: note ?? null,
                     },
                   }
                 : x

@@ -78,34 +78,81 @@ export function PipelineChips({
   onChange: (ids: string[]) => void;
 }) {
   const { t } = useI18n();
-  const toggle = (id: string) =>
-    onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]);
+  const treatment = selected.find((id) => presetById(id)?.role === "treatment");
+  const addon = selected.find((id) => presetById(id)?.role === "addon");
+  // Steps chain each output into the next, so the order is fixed:
+  // treatment first, add-on second. "None" simply drops the slot.
+  const commit = (treatmentId: string | null, addonId: string | null) =>
+    onChange([...(treatmentId ? [treatmentId] : []), ...(addonId ? [addonId] : [])]);
+
+  const chip = (active: boolean, label: string, title: string, onClick: () => void) => (
+    <button
+      key={label}
+      type="button"
+      onClick={onClick}
+      title={title}
+      className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition ${
+        active
+          ? "bg-brand-500 text-white dark:bg-brand-600"
+          : "border border-neutral-200 bg-white text-neutral-500 hover:border-brand-200 hover:text-brand-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-400 dark:hover:text-brand-400"
+      }`}
+    >
+      {label}
+    </button>
+  );
+
+  const treatments = PIPELINE_PRESETS.filter((p) => p.role === "treatment");
+  const addons = PIPELINE_PRESETS.filter((p) => p.role === "addon");
+  const names = selected
+    .map((id) => (presetById(id) ? t(presetById(id)!.labelKey) : id))
+    .join(" → ");
+
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      {PIPELINE_PRESETS.map((p) => {
-        const active = selected.includes(p.id);
-        return (
-          <button
-            key={p.id}
-            type="button"
-            onClick={() => toggle(p.id)}
-            title={t("dl.pipeline.hint")}
-            className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition ${
-              active
-                ? "bg-brand-500 text-white dark:bg-brand-600"
-                : "border border-neutral-200 bg-white text-neutral-500 hover:border-brand-200 hover:text-brand-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-400 dark:hover:text-brand-400"
-            }`}
-          >
-            {t(p.labelKey)}
-          </button>
-        );
-      })}
+    <div className="space-y-2.5">
+      <div>
+        <p className="mb-1 text-[10px] text-neutral-400 dark:text-neutral-500">
+          {t("dl.pipeline.treatment")}
+        </p>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {chip(
+            !treatment,
+            t("dl.pipeline.noTreatment"),
+            t("dl.pipeline.noTreatment.desc"),
+            () => commit(null, addon ?? null)
+          )}
+          {treatments.map((p) =>
+            chip(
+              treatment === p.id,
+              t(p.labelKey),
+              t(p.descKey),
+              () => commit(treatment === p.id ? null : p.id, addon ?? null)
+            )
+          )}
+        </div>
+      </div>
+      <div>
+        <p className="mb-1 text-[10px] text-neutral-400 dark:text-neutral-500">
+          {t("dl.pipeline.addon")}
+        </p>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {chip(!addon, t("dl.pipeline.noAddon"), t("dl.pipeline.noAddon.desc"), () =>
+            commit(treatment ?? null, null)
+          )}
+          {addons.map((p) =>
+            chip(
+              addon === p.id,
+              t(p.labelKey),
+              t(p.descKey),
+              () => commit(treatment ?? null, addon === p.id ? null : p.id)
+            )
+          )}
+        </div>
+      </div>
       {selected.length > 0 && (
-        <span className="w-full text-[10px] text-neutral-400 dark:text-neutral-500">
-          {selected
-            .map((id) => (presetById(id) ? t(presetById(id)!.labelKey) : id))
-            .join(" → ")}
-        </span>
+        <div className="text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+          <div>{names}</div>
+          {treatment && <div>{t(presetById(treatment)!.descKey)}</div>}
+        </div>
       )}
     </div>
   );

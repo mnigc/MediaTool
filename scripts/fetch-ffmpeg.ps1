@@ -142,18 +142,20 @@ Write-Host "  -> $(Join-Path $binDir $ytdlpName)"
 # elsewhere streamlink needs pip, so the app keeps recording live streams with
 # yt-dlp there.
 if ($os -eq "windows") {
+    # Resolve the tag from the /releases/latest redirect and the asset name
+    # from its expanded_assets fragment — the REST API is anonymous rate
+    # limited (60 req/IP/hr) and fails the build mid-download.
     Write-Host "Downloading streamlink (portable bundle)..."
-    $api = "https://api.github.com/repos/streamlink/windows-builds/releases/latest"
-    $release = Invoke-RestMethod -Uri $api -Headers @{
-        "User-Agent" = "mediatool-build"
-        Accept       = "application/vnd.github+json"
-    }
-    $asset = $release.assets | Where-Object { $_.name -like "*-x86_64.zip" } | Select-Object -First 1
-    if (-not $asset) { throw "No Windows x64 portable asset in $($release.tag_name)" }
+    $latest = Invoke-WebRequest -Uri "https://github.com/streamlink/windows-builds/releases/latest" -UseBasicParsing
+    $tag = ($latest.BaseResponse.ResponseUri.AbsolutePath -replace '.*/tag/', '')
+    $assetsHtml = (Invoke-WebRequest -Uri "https://github.com/streamlink/windows-builds/releases/expanded_assets/$tag" -UseBasicParsing).Content
+    $assetName = [regex]::Match($assetsHtml, 'streamlink-[^"]*-x86_64\.zip').Value
+    if (-not $assetName) { throw "No Windows x64 portable asset in $tag" }
+    $downloadUrl = "https://github.com/streamlink/windows-builds/releases/download/$tag/$assetName"
 
     $zip = Join-Path $binDir "streamlink.zip"
     $tmp = Join-Path $binDir "streamlink-extracted"
-    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip -UseBasicParsing
+    Invoke-WebRequest -Uri $downloadUrl -OutFile $zip -UseBasicParsing
 
     # Drop the ffmpeg the bundle carries: the app always passes --ffmpeg-ffmpeg
     # pointing at its own build, so a second copy only bloats the installer.

@@ -252,6 +252,10 @@ export interface JobRequest {
   outputSuffix?: string;
   gpu?: string; // GPU backend id; empty/undefined = CPU (compress only)
   overwritePolicy?: "overwrite" | "rename" | "skip"; // default: rename
+  /** Bound pipelines only: when a stream-copy step targets MP4 with codecs
+   *  the container can't carry, swap them for the transcode recipe (the
+   *  result carries a `note` explaining it). Tool pages keep the hard error. */
+  allowCopyFallback?: boolean;
 }
 
 /* ── Multi-step workflow ─────────────────────────────────────── */
@@ -268,6 +272,8 @@ export interface WorkflowRequest {
   outputSuffix?: string;
   gpu?: string;
   overwritePolicy?: "overwrite" | "rename" | "skip";
+  /** Opt into the remux auto-fallback (see JobRequest). */
+  allowCopyFallback?: boolean;
 }
 
 export interface StartWorkflowResult {
@@ -278,6 +284,8 @@ export interface StartWorkflowResult {
   /** true when the output already existed and the policy was "skip", so
    *  nothing was encoded and the run should be treated as finished. */
   skipped?: boolean;
+  /** Non-fatal adjustment the backend made while preparing (remux fallback). */
+  note?: string | null;
 }
 
 export interface StartJobResult {
@@ -285,6 +293,8 @@ export interface StartJobResult {
   skipped: boolean; // output existed and policy = skip; nothing was encoded
   /** The already-existing output file when `skipped` is true. */
   output?: string | null;
+  /** Non-fatal adjustment the backend made while preparing (remux fallback). */
+  note?: string | null;
 }
 
 export interface EstimateRequest {

@@ -28,6 +28,7 @@ const ORDER: string[] = [
   "audio-compress",
   "watermark",
   "extract-audio",
+  "video-contact",
 ];
 
 export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: WorkbenchId) => void }) {

@@ -16,7 +16,8 @@ import type {
 function buildRequest(
   step: WorkflowStep,
   input: string,
-  settings: RunSettings
+  settings: RunSettings,
+  allowCopyFallback: boolean
 ): JobRequest {
   return {
     toolId: step.toolId,
@@ -26,6 +27,7 @@ function buildRequest(
         outputSuffix: settings.outputSuffix || "_mediatool",
         gpu: settings.gpu || "",
     overwritePolicy: settings.overwritePolicy || "rename",
+    allowCopyFallback,
   };
 }
 
@@ -35,6 +37,9 @@ interface StepResult {
   skipped: boolean;
   cancelled: boolean;
   error: string | null;
+  /** Non-fatal adjustment the backend made while preparing the step
+   *  (lossless-remux auto-fallback). Shown to the user on completion. */
+  note?: string | null;
 }
 
 /** Run a single step against `input`, wiring progress/done listeners, and
@@ -43,12 +48,14 @@ function runOne(
   step: WorkflowStep,
   input: string,
   settings: RunSettings,
+  allowCopyFallback: boolean,
   onPercent: (p: number) => void,
   setId: (id: string) => void
 ): Promise<StepResult> {
   return new Promise<StepResult>((resolve) => {
     let rustId: string | null = null;
     let settled = false;
+    let note: string | null = null;
     let progressUn: (() => void) | null = null;
     let doneUn: (() => void) | null = null;
 
@@ -57,7 +64,7 @@ function runOne(
       settled = true;
       if (progressUn) progressUn();
       if (doneUn) doneUn();
-      resolve(v);
+      resolve({ note, ...v });
     };
 
     (async () => {
@@ -83,11 +90,13 @@ function runOne(
 
       let res;
       try {
-        res = await startJob(buildRequest(step, input, settings));
+        res = await startJob(buildRequest(step, input, settings, allowCopyFallback));
       } catch (e) {
         fin({ ok: false, output: null, skipped: false, cancelled: false, error: String(e) });
         return;
       }
+
+      note = res.note ?? null;
 
       if (res.skipped) {
         // Backend reports the existing output that caused the skip so the
@@ -108,8 +117,14 @@ function runOne(
 function runMerged(
   id: string,
   steps: WorkflowStep[],
+  note: string | null,
   onUpdate: (r: StepRun) => void,
-  onFinish: (ok: boolean, error?: string | null, output?: string | null) => void,
+  onFinish: (
+    ok: boolean,
+    error?: string | null,
+    output?: string | null,
+    note?: string | null
+  ) => void,
   t: (key: string, vars?: Record<string, string | number>) => string
 ): Promise<void> {
   return new Promise<void>((resolve) => {
@@ -123,7 +138,7 @@ function runMerged(
       settled = true;
       if (progressUn) progressUn();
       if (doneUn) doneUn();
-      onFinish(v.ok, v.error, v.output);
+      onFinish(v.ok, v.error, v.output, note);
       resolve();
     };
 
@@ -172,11 +187,19 @@ export function startWorkflow(opts: {
   input: string;
   steps: WorkflowStep[];
   settings: RunSettings;
+  /** Opt into the lossless-remux auto-fallback for bound pipelines. */
+  allowCopyFallback?: boolean;
   onUpdate: (r: StepRun) => void;
-  onFinish?: (ok: boolean, error?: string | null, output?: string | null) => void;
+  onFinish?: (
+    ok: boolean,
+    error?: string | null,
+    output?: string | null,
+    note?: string | null
+  ) => void;
   t: (key: string, vars?: Record<string, string | number>) => string;
 }): WorkflowRunHandle {
   const { input, steps, settings, onUpdate, onFinish, t } = opts;
+  const allowCopyFallback = opts.allowCopyFallback === true;
   let cancelled = false;
   let mergedId: string | null = null;
   let activeId: string | null = null;
@@ -185,10 +208,15 @@ export function startWorkflow(opts: {
   // loop (previously those paths finished silently and the UI stayed in
   // "running" forever).
   let finished = false;
-  const finish = (ok: boolean, error?: string | null, output?: string | null) => {
+  const finish = (
+    ok: boolean,
+    error?: string | null,
+    output?: string | null,
+    note?: string | null
+  ) => {
     if (finished) return;
     finished = true;
-    onFinish?.(ok, error, output);
+    onFinish?.(ok, error, output, note);
   };
 
   const cancel = () => {
@@ -207,6 +235,7 @@ export function startWorkflow(opts: {
     outputSuffix: settings.outputSuffix || "_mediatool",
         gpu: settings.gpu || "",
         overwritePolicy: settings.overwritePolicy || "rename",
+        allowCopyFallback,
         steps: steps.map((s) => ({ toolId: s.toolId, params: s.params })),
       });
       if (res.merged) {
@@ -218,13 +247,20 @@ export function startWorkflow(opts: {
           for (let i = 0; i < steps.length; i++) {
             onUpdate({ index: i, status: "done", percent: 100 });
           }
-          finish(true, null, null);
+          finish(true, null, null, res.note ?? null);
         } else {
           mergedId = res.id;
-          await runMerged(res.id, steps, onUpdate, (ok2, error, output) => {
-            if (cancelled) finish(false, t("job.cancelled"), null);
-            else finish(ok2, error, output);
-          }, t);
+          await runMerged(
+            res.id,
+            steps,
+            res.note ?? null,
+            onUpdate,
+            (ok2, error, output, note) => {
+              if (cancelled) finish(false, t("job.cancelled"), null, note);
+              else finish(ok2, error, output, note);
+            },
+            t
+          );
         }
       }
     } catch {
@@ -239,6 +275,7 @@ export function startWorkflow(opts: {
 
     // 2) Fall back: run each step in sequence, feeding the previous output in.
     let working = input;
+    let runNote: string | null = null;
     for (let i = 0; i < steps.length; i++) {
       if (cancelled) break;
       const step = steps[i];
@@ -249,22 +286,24 @@ export function startWorkflow(opts: {
         step,
         prev,
         settings,
+        allowCopyFallback,
         (p) => onUpdate({ index: i, status: "running", percent: p, input: prev }),
         (id) => {
           activeId = id;
         }
       );
+      if (result.note) runNote = result.note;
       activeId = null;
 
       if (cancelled) {
         onUpdate({ index: i, status: "error", percent: 0, error: t("job.cancelled"), input: prev });
-        finish(false, t("job.cancelled"), null);
+        finish(false, t("job.cancelled"), null, runNote);
         return;
       }
 
       if (!result.ok) {
         onUpdate({ index: i, status: "error", percent: 0, error: result.error ?? t("err.friendly.empty"), input: prev });
-        finish(false, result.error ?? t("err.friendly.empty"), null);
+        finish(false, result.error ?? t("err.friendly.empty"), null, runNote);
         return;
       }
 
@@ -277,9 +316,9 @@ export function startWorkflow(opts: {
     }
 
     if (cancelled) {
-      finish(false, t("job.cancelled"), null);
+      finish(false, t("job.cancelled"), null, runNote);
     } else {
-      finish(true, null, working);
+      finish(true, null, working, runNote);
     }
   })();
 

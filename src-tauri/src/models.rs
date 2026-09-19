@@ -287,17 +287,25 @@ pub struct JobRequest {
     /// "overwrite" | "rename" (append " (2)", " (3)", …) | "skip".
     /// None defaults to "rename". Ignored for pattern outputs.
     pub overwrite_policy: Option<String>,
+    /// Bound pipelines may opt into the lossless-remux auto-fallback: when a
+    /// stream-copy into MP4 hits codecs the container can't carry, the copy
+    /// params are swapped for the transcode recipe and `note` on the result
+    /// explains the substitution. Explicit tool-page choices keep the error.
+    pub allow_copy_fallback: Option<bool>,
 }
 
 /// Result of starting a job. `skipped == true` means nothing was encoded
 /// because the output file already existed and the policy was "skip";
-/// `output` then carries the existing file.
+/// `output` then carries the existing file. `note` carries a non-fatal
+/// adjustment the backend made while preparing the job (remux fallback).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartJobResult {
     pub id: String,
     pub skipped: bool,
     pub output: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 /* ── Multi-step workflow ─────────────────────────────────────── */
@@ -323,6 +331,8 @@ pub struct WorkflowRequest {
     pub output_suffix: Option<String>,
     pub gpu: Option<String>,
     pub overwrite_policy: Option<String>,
+    /// Opt into the lossless-remux auto-fallback (see `JobRequest`).
+    pub allow_copy_fallback: Option<bool>,
 }
 
 /// Result of a workflow start.
@@ -338,6 +348,9 @@ pub struct StartWorkflowResult {
     /// nothing was started and the caller should treat the run as finished.
     #[serde(default)]
     pub skipped: bool,
+    /// Non-fatal adjustment made while preparing the run (remux fallback).
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

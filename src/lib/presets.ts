@@ -1,7 +1,16 @@
 import { useSyncExternalStore } from "react";
-import type { JobParams } from "../types";
+import type {
+  AudioParams,
+  ContactSheetParams,
+  ExtractAudioParams,
+  JobParams,
+  ToolId,
+  VideoParams,
+  WatermarkParams,
+} from "../types";
 import { defaultParamsFor } from "./defaults";
 import { readStorage, writeStorage } from "./storage";
+import { CRF } from "./quality";
 
 export interface Preset {
   name: string;
@@ -25,33 +34,115 @@ const keyOf = (p: { toolId: string; name: string }) => `${p.toolId}::${p.name}`;
  *  keys, so builtin preset labels follow the active UI language. Custom
  *  presets keep the name the user typed. */
 const BUILTIN_NAME_KEYS: Record<string, string> = {
-  "默认参数": "preset.p_default",
   "高压缩 (H.264)": "preset.p_high_h264",
+  "视觉无损": "preset.p_vlossless",
   "社交平台 720p": "preset.p_social_720",
   "高压缩 (AV1)": "preset.p_high_av1",
   "目标大小 10MB": "preset.p_size_10mb",
-  "MP3 128k": "preset.p_mp3_128",
-  "MP3 96k 极限压缩": "preset.p_mp3_96",
-  "高质量 90": "preset.p_q90",
-  "小文件 60": "preset.p_small_60",
-  "限制 1920 宽": "preset.p_max_1920",
+  "高质量 1080p": "preset.p_hq_1080",
+  "降码率 128k": "preset.p_bitrate_128",
+  "极限 96k": "preset.p_bitrate_96",
   "MP3 192k": "preset.p_mp3_192",
   "AAC 128k": "preset.p_aac_128",
   "FLAC 无损": "preset.p_flac",
-  /* ── 视频平台 ── */
+  /* ── 视频压缩 · 平台场景 ── */
   "抖音竖版": "preset.p_douyin",
-  "微信视频": "preset.p_wechat_v",
-  "B站 1080p": "preset.p_bilibili",
-  "YouTube 1080p": "preset.p_youtube",
-  "Instagram": "preset.p_instagram",
   "WhatsApp": "preset.p_whatsapp",
   /* ── 水印 ── */
   "右上角Logo": "preset.p_wm_topright",
-  /* ── 提取音频 ── */
-  "手机听歌 MP3 128k": "preset.p_pocket_mp3",
-  "省空间 AAC 96k": "preset.p_small_aac",
+  "底部版权条": "preset.p_wm_bottom",
+  "居中半透明": "preset.p_wm_center",
   /* ── 雪碧图 ── */
   "播放器预览": "preset.p_player_preview",
+};
+
+/* ── Preset apply / compare semantics ────────────────────────────────
+ * Builtin presets are authored as small diffs on top of the tool defaults;
+ * they are materialized into full param objects when loaded, so applying a
+ * preset REPLACES the whole encode state instead of shallow-merging over
+ * whatever the panel currently holds (which used to leak stale fields and
+ * forced every preset to enumerate all fields defensively). */
+
+/** Fields a preset never owns — they describe the user's current input, not
+ *  encode settings, so applying a preset must leave them untouched. */
+const IDENTITY_FIELDS: Record<string, string[]> = {
+  watermark: ["imagePath"],
+};
+
+/** Overlay `params` on the tool defaults and drop identity fields, producing
+ *  the full param object a (possibly sparse) preset stands for. */
+export function materializePresetParams(toolId: string, params: object): JobParams {
+  const merged: Record<string, unknown> = {
+    ...(defaultParamsFor(toolId as ToolId) as Record<string, unknown>),
+    ...(params as Record<string, unknown>),
+  };
+  for (const f of IDENTITY_FIELDS[toolId] ?? []) delete merged[f];
+  return merged as JobParams;
+}
+
+/** Full params for applying a preset: keep the current identity fields, then
+ *  lay the materialized preset over the (reset) defaults. */
+export function applyPresetParams(
+  toolId: string,
+  current: JobParams,
+  presetParams: object
+): JobParams {
+  const identity = pickIdentity(toolId, current);
+  return { ...identity, ...materializePresetParams(toolId, presetParams) } as JobParams;
+}
+
+function pickIdentity(toolId: string, params: JobParams): Record<string, unknown> {
+  const src = params as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const f of IDENTITY_FIELDS[toolId] ?? []) {
+    if (src[f] !== undefined) out[f] = src[f];
+  }
+  return out;
+}
+
+/** Shallow equality ignoring identity fields, treating missing keys and
+ *  undefined alike. Used to un-highlight the selected preset chip once the
+ *  panel has drifted away from it. */
+export function presetParamsEqual(toolId: string, a: JobParams, b: JobParams): boolean {
+  const strip = (p: JobParams) => {
+    const c = { ...(p as Record<string, unknown>) };
+    for (const f of IDENTITY_FIELDS[toolId] ?? []) delete c[f];
+    return c;
+  };
+  const x = strip(a);
+  const y = strip(b);
+  for (const k of new Set([...Object.keys(x), ...Object.keys(y)])) {
+    if ((x[k] ?? undefined) !== (y[k] ?? undefined)) return false;
+  }
+  return true;
+}
+
+/* ── Shared encode recipes ───────────────────────────────────────────
+ * Single source of truth for the builtin preset and the download/record
+ * pipeline of the same intent, so the two can never drift apart. */
+
+/** Visually lossless: crf 18 + slow is the accepted visually-lossless tier;
+ *  audio is copied so re-encoding never degrades it. */
+export const VLOSSLESS_VIDEO_PARAMS: VideoParams = {
+  videoCodec: "libx264",
+  qualityMode: "crf",
+  crf: CRF.vlossless,
+  resolution: "original",
+  audioCodec: "copy",
+  format: "source",
+  preset: "slow",
+  fps: undefined,
+};
+
+/** Player-preview contact sheet: 50 stills in a 10-wide grid. */
+export const PLAYER_PREVIEW_CONTACT_PARAMS: ContactSheetParams = {
+  mode: "count",
+  interval: 5,
+  count: 50,
+  countCols: 10,
+  cols: 10,
+  rows: 10,
+  thumbW: 160,
 };
 
 /** Localized display name for a preset. Builtin presets resolve through i18n;
@@ -67,60 +158,123 @@ export function presetDisplayName(
   return p.name;
 }
 
-export const BUILTIN_PRESETS: Preset[] = [
+/** One-line human summary of what a preset sets (chip tooltip). */
+export function presetSummary(
+  p: Preset,
+  t: (key: string, vars?: Record<string, string | number>) => string
+): string {
+  const q = p.params as Record<string, unknown>;
+  const parts: string[] = [];
+  const kbps = (n: unknown) => (n === undefined || n === null ? "" : `${n}k`);
+  switch (p.toolId) {
+    case "video-compress": {
+      if (q.videoCodec === "copy") {
+        parts.push(t("preset.sum.streamCopy"));
+      } else {
+        if (q.qualityMode === "target_size") {
+          parts.push(t("preset.sum.targetMb", { n: Number(q.targetSizeMb) }));
+        } else if (q.qualityMode === "bitrate") {
+          parts.push(t("preset.sum.kbps", { n: Number(q.videoBitrateKbps) }));
+        } else {
+          parts.push(`CRF ${q.crf ?? CRF.compact}`);
+        }
+        if (q.resolution && q.resolution !== "original") parts.push(String(q.resolution));
+        if (q.preset && q.preset !== "medium") parts.push(String(q.preset));
+      }
+      if (q.audioCodec === "copy") parts.push(t("preset.sum.audioCopy"));
+      else if (q.audioCodec === "none") parts.push(t("preset.sum.audioNone"));
+      else if (q.audioCodec) parts.push(`${String(q.audioCodec).toUpperCase()} ${kbps(q.audioBitrateKbps)}`.trim());
+      break;
+    }
+    case "audio-compress": {
+      parts.push(
+        q.format === "source"
+          ? `${kbps(q.bitrateKbps)}`
+          : `${String(q.format).toUpperCase()} ${kbps(q.bitrateKbps)}`.trim()
+      );
+      break;
+    }
+    case "extract-audio": {
+      parts.push(
+        q.format === "flac"
+          ? "FLAC"
+          : `${String(q.format).toUpperCase()} ${kbps(q.bitrateKbps)}`.trim()
+      );
+      break;
+    }
+    case "watermark": {
+      if (q.position) parts.push(t(`opt.pos.${q.position}`));
+      if (q.scalePercent !== undefined) parts.push(`${q.scalePercent}%`);
+      if (q.opacity !== undefined) parts.push(`${Math.round(Number(q.opacity) * 100)}%`);
+      break;
+    }
+    case "video-contact": {
+      parts.push(
+        q.mode === "count" ? `${q.count} × ${q.thumbW}px` : `${q.interval}s × ${q.thumbW}px`
+      );
+      break;
+    }
+  }
+  return parts.filter(Boolean).join(" · ");
+}
+
+/** Authored form of a builtin preset: a sparse diff over `defaultParamsFor
+ *  (toolId)` — only fields that deviate from the defaults are listed.
+ *  `loadPresets` materializes them into full param objects. */
+type SparseToolParams = Partial<
+  VideoParams &
+    AudioParams &
+    WatermarkParams &
+    ContactSheetParams &
+    ExtractAudioParams
+>;
+type BuiltinPreset = Omit<Preset, "params"> & { params: SparseToolParams };
+
+export const BUILTIN_PRESETS: BuiltinPreset[] = [
   // ── 视频压缩 ──────────────────────────────
-  {
-    name: "默认参数",
-    toolId: "video-compress",
-    builtin: true,
-    params: { ...defaultParamsFor("video-compress") },
-  },
   {
     name: "高压缩 (H.264)",
     toolId: "video-compress",
     builtin: true,
     params: {
-      videoCodec: "libx264",
       qualityMode: "crf",
-      crf: 30,
-      resolution: "original",
-      audioCodec: "aac",
+      crf: CRF.extreme,
       audioBitrateKbps: 96,
-      format: "source",
       preset: "slow",
-      fps: undefined,
     },
+  },
+  {
+    name: "视觉无损",
+    toolId: "video-compress",
+    builtin: true,
+    params: { ...VLOSSLESS_VIDEO_PARAMS },
   },
   {
     name: "社交平台 720p",
     toolId: "video-compress",
     builtin: true,
     params: {
-      videoCodec: "libx264",
       qualityMode: "crf",
-      crf: 26,
+      crf: CRF.social,
       resolution: "720p",
-      audioCodec: "aac",
       audioBitrateKbps: 128,
       format: "mp4",
-      preset: "medium",
-      fps: undefined,
     },
   },
   {
     name: "高压缩 (AV1)",
     toolId: "video-compress",
     builtin: true,
+    // AV1 needs a higher CRF than H.264 for the same size, so an explicit
+    // value instead of a shared tier. It only muxes safely into modern
+    // containers; "source" would break on avi/wmv/flv inputs.
     params: {
       videoCodec: "libsvtav1",
       qualityMode: "crf",
       crf: 32,
-      resolution: "original",
       audioCodec: "opus",
       audioBitrateKbps: 128,
-      format: "source",
-      preset: "medium",
-      fps: undefined,
+      format: "mkv",
     },
   },
   {
@@ -128,16 +282,21 @@ export const BUILTIN_PRESETS: Preset[] = [
     toolId: "video-compress",
     builtin: true,
     params: {
-      videoCodec: "libx264",
       qualityMode: "target_size",
-      crf: undefined,
       targetSizeMb: 10,
-      resolution: "original",
-      audioCodec: "aac",
       audioBitrateKbps: 128,
-      format: "source",
-      preset: "medium",
-      fps: undefined,
+    },
+  },
+  {
+    name: "高质量 1080p",
+    toolId: "video-compress",
+    builtin: true,
+    params: {
+      qualityMode: "crf",
+      crf: CRF.high,
+      resolution: "1080p",
+      audioBitrateKbps: 192,
+      format: "mp4",
     },
   },
   // ── 视频压缩 · 平台场景 ────────────────────────
@@ -145,80 +304,13 @@ export const BUILTIN_PRESETS: Preset[] = [
     name: "抖音竖版",
     toolId: "video-compress",
     builtin: true,
+    // Resolution presets scale by height, which undersizes vertical sources
+    // (9:16 @ "1080p" → 608x1080), so keep the source dimensions.
     params: {
-      videoCodec: "libx264",
       qualityMode: "crf",
-      crf: 24,
-      resolution: "1080p",
-      audioCodec: "aac",
-      audioBitrateKbps: 128,
+      crf: CRF.social,
       format: "mp4",
       preset: "fast",
-      fps: 30,
-    },
-  },
-  {
-    name: "微信视频",
-    toolId: "video-compress",
-    builtin: true,
-    params: {
-      videoCodec: "libx264",
-      qualityMode: "crf",
-      crf: 26,
-      resolution: "720p",
-      audioCodec: "aac",
-      audioBitrateKbps: 96,
-      format: "mp4",
-      preset: "medium",
-      fps: 30,
-    },
-  },
-  {
-    name: "B站 1080p",
-    toolId: "video-compress",
-    builtin: true,
-    params: {
-      videoCodec: "libx264",
-      qualityMode: "crf",
-      crf: 20,
-      resolution: "1080p",
-      audioCodec: "aac",
-      audioBitrateKbps: 192,
-      format: "mp4",
-      preset: "medium",
-      fps: 30,
-    },
-  },
-  {
-    name: "YouTube 1080p",
-    toolId: "video-compress",
-    builtin: true,
-    params: {
-      videoCodec: "libx264",
-      qualityMode: "crf",
-      crf: 20,
-      resolution: "1080p",
-      audioCodec: "aac",
-      audioBitrateKbps: 192,
-      format: "mp4",
-      preset: "medium",
-      fps: 60,
-    },
-  },
-  {
-    name: "Instagram",
-    toolId: "video-compress",
-    builtin: true,
-    params: {
-      videoCodec: "libx264",
-      qualityMode: "crf",
-      crf: 22,
-      resolution: "1080p",
-      audioCodec: "aac",
-      audioBitrateKbps: 128,
-      format: "mp4",
-      preset: "medium",
-      fps: 30,
     },
   },
   {
@@ -226,32 +318,23 @@ export const BUILTIN_PRESETS: Preset[] = [
     toolId: "video-compress",
     builtin: true,
     params: {
-      videoCodec: "libx264",
       qualityMode: "crf",
-      crf: 28,
+      crf: CRF.compact,
       resolution: "480p",
-      audioCodec: "aac",
       audioBitrateKbps: 96,
       format: "mp4",
-      preset: "medium",
       fps: 30,
     },
   },
   // ── 音频压缩（保持格式降码率）───────────────
   {
-    name: "默认参数",
-    toolId: "audio-compress",
-    builtin: true,
-    params: { ...defaultParamsFor("audio-compress") },
-  },
-  {
-    name: "MP3 128k",
+    name: "降码率 128k",
     toolId: "audio-compress",
     builtin: true,
     params: { format: "source", bitrateKbps: 128 },
   },
   {
-    name: "MP3 96k 极限压缩",
+    name: "极限 96k",
     toolId: "audio-compress",
     builtin: true,
     params: { format: "source", bitrateKbps: 96 },
@@ -261,19 +344,19 @@ export const BUILTIN_PRESETS: Preset[] = [
     name: "右上角Logo",
     toolId: "watermark",
     builtin: true,
-    params: { position: "tr", scalePercent: 12, opacity: 0.9, marginPercent: 3 },
+    params: { position: "tr", scalePercent: 12, opacity: 0.9 },
   },
   {
     name: "底部版权条",
     toolId: "watermark",
     builtin: true,
-    params: { position: "bc", scalePercent: 15, opacity: 0.8, marginPercent: 3 },
+    params: { position: "bc", scalePercent: 15, opacity: 0.8 },
   },
   {
     name: "居中半透明",
     toolId: "watermark",
     builtin: true,
-    params: { position: "mc", scalePercent: 20, opacity: 0.5, marginPercent: 3 },
+    params: { position: "mc", scalePercent: 20, opacity: 0.5 },
   },
   // ── 提取音频 ──────────────────────────────
   {
@@ -292,26 +375,16 @@ export const BUILTIN_PRESETS: Preset[] = [
     name: "FLAC 无损",
     toolId: "extract-audio",
     builtin: true,
-    params: { format: "flac", bitrateKbps: 128 },
-  },
-  {
-    name: "手机听歌 MP3 128k",
-    toolId: "extract-audio",
-    builtin: true,
-    params: { format: "mp3", bitrateKbps: 128 },
-  },
-  {
-    name: "省空间 AAC 96k",
-    toolId: "extract-audio",
-    builtin: true,
-    params: { format: "aac", bitrateKbps: 96 },
+    // bitrateKbps is required by the job schema but ignored for flac; it is
+    // filled in by materialization from the tool defaults.
+    params: { format: "flac" },
   },
   // ── 雪碧图 ────────────────────────────────
   {
     name: "播放器预览",
     toolId: "video-contact",
     builtin: true,
-    params: { mode: "count", interval: 5, count: 100, countCols: 10, cols: 10, rows: 10, thumbW: 160 },
+    params: { ...PLAYER_PREVIEW_CONTACT_PARAMS },
   },
 ];
 
@@ -347,7 +420,9 @@ function saveOverrides(overrides: Preset[]): void {
 
 export function loadPresets(): Preset[] {
   const byKey = new Map<string, Preset>();
-  for (const p of BUILTIN_PRESETS) byKey.set(keyOf(p), { ...p });
+  for (const p of BUILTIN_PRESETS) {
+    byKey.set(keyOf(p), { ...p, params: materializePresetParams(p.toolId, p.params) });
+  }
   for (const o of loadOverrides()) {
     const base = byKey.get(keyOf(o));
     if (base?.builtin) {

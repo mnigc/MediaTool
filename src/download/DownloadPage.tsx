@@ -538,6 +538,15 @@ function DownloadCard({
         </p>
       )}
 
+      {task.pipeline?.phase === "done" && task.pipeline.note && (
+        <p
+          className="mt-1 text-[11px] text-amber-600 dark:text-amber-400"
+          title={task.pipeline.note}
+        >
+          {task.pipeline.note}
+        </p>
+      )}
+
       {task.pipeline?.phase === "cancelled" && (
         <p className="mt-2 text-[11px] text-neutral-400 dark:text-neutral-500">
           {t("dl.phase.cancelled")} · {stepNames.join(" + ")}
@@ -568,7 +577,7 @@ export default function DownloadPage({ onOpenSettings }: { onOpenSettings: () =>
 
   const [quality, setQuality] = useState(dl.settings.quality);
   const [audioFormat, setAudioFormat] = useState("mp3");
-  const [pipelineIds, setPipelineIds] = useState<string[]>(["transcode"]);
+  const [pipelineIds, setPipelineIds] = useState<string[]>([]);
 
   return (
     <div className="mx-auto max-w-5xl">

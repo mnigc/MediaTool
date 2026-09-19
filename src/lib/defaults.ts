@@ -6,6 +6,7 @@ import type {
 } from "../types";
 import { blankToolParams } from "../tools/defaults";
 import type { WorkbenchId } from "../tools/registry";
+import { CRF } from "./quality";
 
 function videoDefaults(format: string, crf: number, audioKbps: number): VideoParams {
   return {
@@ -25,7 +26,7 @@ function videoDefaults(format: string, crf: number, audioKbps: number): VideoPar
 export function blankParams(mediaType: "video" | "audio"): JobParams {
   switch (mediaType) {
     case "video":
-      return videoDefaults("source", 28, 128) satisfies VideoParams;
+      return videoDefaults("source", CRF.compact, 128) satisfies VideoParams;
     case "audio":
       return { format: "source", bitrateKbps: 128 } satisfies AudioParams;
     default:
@@ -37,7 +38,7 @@ export function blankParams(mediaType: "video" | "audio"): JobParams {
 function convertParams(toolId: ToolId): JobParams | null {
   switch (toolId) {
     case "video-convert":
-      return videoDefaults("mp4", 22, 192);
+      return videoDefaults("mp4", CRF.balanced, 192);
     case "audio-convert":
       return { format: "mp3", bitrateKbps: 192 } satisfies AudioParams;
     default:

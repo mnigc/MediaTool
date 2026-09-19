@@ -1,21 +1,26 @@
 import { useState } from "react";
 import {
   addPreset,
+  applyPresetParams,
+  materializePresetParams,
   presetDisplayName,
+  presetParamsEqual,
+  presetSummary,
   removePreset,
   usePresets,
 } from "../lib/presets";
-import { defaultParamsFor } from "../lib/defaults";
 import { useI18n } from "../i18n";
 import { usePrompt } from "./PromptDialog";
 import Select from "./Select";
-import type { JobParams, ToolId } from "../types";
+import type { JobParams } from "../types";
 
 const DEFAULT_PRESET = "__default__";
 
 /** Per-tool preset bar: builtin scenario presets are surfaced as quick chips,
- *  custom presets can be saved / deleted here. Presets apply on top of the
- *  current params so dynamic fields (e.g. watermark text/image) are preserved. */
+ *  custom presets can be saved / deleted here. Applying a preset replaces the
+ *  tool's whole encode state (identity fields like the watermark image are
+ *  kept), so presets can never leave stale fields behind. The active chip
+ *  de-highlights as soon as the panel params drift from the preset. */
 export default function PresetsBar({
   toolId,
   params,
@@ -34,14 +39,16 @@ export default function PresetsBar({
 
   const myPresets = presets.filter((p) => p.toolId === toolId);
   const selectedPreset = myPresets.find((p) => p.name === selected);
+  const defaultsParams = materializePresetParams(toolId, {});
+  const defaultActive = presetParamsEqual(toolId, params, defaultsParams);
 
   const apply = (name: string) => {
     if (name === DEFAULT_PRESET) {
-      onChange(defaultParamsFor(toolId as ToolId));
+      onChange(applyPresetParams(toolId, params, {}));
       return;
     }
     const p = myPresets.find((x) => x.name === name);
-    if (p) onChange({ ...params, ...p.params });
+    if (p) onChange(applyPresetParams(toolId, params, p.params));
   };
 
   const save = async () => {
@@ -136,8 +143,9 @@ export default function PresetsBar({
             setSelected(DEFAULT_PRESET);
             apply(DEFAULT_PRESET);
           }}
+          title={presetSummary({ name: "", toolId, params: defaultsParams, builtin: false }, t)}
           className={`rounded-lg px-2.5 py-1.5 text-[10px] font-medium transition ${
-            selected === DEFAULT_PRESET
+            defaultActive
               ? "bg-brand-500 text-white dark:bg-brand-600"
               : "border border-neutral-200 bg-white text-neutral-600 hover:border-brand-200 hover:bg-brand-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:border-brand-800 dark:hover:bg-brand-950/40"
           }`}
@@ -145,23 +153,29 @@ export default function PresetsBar({
           {t("opt.defaultPreset")}
         </button>
         {myPresets.length > 0 &&
-          myPresets.map((p) => (
-            <button
-              key={p.name}
-              type="button"
-              onClick={() => {
-                setSelected(p.name);
-                apply(p.name);
-              }}
-              className={`rounded-lg px-2.5 py-1.5 text-[10px] font-medium transition ${
-                selected === p.name
-                  ? "bg-brand-500 text-white dark:bg-brand-600"
-                  : "border border-neutral-200 bg-white text-neutral-600 hover:border-brand-200 hover:bg-brand-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:border-brand-800 dark:hover:bg-brand-950/40"
-              }`}
-            >
-              {presetDisplayName(p, t)}
-            </button>
-          ))}
+          myPresets.map((p) => {
+            // Dim the chip once the user edits params away from the preset.
+            const active =
+              selected === p.name && presetParamsEqual(toolId, params, p.params);
+            return (
+              <button
+                key={p.name}
+                type="button"
+                onClick={() => {
+                  setSelected(p.name);
+                  apply(p.name);
+                }}
+                title={presetSummary(p, t)}
+                className={`rounded-lg px-2.5 py-1.5 text-[10px] font-medium transition ${
+                  active
+                    ? "bg-brand-500 text-white dark:bg-brand-600"
+                    : "border border-neutral-200 bg-white text-neutral-600 hover:border-brand-200 hover:bg-brand-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:border-brand-800 dark:hover:bg-brand-950/40"
+                }`}
+              >
+                {presetDisplayName(p, t)}
+              </button>
+            );
+          })}
         {myPresets.length > 0 && (
           <button
             type="button"

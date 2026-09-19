@@ -18,7 +18,8 @@ import { presetById } from "./pipelines";
 import type { MonitorInfo } from "../types";
 
 const QUALITIES = ["best", "2160p", "1080p", "720p", "480p"] as const;
-const INTERVALS = [60, 180, 300, 600] as const;
+/** Poll cadence for new monitors; the backend clamps to a 30 s floor. */
+const DEFAULT_POLL_SEC = 60;
 
 function liveBadge(live?: string | null): { cls: string; key: string } | null {
   switch (live) {
@@ -65,12 +66,10 @@ function statusBadge(m: MonitorInfo, t: (k: string) => string): { cls: string; l
 function AddMonitorForm({
   onAdded,
   quality,
-  intervalSec,
   pipelineIds,
 }: {
   onAdded: () => void;
   quality: string;
-  intervalSec: number;
   pipelineIds: string[];
 }) {
   const { t } = useI18n();
@@ -83,13 +82,24 @@ function AddMonitorForm({
   const disabled = !dl.ytdlp?.installed || !url.trim() || busy || !dl.settings.outputDir;
 
   const submit = async () => {
+    const u = url.trim();
+    // Douyin referral links (live.douyin.com/?anchor_id=…) carry no room id in
+    // the path — the only shape the recording engine's matcher accepts — so a
+    // monitor on one would sit on "unknown" forever. Steer to the room URL.
+    if (
+      /^https?:\/\/(?:live\.)?douyin\.com\//i.test(u) &&
+      !/^https?:\/\/(?:live\.)?douyin\.com\/\d+/i.test(u)
+    ) {
+      setError(t("dl.monitor.douyinReferral"));
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       await monitorAdd({
-        url: url.trim(),
+        url: u,
         name: name.trim() || null,
-        intervalSec,
+        intervalSec: DEFAULT_POLL_SEC,
         // New monitors start with auto-record on; the card switch adjusts it.
         autoRecord: true,
         quality,
@@ -191,7 +201,6 @@ function EditMonitorForm({
   const { t } = useI18n();
   const [name, setName] = useState(m.name === m.url ? "" : m.name);
   const [quality, setQuality] = useState(m.quality);
-  const [intervalSec, setIntervalSec] = useState(m.intervalSec);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -202,7 +211,6 @@ function EditMonitorForm({
       await monitorUpdate(m.id, {
         name: name.trim(),
         quality,
-        intervalSec,
       });
       onDone();
     } catch (e) {
@@ -230,20 +238,6 @@ function EditMonitorForm({
             {QUALITIES.map((q) => (
               <option key={q} value={q}>
                 {t(`dl.quality.${q}`)}
-              </option>
-            ))}
-          </Select>
-        </label>
-        <label className="flex items-center gap-1.5 text-xs text-neutral-500 dark:text-neutral-400">
-          {t("dl.monitor.interval")}
-          <Select
-            value={String(intervalSec)}
-            onChange={(v) => setIntervalSec(Number(v))}
-            className="w-24 text-xs"
-          >
-            {INTERVALS.map((s) => (
-              <option key={s} value={s}>
-                {t("dl.monitor.intervalMin", { n: Math.round(s / 60) })}
               </option>
             ))}
           </Select>
@@ -387,8 +381,7 @@ export default function RecordPage({ onOpenSettings }: { onOpenSettings: () => v
   const dl = useDownloads();
   const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
   const [quality, setQuality] = useState("best");
-  const [intervalSec, setIntervalSec] = useState(180);
-  const [pipelineIds, setPipelineIds] = useState<string[]>(["transcode"]);
+  const [pipelineIds, setPipelineIds] = useState<string[]>(["remux"]);
 
   const refresh = () => {
     monitorList()
@@ -444,7 +437,6 @@ export default function RecordPage({ onOpenSettings }: { onOpenSettings: () => v
           <AddMonitorForm
             onAdded={refresh}
             quality={quality}
-            intervalSec={intervalSec}
             pipelineIds={pipelineIds}
           />
 
@@ -471,19 +463,6 @@ export default function RecordPage({ onOpenSettings }: { onOpenSettings: () => v
               {QUALITIES.map((q) => (
                 <option key={q} value={q}>
                   {t(`dl.quality.${q}`)}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label={t("dl.monitor.interval")}>
-            <Select
-              value={String(intervalSec)}
-              onChange={(v) => setIntervalSec(Number(v))}
-              className="w-24"
-            >
-              {[60, 180, 300, 600].map((s) => (
-                <option key={s} value={s}>
-                  {t("dl.monitor.intervalMin", { n: Math.round(s / 60) })}
                 </option>
               ))}
             </Select>

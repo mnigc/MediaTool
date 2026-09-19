@@ -1262,42 +1262,127 @@ fn codec_family<'a>(codec: &'a str) -> &'a str {
     }
 }
 
+/// Source codecs that stream-copy cleanly into MP4 and play in everyday
+/// players. Outside this set the MP4 muxer either refuses the stream outright
+/// (opus/vorbis/flac are gated as "experimental" there) or produces a file
+/// most players cannot handle.
+const MP4_COPY_VIDEO: &[&str] = &["h264", "h265", "hevc", "av1", "vp9", "mpeg4"];
+const MP4_COPY_AUDIO: &[&str] = &["aac", "mp3", "ac3", "eac3", "alac"];
+
+/// The codec that actually reaches the muxer: an explicit encode target, or
+/// the probed source stream when the param is ""/"copy".
+fn effective_codec<'a>(param: &'a str, source: Option<&'a str>) -> &'a str {
+    match param {
+        "" | "copy" => source.unwrap_or(""),
+        other => other,
+    }
+}
+
+/// Auto-fallback for bound lossless-remux pipelines: stream-copy into MP4 only
+/// works when the source codecs fit the container. When they don't (e.g.
+/// VP9/Opus from a live recording), swap `copy` for the transcode recipe (the
+/// same tier as the "转码 MP4" pipeline) so the run still produces the MP4 the
+/// user asked for, and return a note for the UI explaining the substitution.
+/// Only callers that opted in via `allow_copy_fallback` reach this; explicit
+/// tool-page choices keep the hard validation error instead.
+fn mp4_copy_fallback(p: &mut VideoParams, info: &MediaInfo) -> Option<String> {
+    if p.format != "mp4" {
+        return None;
+    }
+    let incompatible =
+        |codec: Option<&str>, allowed: &[&str]| match codec {
+            Some(c) if !c.is_empty() => !allowed.contains(&codec_family(c)),
+            _ => false,
+        };
+    let v_bad =
+        p.video_codec == "copy" && incompatible(info.video_codec.as_deref(), MP4_COPY_VIDEO);
+    let a_bad =
+        p.audio_codec == "copy" && incompatible(info.audio_codec.as_deref(), MP4_COPY_AUDIO);
+    if !v_bad && !a_bad {
+        return None;
+    }
+
+    let mut parts: Vec<String> = Vec::new();
+    if v_bad {
+        parts.push(format!("视频编码 {}", info.video_codec.as_deref().unwrap_or("")));
+        p.video_codec = "libx264".into();
+        p.quality_mode = "crf".into();
+        p.crf = Some(23);
+        p.preset = "medium".into();
+    }
+    if a_bad {
+        parts.push(format!("音频编码 {}", info.audio_codec.as_deref().unwrap_or("")));
+        p.audio_codec = "aac".into();
+        p.audio_bitrate_kbps = Some(192);
+    }
+    let fix = if v_bad && a_bad {
+        "H.264 CRF 23 / AAC 192k"
+    } else if v_bad {
+        "H.264 CRF 23"
+    } else {
+        "AAC 192k"
+    };
+    Some(format!(
+        "源{}不兼容 MP4，已自动降级为转码（{fix}），无损封装未执行",
+        parts.join("、")
+    ))
+}
+
 /// Reject codec/container combinations the target muxer cannot carry (or that
-/// produce files most players refuse). Today the restrictive one is WebM:
-/// VP8/VP9/AV1 video and Vorbis/Opus audio only. Without this check the user
-/// only sees a raw "FFmpeg 退出码 1" long after the job started.
+/// produce files most players refuse). Two restrictive cases: WebM only takes
+/// VP8/VP9/AV1 video + Vorbis/Opus audio, and stream-copy into MP4 needs the
+/// source codecs to be MP4-compatible. Without this check the user only sees
+/// a raw "FFmpeg 退出码 1" long after the job started.
 fn validate_video_container(
     ext: &str,
     vcodec_param: &str,
     acodec_param: &str,
     info: &MediaInfo,
 ) -> Result<()> {
-    if !ext.eq_ignore_ascii_case("webm") {
-        return Ok(());
-    }
-    let v_raw = match vcodec_param {
-        "" | "copy" => info.video_codec.as_deref().unwrap_or(""),
-        other => other,
-    };
-    if !matches!(codec_family(v_raw), "vp8" | "vp9" | "av1") {
-        return Err(AppError(format!(
-            "WebM 容器不支持 {} 视频：请改用 VP9/AV1 编码，或将容器换成 MP4/MKV/MOV",
-            if v_raw.is_empty() { "未知" } else { v_raw }
-        )));
-    }
-    if acodec_param != "none" {
-        let a_raw = match acodec_param {
-            "" | "copy" => info.audio_codec.as_deref().unwrap_or(""),
-            other => other,
-        };
-        if !a_raw.is_empty() && !matches!(codec_family(a_raw), "opus" | "vorbis") {
-            return Err(AppError(format!(
-                "WebM 容器不支持 {} 音频：请改用 Opus，或将容器换成 MP4/MKV/MOV",
-                a_raw
-            )));
+    match ext.to_ascii_lowercase().as_str() {
+        "webm" => {
+            let v_raw = effective_codec(vcodec_param, info.video_codec.as_deref());
+            if !matches!(codec_family(v_raw), "vp8" | "vp9" | "av1") {
+                return Err(AppError(format!(
+                    "WebM 容器不支持 {} 视频：请改用 VP9/AV1 编码，或将容器换成 MP4/MKV/MOV",
+                    if v_raw.is_empty() { "未知" } else { v_raw }
+                )));
+            }
+            if acodec_param != "none" {
+                let a_raw = effective_codec(acodec_param, info.audio_codec.as_deref());
+                if !a_raw.is_empty() && !matches!(codec_family(a_raw), "opus" | "vorbis") {
+                    return Err(AppError(format!(
+                        "WebM 容器不支持 {} 音频：请改用 Opus，或将容器换成 MP4/MKV/MOV",
+                        a_raw
+                    )));
+                }
+            }
+            Ok(())
         }
+        // Lossless remux copies the source streams as-is, so they must be
+        // codecs MP4 can carry; point at the re-encode paths otherwise.
+        // Encode targets (non-copy) choose their own codec, so they skip this.
+        "mp4" => {
+            if vcodec_param == "copy" {
+                let v_raw = info.video_codec.as_deref().unwrap_or("");
+                if !v_raw.is_empty() && !MP4_COPY_VIDEO.contains(&codec_family(v_raw)) {
+                    return Err(AppError(format!(
+                        "源视频编码 {v_raw} 无法无损封装进 MP4：请改用「视觉无损 / 转码 MP4」重新编码，或保留 MKV 等源容器"
+                    )));
+                }
+            }
+            if acodec_param == "copy" {
+                let a_raw = info.audio_codec.as_deref().unwrap_or("");
+                if !a_raw.is_empty() && !MP4_COPY_AUDIO.contains(&codec_family(a_raw)) {
+                    return Err(AppError(format!(
+                        "源音频编码 {a_raw} 无法无损封装进 MP4：请改用「视觉无损 / 转码 MP4」重新编码，或保留 MKV 等源容器"
+                    )));
+                }
+            }
+            Ok(())
+        }
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 /// Effective duration of a trimmed window, used as the progress denominator:
@@ -2182,7 +2267,7 @@ pub async fn start_workflow(app: AppHandle, req: WorkflowRequest) -> Result<Star
     let input = req.input.clone();
     // An empty chain cannot be merged; let the caller decide how to behave.
     if req.steps.is_empty() {
-        return Ok(StartWorkflowResult { id, merged: false, skipped: false });
+        return Ok(StartWorkflowResult { id, merged: false, skipped: false, note: None });
     }
     let info = probe(&app, &input).await?;
     let suffix = req
@@ -2194,7 +2279,7 @@ pub async fn start_workflow(app: AppHandle, req: WorkflowRequest) -> Result<Star
 
     let ext = match merged_output_ext(&info, &req.steps) {
         Some(ext) => ext,
-        None => return Ok(StartWorkflowResult { id, merged: false, skipped: false }),
+        None => return Ok(StartWorkflowResult { id, merged: false, skipped: false, note: None }),
     };
     let out = output_path(&input, &req.output_dir, &ext, &suffix)?;
     let out = match resolve_policy(out, policy) {
@@ -2203,13 +2288,23 @@ pub async fn start_workflow(app: AppHandle, req: WorkflowRequest) -> Result<Star
             // Output already existed and policy = "skip": signal a no-op via the
             // `skipped` flag instead of emitting a synchronous done event (which
             // the frontend would race and miss). The caller finishes immediately.
-            return Ok(StartWorkflowResult { id, merged: true, skipped: true });
+            return Ok(StartWorkflowResult { id, merged: true, skipped: true, note: None });
         }
     };
 
-    let Some(chain) = merged_chain(&info, &req.steps) else {
-        return Ok(StartWorkflowResult { id, merged: false, skipped: false });
+    let Some(mut chain) = merged_chain(&info, &req.steps) else {
+        return Ok(StartWorkflowResult { id, merged: false, skipped: false, note: None });
     };
+
+    // Bound pipelines may auto-fallback: a stream-copy step whose source
+    // codecs don't fit MP4 is swapped for the transcode recipe (the note
+    // tells the user). Explicit workflow-builder steps keep the hard error.
+    let mut copy_note = None;
+    if req.allow_copy_fallback == Some(true) {
+        if let Some(encode) = chain.encode.as_mut() {
+            copy_note = mp4_copy_fallback(encode, &info);
+        }
+    }
 
     // Codec/container sanity for the final encode (e.g. H.264 into WebM).
     {
@@ -2325,7 +2420,7 @@ pub async fn start_workflow(app: AppHandle, req: WorkflowRequest) -> Result<Star
         }
     });
 
-    Ok(StartWorkflowResult { id, merged: true, skipped: false })
+    Ok(StartWorkflowResult { id, merged: true, skipped: false, note: copy_note })
 }
 
 /// Start a conversion job. Spawns FFmpeg, streams progress, emits events.
@@ -2347,6 +2442,21 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult
         .clone()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "rename".to_string());
+    // Sequential (non-merged) pipeline steps land here with the remux
+    // auto-fallback opted in: swap copy params for the transcode recipe when
+    // the source codecs can't be copied into MP4 (see mp4_copy_fallback).
+    let mut req = req;
+    let mut copy_note: Option<String> = None;
+    if req.allow_copy_fallback == Some(true)
+        && matches!(norm_tool_id(&req.tool_id), "compress" | "convert")
+    {
+        if let Ok(mut p) = parse_params::<VideoParams>(&req.params) {
+            if let Some(note) = mp4_copy_fallback(&mut p, &info) {
+                req.params = serde_json::to_value(&p).map_err(|e| AppError(e.to_string()))?;
+                copy_note = Some(note);
+            }
+        }
+    }
     // prepare_job may block (probing merge inputs, converting a PDF source
     // image) — keep it off the async runtime workers.
     let prepared = {
@@ -2370,6 +2480,7 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult
                 id,
                 skipped: true,
                 output: existing.map(|p| p.to_string_lossy().to_string()),
+                note: None,
             });
         }
         PreparedJob::Run { args, out } => {
@@ -2382,7 +2493,7 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult
     };
 
     if runs.is_empty() {
-        return Ok(StartJobResult { id, skipped: true, output: None });
+        return Ok(StartJobResult { id, skipped: true, output: None, note: None });
     }
     let input_size = info.size_bytes;
     let total_dur: f64 = runs.iter().map(|r| r.2.max(0.0)).sum();
@@ -2527,7 +2638,7 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult
         }
     });
 
-    Ok(StartJobResult { id, skipped: false, output: None })
+    Ok(StartJobResult { id, skipped: false, output: None, note: copy_note })
 }
 
 /// Effective duration a single-output job will actually encode, used as the
@@ -2967,6 +3078,7 @@ mod tests {
             output_suffix: Some("_mediatool".into()),
             gpu: None,
             overwrite_policy: None,
+            allow_copy_fallback: None,
         }
     }
 
@@ -3145,6 +3257,117 @@ mod tests {
         let fc_val = &args[fc_idx + 1];
         assert!(!fc_val.contains("colorchannelmixer"));
         assert!(fc_val.contains("x=32:y=32"));
+    }
+
+    /* ── container validation for stream-copy ────────────────────── */
+
+    #[test]
+    fn mp4_copy_rejects_non_mp4_source_codecs() {
+        let mut info = sample_info();
+        info.video_codec = Some("vp8".into());
+        info.audio_codec = Some("opus".into());
+        let err = validate_video_container("mp4", "copy", "copy", &info).unwrap_err();
+        assert!(err.0.contains("vp8"), "{}", err.0);
+        // Video-only source (no audio track) must still hit the video error.
+        let mut no_audio = info.clone();
+        no_audio.audio_codec = None;
+        let err = validate_video_container("mp4", "copy", "copy", &no_audio).unwrap_err();
+        assert!(err.0.contains("vp8"), "{}", err.0);
+        // With an mp4-safe video codec, an incompatible audio one is flagged.
+        let mut bad_audio = info.clone();
+        bad_audio.video_codec = Some("h264".into());
+        let err = validate_video_container("mp4", "copy", "copy", &bad_audio).unwrap_err();
+        assert!(err.0.contains("opus"), "{}", err.0);
+    }
+
+    #[test]
+    fn mp4_copy_allows_common_stream_codecs() {
+        // h264 + aac — the typical live-recording (MKV) contents.
+        assert!(validate_video_container("mp4", "copy", "copy", &sample_info()).is_ok());
+        // A video without an audio track is fine too.
+        let mut info = sample_info();
+        info.audio_codec = None;
+        assert!(validate_video_container("mp4", "copy", "copy", &info).is_ok());
+    }
+
+    #[test]
+    fn mp4_encode_target_not_gated_by_copy_check() {
+        // Re-encode paths pick their own target codecs; the source codecs are
+        // irrelevant for container validity there.
+        let mut info = sample_info();
+        info.video_codec = Some("vp9".into());
+        info.audio_codec = Some("opus".into());
+        assert!(validate_video_container("mp4", "libx264", "aac", &info).is_ok());
+    }
+
+    #[test]
+    fn webm_copy_checks_unchanged() {
+        let mut info = sample_info();
+        info.video_codec = Some("vp9".into());
+        info.audio_codec = Some("opus".into());
+        assert!(validate_video_container("webm", "copy", "copy", &info).is_ok());
+        assert!(validate_video_container("webm", "copy", "copy", &sample_info()).is_err());
+    }
+
+    /* ── remux auto-fallback ─────────────────────────────────────── */
+
+    fn copy_params(format: &str) -> VideoParams {
+        VideoParams {
+            video_codec: "copy".into(),
+            quality_mode: "crf".into(),
+            crf: None,
+            target_size_mb: None,
+            video_bitrate_kbps: None,
+            resolution: "original".into(),
+            audio_codec: "copy".into(),
+            audio_bitrate_kbps: None,
+            format: format.into(),
+            preset: "medium".into(),
+            fps: None,
+            gpu: None,
+        }
+    }
+
+    #[test]
+    fn mp4_copy_fallback_swaps_incompatible_codecs() {
+        let mut info = sample_info();
+        info.video_codec = Some("vp8".into());
+        info.audio_codec = Some("opus".into());
+        let mut p = copy_params("mp4");
+        let note = mp4_copy_fallback(&mut p, &info).unwrap();
+        assert!(note.contains("vp8") && note.contains("opus"), "{}", note);
+        assert!(note.contains("自动降级"), "{}", note);
+        assert_eq!(p.video_codec, "libx264");
+        assert_eq!(p.crf, Some(23));
+        assert_eq!(p.audio_codec, "aac");
+        assert_eq!(p.audio_bitrate_kbps, Some(192));
+    }
+
+    #[test]
+    fn mp4_copy_fallback_only_touches_the_bad_stream() {
+        // mp4-safe video + incompatible audio: video stays copy.
+        let mut info = sample_info();
+        info.audio_codec = Some("opus".into());
+        let mut p = copy_params("mp4");
+        let note = mp4_copy_fallback(&mut p, &info).unwrap();
+        assert!(note.contains("opus") && !note.contains("视频"), "{}", note);
+        assert_eq!(p.video_codec, "copy");
+        assert_eq!(p.audio_codec, "aac");
+    }
+
+    #[test]
+    fn mp4_copy_fallback_skips_compatible_or_non_mp4() {
+        // h264/aac copies fine — no fallback.
+        let mut p = copy_params("mp4");
+        assert!(mp4_copy_fallback(&mut p, &sample_info()).is_none());
+        assert_eq!(p.video_codec, "copy");
+        // Same incompatible codecs are fine when the target is MKV.
+        let mut info = sample_info();
+        info.video_codec = Some("vp8".into());
+        info.audio_codec = Some("opus".into());
+        let mut mkv = copy_params("mkv");
+        assert!(mp4_copy_fallback(&mut mkv, &info).is_none());
+        assert_eq!(mkv.video_codec, "copy");
     }
 
     /* ── multi-step workflow merging ─────────────────────────────── */
