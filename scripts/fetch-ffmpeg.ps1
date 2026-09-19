@@ -146,8 +146,18 @@ if ($os -eq "windows") {
     # from its expanded_assets fragment — the REST API is anonymous rate
     # limited (60 req/IP/hr) and fails the build mid-download.
     Write-Host "Downloading streamlink (portable bundle)..."
-    $latest = Invoke-WebRequest -Uri "https://github.com/streamlink/windows-builds/releases/latest" -UseBasicParsing
-    $tag = ($latest.BaseResponse.ResponseUri.AbsolutePath -replace '.*/tag/', '')
+    # The redirect is read with HttpWebRequest rather than Invoke-WebRequest:
+    # PS 5.1 exposes the followed target as BaseResponse.ResponseUri, while pwsh
+    # 7 (what CI runs) has no such property, so $tag came back empty and the
+    # expanded_assets URL 404'd.
+    $req = [System.Net.HttpWebRequest]::Create("https://github.com/streamlink/windows-builds/releases/latest")
+    $req.AllowAutoRedirect = $false
+    $req.UserAgent = "MediaTool"
+    $resp = $req.GetResponse()
+    try { $location = $resp.Headers["Location"] } finally { $resp.Close() }
+    $tag = ($location -replace '.*/tag/', '')
+    if ($tag -notmatch '^[\w.\-]+$') { throw "No release tag in redirect target '$location'" }
+    Write-Host "  latest release: $tag"
     $assetsHtml = (Invoke-WebRequest -Uri "https://github.com/streamlink/windows-builds/releases/expanded_assets/$tag" -UseBasicParsing).Content
     $assetName = [regex]::Match($assetsHtml, 'streamlink-[^"]*-x86_64\.zip').Value
     if (-not $assetName) { throw "No Windows x64 portable asset in $tag" }
