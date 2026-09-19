@@ -8,6 +8,8 @@ import { useToasts, type ToastItem } from "./hooks/useToasts";
 import { useUpdater } from "./hooks/useUpdater";
 import { TaskCenterProvider } from "./contexts/TaskCenter";
 import { DownloadCenterProvider } from "./contexts/DownloadCenter";
+import { UploadCenterProvider } from "./contexts/UploadCenter";
+import { PipelineCenterProvider } from "./contexts/PipelineCenter";
 import ToolWorkbench from "./tools/ToolWorkbench";
 import ModulePage from "./tools/ModulePage";
 import TaskPage from "./tools/TaskPage";
@@ -82,7 +84,6 @@ function AppShell({
         );
       case "video":
       case "audio":
-      case "tools":
         return <ModulePage module={route.id} onOpenTool={openTool} />;
       default:
         return <ModulePage module="video" onOpenTool={openTool} />;
@@ -108,16 +109,20 @@ export default function App() {
   const { toasts, pushToast, dismissToast } = useToasts();
 
   return (
-    <TaskCenterProvider onToast={pushToast}>
-      <DownloadCenterProvider>
-        <AppShell
-          themeMode={themeMode}
-          setThemeMode={setThemeMode}
-          toasts={toasts}
-          dismissToast={dismissToast}
-          onToast={pushToast}
-        />
-      </DownloadCenterProvider>
-    </TaskCenterProvider>
+    <UploadCenterProvider onToast={pushToast}>
+      <TaskCenterProvider onToast={pushToast}>
+        <PipelineCenterProvider>
+          <DownloadCenterProvider>
+            <AppShell
+              themeMode={themeMode}
+              setThemeMode={setThemeMode}
+              toasts={toasts}
+              dismissToast={dismissToast}
+              onToast={pushToast}
+            />
+          </DownloadCenterProvider>
+        </PipelineCenterProvider>
+      </TaskCenterProvider>
+    </UploadCenterProvider>
   );
 }

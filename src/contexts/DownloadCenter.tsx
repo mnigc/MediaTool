@@ -28,14 +28,16 @@ import {
 } from "../lib/tauri";
 import { readStorage, writeStorage } from "../lib/storage";
 import { useI18n } from "../i18n";
-import { startWorkflow } from "../workflow/engine";
+import { useUploads } from "./UploadCenter";
+import { runSteps } from "../workflow/runner";
+import type { PipelineRun } from "../workflow/types";
 import type {
   DownloadRequest,
   StreamlinkStatus,
   WorkflowStepInput,
   YtdlpStatus,
 } from "../types";
-import { stepsForPresets } from "../download/pipelines";
+import { stepsForPipelineIds } from "../workflow/pipelines";
 
 /* ── Types ──────────────────────────────────────────────────────── */
 
@@ -60,6 +62,9 @@ export interface DownloadTask {
   /** Post-processing steps bound to this task (run after a successful
    *  download). Resolved from the form's preset ids at start time. */
   pipelineSteps: WorkflowStepInput[];
+  /** Upload targets bound at start time; the final product is pushed to
+   *  them when the download (and its pipeline, if any) completes. */
+  uploadTo: string[];
   /** Runtime state of the bound pipeline; absent until it first runs. */
   pipeline?: PipelineRun | null;
   /** Cover image URL from the link probe (may be absent for batches). */
@@ -69,22 +74,12 @@ export interface DownloadTask {
   retryReq?: DownloadRequest;
 }
 
-/** Inline post-processing progress, rendered on the owning task's card. */
-export interface PipelineRun {
-  phase: DownloadPhase;
-  /** index of the running step + its percent */
-  stepIndex: number;
-  percent: number;
-  output?: string | null;
-  error?: string | null;
-  /** Non-fatal adjustment (remux auto-fallback), shown on completion. */
-  note?: string | null;
-}
-
 export interface DownloadSettings {
   outputDir: string | null;
   quality: string;
   cookiesBrowser: string;
+  cookiesFile: string;
+  cookiesText: string;
   proxy: string;
   subtitles: boolean;
 }
@@ -126,6 +121,8 @@ function loadSettings(): DownloadSettings {
     outputDir: null,
     quality: "best",
     cookiesBrowser: "",
+    cookiesFile: "",
+    cookiesText: "",
     proxy: "",
     subtitles: false,
   };
@@ -196,6 +193,8 @@ interface DownloadCenterValue {
     pipelineIds?: string[];
     /** Pre-resolved steps (retry path). Takes precedence over preset ids. */
     pipelineSteps?: WorkflowStepInput[];
+    /** Upload targets bound to this download. */
+    uploadTo?: string[];
   }) => Promise<void>;
   cancelTask: (id: string) => void;
   removeTask: (id: string) => void;
@@ -215,8 +214,7 @@ export function useDownloads(): DownloadCenterValue {
 
 export function DownloadCenterProvider({ children }: { children: ReactNode }) {
   const { t } = useI18n();
-  const [ytdlp, setYtdlp] = useState<YtdlpStatus | null>(null);
-  const [ytdlpInstalling, setYtdlpInstalling] = useState(false);
+  const [ytdlp, setYtdlp] = useState<YtdlpStatus | null>(null);  const [ytdlpInstalling, setYtdlpInstalling] = useState(false);
   const [ytdlpInstallMessage, setYtdlpInstallMessage] = useState("");
   const [ytdlpChecking, setYtdlpChecking] = useState(false);
   const [ytdlpLatest, setYtdlpLatest] = useState<string | null>(null);
@@ -228,6 +226,11 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
   const [tasks, setTasks] = useState<DownloadTask[]>(loadTasks);
   const [settings, setSettings] = useState<DownloadSettings>(loadSettings);
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
+
+  // Auto-upload hook: resolved once, used inside mount-only listeners.
+  const { uploadOnce } = useUploads();
+  const uploadOnceRef = useRef(uploadOnce);
+  uploadOnceRef.current = uploadOnce;
 
   const tasksRef = useRef(tasks);
   tasksRef.current = tasks;
@@ -430,6 +433,7 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
   const runPipelineInternal = useCallback(
     (taskId: string, input: string, steps: WorkflowStepInput[]) => {
       if (steps.length === 0) return;
+      const uploadTo = tasksRef.current.find((x) => x.id === taskId)?.uploadTo ?? [];
       setTasks((prev) =>
         prev.map((x) =>
           x.id === taskId
@@ -447,20 +451,12 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
             : x
         )
       );
-      const handle = startWorkflow({
+      const handle = runSteps({
         input,
-        steps: steps.map((s, i) => ({ id: `${i}`, toolId: s.toolId, params: s.params })),
+        steps,
         // No outputDir: results land next to the acquired file.
-        settings: {
-          outputSuffix: "_mediatool",
-          gpu: "",
-          overwritePolicy: "rename",
-        },
-        // Bound pipelines auto-fallback: a lossless-remux step whose source
-        // codecs don't fit MP4 is swapped for the transcode recipe; the run
-        // finishes with a note explaining it.
         allowCopyFallback: true,
-        onUpdate: (r) => {
+        onProgress: (percent, stepIndex) => {
           setTasks((prev) =>
             prev.map((x) =>
               x.id === taskId && x.pipeline
@@ -468,11 +464,8 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
                     ...x,
                     pipeline: {
                       ...x.pipeline,
-                      stepIndex: r.index,
-                      percent:
-                        r.status === "done"
-                          ? 100
-                          : ((r.index + r.percent / 100) / steps.length) * 100,
+                      stepIndex,
+                      percent,
                     },
                   }
                 : x
@@ -501,6 +494,11 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
                 : x
             )
           );
+          // Completion hook: the pipeline's final output is the product —
+          // push it to the bound upload targets.
+          if (ok && output) {
+            uploadOnceRef.current(uploadTo, [output], `pipe-${taskId}-${output}`);
+          }
           pipelineHandles.current.delete(taskId);
         },
         t: (key, vars) => tRef.current(key, vars),
@@ -560,6 +558,7 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
             phase: "running",
             percent: 0,
             pipelineSteps: e.pipeline ?? [],
+            uploadTo: e.uploadTo ?? [],
             pipeline: null,
             createdAt: Date.now(),
           };
@@ -597,6 +596,16 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
         ) {
           runPipelineInternal(e.id, e.output, existing.pipelineSteps);
         }
+        // Completion hook: without post-processing the downloaded file IS the
+        // final product — push it to the bound upload targets.
+        if (
+          e.ok &&
+          e.output &&
+          existing?.phase === "running" &&
+          existing.pipelineSteps.length === 0
+        ) {
+          uploadOnceRef.current(existing.uploadTo ?? [], [e.output], `dl-${e.id}`);
+        }
         // Batches skip link probing and remote thumbnails are often
         // hotlink-protected, so grab a frame from the finished file instead.
         // Recordings have no cover to show at all, so they're excluded.
@@ -629,6 +638,7 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
               phase: "running" as const,
               percent: 0,
               pipelineSteps: j.pipeline ?? [],
+              uploadTo: j.uploadTo ?? [],
               pipeline: null,
               createdAt: Date.now(),
             })),
@@ -650,6 +660,7 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
       audioFormat?: string | null;
       pipelineIds?: string[];
       pipelineSteps?: WorkflowStepInput[];
+      uploadTo?: string[];
     }) => {
       const s = settingsRef.current;
       const dir = s.outputDir;
@@ -661,6 +672,8 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
         audioFormat: opts.audioFormat ?? (quality === "audio" ? "mp3" : null),
         outputDir: dir,
         cookiesBrowser: s.cookiesBrowser || null,
+        cookiesFile: s.cookiesFile || null,
+        cookiesText: s.cookiesText || null,
         proxy: s.proxy || null,
         subtitles: s.subtitles,
         kind: "download",
@@ -676,7 +689,8 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
         phase: "running",
         percent: 0,
         pipelineSteps:
-          opts.pipelineSteps ?? stepsForPresets(opts.pipelineIds ?? []),
+          opts.pipelineSteps ?? stepsForPipelineIds(opts.pipelineIds ?? []),
+        uploadTo: opts.uploadTo ?? [],
         pipeline: null,
         thumbnail: opts.thumbnail ?? null,
         createdAt: Date.now(),
@@ -733,6 +747,7 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
         quality: task.retryReq.quality,
         audioFormat: task.retryReq.audioFormat,
         pipelineSteps: task.pipelineSteps,
+        uploadTo: task.uploadTo,
       });
     },
     [startDownload]

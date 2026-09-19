@@ -1,3 +1,5 @@
+import type { PipelineRun } from "./workflow/types";
+
 export type MediaType = "video" | "image" | "audio" | "unknown";
 
 export interface GpuBackend {
@@ -45,10 +47,12 @@ export interface MediaInfo {
   audioCodec?: string | null;
   bitrateKbps?: number | null;
   sizeBytes: number;
+  /** HDR transfer detected at probe time (HDR10/HLG/DV base layer). */
+  hdr?: boolean;
 }
 
 export interface VideoParams {
-  videoCodec: string; // libx264 | libvpx-vp9 | libsvtav1 | copy
+  videoCodec: string; // libx264 | libx265 | libvpx-vp9 | libsvtav1 | copy
   qualityMode: string; // crf | target_size | bitrate
   crf?: number;
   targetSizeMb?: number;
@@ -350,6 +354,14 @@ export interface Job {
   speed?: string | null;
   sizeEstimate?: { bytes: number; exact: boolean } | null;
   estimating?: boolean;
+  /** Post-processing pipeline bound at creation time; its final output
+   *  replaces the raw encode output as the product (upload target). */
+  pipelineSteps?: WorkflowStepInput[];
+  /** Runtime state of the bound pipeline; absent until it first runs. */
+  pipeline?: PipelineRun | null;
+  /** Upload targets bound at creation time; the final product is pushed to
+   *  them when the job (and its pipeline, if any) completes. */
+  uploadTo?: string[];
 }
 
 /* ── yt-dlp download / record ─────────────────────────────────── */
@@ -384,6 +396,8 @@ export interface StreamlinkRelease {
 
 export interface NetOptions {
   cookiesBrowser?: string | null;
+  cookiesFile?: string | null;
+  cookiesText?: string | null;
   proxy?: string | null;
 }
 
@@ -394,6 +408,8 @@ export interface DownloadRequest {
   outputDir: string;
   filenameTemplate?: string | null;
   cookiesBrowser?: string | null;
+  cookiesFile?: string | null;
+  cookiesText?: string | null;
   proxy?: string | null;
   subtitles?: boolean;
   kind?: "download" | "record";
@@ -428,6 +444,8 @@ export interface DownloadStartedEvent {
   title: string;
   kind: string;
   pipeline?: WorkflowStepInput[];
+  /** Upload targets bound to this acquisition (frontend uploads when done). */
+  uploadTo?: string[];
 }
 
 export interface MonitorRequest {
@@ -438,8 +456,12 @@ export interface MonitorRequest {
   quality: string;
   outputDir: string;
   cookiesBrowser?: string | null;
+  cookiesFile?: string | null;
+  cookiesText?: string | null;
   proxy?: string | null;
   pipeline?: WorkflowStepInput[];
+  /** Upload targets bound to every recording of this monitor. */
+  uploadTo?: string[];
 }
 
 export interface MonitorEdit {
@@ -458,6 +480,8 @@ export interface MonitorInfo {
   quality: string;
   outputDir: string;
   cookiesBrowser?: string | null;
+  cookiesFile?: string | null;
+  cookiesText?: string | null;
   proxy?: string | null;
   status: string; // watching | recording | stopped
   title?: string | null;
@@ -466,4 +490,134 @@ export interface MonitorInfo {
   lastChecked?: number | null;
   currentJob?: string | null;
   pipeline: WorkflowStepInput[];
+  uploadTo?: string[];
+}
+
+/* ── Upload targets & tasks ───────────────────────────────────── */
+
+export type UploadTargetKind = "webdav" | "telegram" | "youtube" | "gdrive" | "onedrive";
+
+interface UploadTargetBase {
+  id: string;
+  name: string;
+  kind: UploadTargetKind;
+}
+
+export interface WebdavTarget extends UploadTargetBase {
+  kind: "webdav";
+  url: string;
+  username: string;
+  password: string;
+  directory: string;
+  proxy?: string;
+}
+
+export interface TelegramTarget extends UploadTargetBase {
+  kind: "telegram";
+  botToken: string;
+  chatId: string;
+  proxy?: string;
+}
+
+export interface YoutubeTarget extends UploadTargetBase {
+  kind: "youtube";
+  clientId: string;
+  clientSecret: string;
+  refreshToken: string;
+  privacy: "private" | "unlisted" | "public";
+  description: string;
+  proxy?: string;
+}
+
+export interface GdriveTarget extends UploadTargetBase {
+  kind: "gdrive";
+  clientId: string;
+  clientSecret: string;
+  refreshToken: string;
+  folderId: string;
+  proxy?: string;
+}
+
+export interface OnedriveTarget extends UploadTargetBase {
+  kind: "onedrive";
+  clientId: string;
+  tenant: string;
+  refreshToken: string;
+  directory: string;
+  proxy?: string;
+}
+
+export type UploadTarget =
+  | WebdavTarget
+  | TelegramTarget
+  | YoutubeTarget
+  | GdriveTarget
+  | OnedriveTarget;
+
+export type UploadPhase = "queued" | "running" | "done" | "error" | "cancelled";
+
+export interface UploadTask {
+  id: string;
+  rustId?: string;
+  targetId: string;
+  targetName: string;
+  kind: UploadTargetKind;
+  filePath: string;
+  fileName: string;
+  size: number;
+  percent: number;
+  phase: UploadPhase;
+  error?: string | null;
+  url?: string | null;
+  /** Transfer rate rendered on the card (e.g. "3.2 MB/s"). */
+  speed?: string | null;
+  createdAt: number;
+}
+
+export interface UploadRequest {
+  target: Record<string, unknown>;
+  filePath: string;
+  name?: string | null;
+}
+
+export interface UploadStartResult {
+  id: string;
+}
+
+export interface UploadProgressEvent {
+  id: string;
+  percent: number;
+  uploadedBytes: number;
+  totalBytes: number;
+}
+
+export interface UploadDoneEvent {
+  id: string;
+  ok: boolean;
+  cancelled: boolean;
+  error?: string | null;
+  url?: string | null;
+  newRefreshToken?: string | null;
+}
+
+export interface OauthBeginRequest {
+  kind: "youtube" | "gdrive" | "onedrive";
+  clientId: string;
+  clientSecret?: string;
+  tenant?: string;
+  proxy?: string;
+}
+
+export interface OauthBeginResult {
+  requestId: string;
+  authUrl: string;
+  redirectUri: string;
+}
+
+export interface OauthResultEvent {
+  requestId: string;
+  kind: string;
+  ok: boolean;
+  error?: string | null;
+  refreshToken?: string | null;
 }

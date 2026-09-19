@@ -1,6 +1,6 @@
 [package]
 name = "mediatool"
-version = "0.1.6"
+version = "0.1.7"
 description = "Local media toolbox for video, image & audio"
 authors = ["you"]
 edition = "2021"
@@ -20,3 +20,11 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+reqwest = { version = "0.12", default-features = true, features = ["stream", "json", "socks"] }
+bytes = "1"
+tokio = { version = "1", features = ["fs", "io-util", "time"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+base64 = "0.22"
+sha2 = "0.10"
+rand = "0.8"
+

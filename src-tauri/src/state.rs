@@ -12,6 +12,10 @@ pub struct ActiveDlInfo {
     pub title: String,
     pub kind: String,
     pub pipeline: Vec<WorkflowStepInput>,
+    /// Upload targets bound to this acquisition; the frontend uploads the
+    /// final product to them when the run completes.
+    #[allow(dead_code)]
+    pub upload_to: Vec<String>,
 }
 
 #[derive(Default)]

@@ -135,7 +135,7 @@ export default function PresetManager({ open, onClose }: PresetManagerProps) {
                 if (list.length === 0) return null;
                 return (
                   <div key={toolId}>
-                    <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-neutral-400 dark:text-neutral-500">
+                    <div className="mb-2 text-xs font-semibold text-neutral-600 dark:text-neutral-300">
                        {t(`tool.${toolId}.name`)}
                      </div>
                     <div className="space-y-1.5">
@@ -225,7 +225,7 @@ function PresetEditor({
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3">
         <label className="flex flex-col gap-1">
-          <span className="text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+          <span className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
             {t("pm.name")}
           </span>
           <input
@@ -237,7 +237,7 @@ function PresetEditor({
           />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+          <span className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
             {t("pm.toolType")}
           </span>
           <Select

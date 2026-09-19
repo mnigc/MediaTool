@@ -19,6 +19,8 @@ import {
 import { formatBytes } from "../lib/tauri";
 import { useI18n } from "../i18n";
 import { isBatchEditable } from "../tools/kinds";
+import { useUploads } from "../contexts/UploadCenter";
+import { pipelineDisplayName, usePipelines } from "../workflow/pipelines";
 
 type Props = {
   job: Job;
@@ -30,9 +32,13 @@ type Props = {
   onChangeParams?: (uiId: string, params: JobParams) => void;
   onSyncParams?: (uiId: string) => void;
   onRetry: (uiId: string) => void;
+  onRunPipeline?: (uiId: string, pipelineId: string) => void;
   onReorderStart?: (uiId: string) => void;
   onReorderOver?: (uiId: string) => void;
   onReorderDrop?: (uiId: string) => void;
+  /** Mixed task lists (task center) label each card with its source tool;
+   *  per-tool workbenches skip it — the page title already says it. */
+  showToolBadge?: boolean;
 };
 
 const staggerClass = (i: number): string => {
@@ -86,9 +92,10 @@ function meta(job: Job): string {
   if (i.width && i.height) parts.push(`${i.width}×${i.height}`);
   if (i.durationSecs && i.durationSecs > 0) {
     const s = Math.round(i.durationSecs);
-    const mm = Math.floor(s / 60);
+    const h = Math.floor(s / 3600);
+    const mm = Math.floor((s % 3600) / 60);
     const ss = String(s % 60).padStart(2, "0");
-    parts.push(mm > 0 ? `${mm}:${ss}` : `${s}s`);
+    parts.push(h > 0 ? `${h}:${String(mm).padStart(2, "0")}:${ss}` : mm > 0 ? `${mm}:${ss}` : `${s}s`);
   }
   if (i.sizeBytes) parts.push(formatBytes(i.sizeBytes));
   if (i.bitrateKbps) parts.push(`${i.bitrateKbps} kbps`);
@@ -107,16 +114,17 @@ export default function JobCard({
   onChangeParams,
   onSyncParams,
   onRetry,
+  onRunPipeline,
   onReorderStart,
   onReorderOver,
   onReorderDrop,
+  showToolBadge = false,
 }: Props) {
   const { t } = useI18n();
+  const uploads = useUploads();
+  const pipelines = usePipelines();
   const badge = TypeBadgeStyle[job.info.mediaType] ?? TypeBadgeStyle.video;
   const Icon = badge.Icon;
-  const typeLabel = t(
-    `job.type.${job.info.mediaType === "unknown" ? "other" : job.info.mediaType}`
-  );
   const isError = job.phase === "error";
   const isDone = job.phase === "done";
   const isRunning = job.phase === "running";
@@ -155,7 +163,7 @@ export default function JobCard({
   useEffect(() => {
     let cancelled = false;
     if (job.info.mediaType === "image" || job.info.mediaType === "video") {
-      getThumbnail(job.info.path, job.info.mediaType)
+      getThumbnail(job.info.path, job.info.mediaType, job.info.durationSecs ?? null)
         .then((t) => {
           if (!cancelled) setThumb(t);
         })
@@ -215,25 +223,16 @@ export default function JobCard({
           <img
             src={thumb}
             alt=""
-            className="h-11 w-11 shrink-0 rounded-xl object-cover ring-1 ring-neutral-200 dark:ring-neutral-700"
+            className="h-16 w-28 shrink-0 rounded-xl object-cover ring-1 ring-neutral-200 dark:ring-neutral-700"
           />
         ) : (
-          <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${badge.cls}`}>
+          <div className={`flex h-16 w-28 shrink-0 items-center justify-center rounded-xl ${badge.cls}`}>
             <Icon className="h-6 w-6" />
           </div>
         )}
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className={`shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${badge.cls}`}>
-              {typeLabel}
-            </span>
-            <span
-              className="shrink-0 whitespace-nowrap rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-medium text-neutral-500 ring-1 ring-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:ring-neutral-700"
-              title={t(`tool.${job.toolId}.desc`)}
-            >
-              {t(`tool.${job.toolId}.name`)}
-            </span>
             <h3 className="truncate text-sm font-medium text-neutral-900 dark:text-neutral-100" title={job.info.path}>
               {basename(job.info.path)}
             </h3>
@@ -241,25 +240,57 @@ export default function JobCard({
           <p className="mt-1 truncate text-xs text-neutral-400 dark:text-neutral-500" title={meta(job)}>
             {isError ? job.error : meta(job)}
           </p>
-          {(isQueued || isRunning) && estimate && (
-            <div className="mt-1.5 flex items-center gap-1.5">
-              <span className="rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-medium text-brand-600 dark:bg-brand-950/40 dark:text-brand-300">
-                {t("job.estimate", {
-                  size: formatBytes(estimate.bytes),
-                  kind: estimate.rough
-                    ? t("job.estimate.rough")
-                    : t("job.estimate.exact"),
-                })}
-              </span>
-              {isQueued && job.estimating && (
-                <span className="flex items-center gap-1 text-[10px] text-neutral-400 dark:text-neutral-500">
-                  <SpinnerIcon className="h-3 w-3 animate-spin" />
-                  {t("job.estimating")}
+          {(showToolBadge ||
+            ((isQueued || isRunning) &&
+              (estimate || (job.info.hdr && job.info.mediaType === "video")))) && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              {showToolBadge && (
+                <span
+                  className="shrink-0 whitespace-nowrap rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-medium text-neutral-500 ring-1 ring-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:ring-neutral-700"
+                  title={t(`tool.${job.toolId}.desc`)}
+                >
+                  {t(`tool.${job.toolId}.name`)}
                 </span>
+              )}
+              {job.info.hdr && job.info.mediaType === "video" && (
+                <span
+                  title={t("job.hdr.tip")}
+                  className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-600 dark:bg-amber-950/40 dark:text-amber-300"
+                >
+                  {t("job.hdr")}
+                </span>
+              )}
+              {(isQueued || isRunning) && estimate && (
+                <>
+                  <span className="rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-medium text-brand-600 dark:bg-brand-950/40 dark:text-brand-300">
+                    {estimate.rough
+                      ? t("job.estimate.rough", { size: formatBytes(estimate.bytes) })
+                      : t("job.estimate.exact", { size: formatBytes(estimate.bytes) })}
+                  </span>
+                  {isQueued && job.estimating && (
+                    <span className="flex items-center gap-1 text-[10px] text-neutral-400 dark:text-neutral-500">
+                      <SpinnerIcon className="h-3 w-3 animate-spin" />
+                      {t("job.estimating")}
+                    </span>
+                  )}
+                </>
               )}
             </div>
           )}
         </div>
+
+        {/* Sync-params: a per-card footer CTA fought with 开始处理 for
+            attention, so it lives as a header icon instead. */}
+        {isQueued && onSyncParams && (
+          <button
+            onClick={() => onSyncParams(job.uiId)}
+            className="shrink-0 rounded-lg p-1.5 text-neutral-400 transition hover:bg-brand-50 hover:text-brand-600 dark:text-neutral-500 dark:hover:bg-brand-950/40 dark:hover:text-brand-300"
+            title={t("job.sync")}
+            aria-label={t("job.sync")}
+          >
+            <CopyIcon className="h-4 w-4" />
+          </button>
+        )}
 
         <button
           onClick={() => onRemove(job.uiId)}
@@ -334,15 +365,6 @@ export default function JobCard({
               <PlayIcon className="h-4 w-4" />
               {t("job.start")}
             </button>
-            {onSyncParams && (
-              <button
-                onClick={() => onSyncParams(job.uiId)}
-                className="rounded-xl border border-brand-200 bg-brand-50 px-3 py-2.5 text-sm font-medium text-brand-700 transition hover:bg-brand-100 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-300 dark:hover:bg-brand-900"
-                title={t("job.sync")}
-              >
-                {t("job.sync")}
-              </button>
-            )}
           </div>
         </>
       )}
@@ -366,14 +388,16 @@ export default function JobCard({
             </span>
           </div>
           <div
-            className="relative h-2 w-full overflow-hidden rounded-full bg-neutral-100 progress-tooltip-trigger dark:bg-neutral-800"
+            className="relative w-full progress-tooltip-trigger"
             title={job.startedAt ? getProgressDetail(job, t) : ""}
           >
-            <div
-              className="relative h-full rounded-full brand-progress transition-all duration-300"
-              style={{ width: `${job.percent}%` }}
-            >
-              <div className="absolute inset-0 rounded-full brand-shimmer" />
+            <div className="h-2 w-full overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
+              <div
+                className="relative h-full rounded-full brand-progress transition-all duration-300"
+                style={{ width: `${job.percent}%` }}
+              >
+                <div className="absolute inset-0 rounded-full brand-shimmer" />
+              </div>
             </div>
             {job.startedAt && (
               <div className="absolute left-1/2 top-6 -translate-x-1/2 z-10 hidden rounded-lg bg-neutral-900 px-3 py-2 text-xs text-white shadow-lg whitespace-nowrap progress-tooltip dark:bg-neutral-700">
@@ -422,6 +446,113 @@ export default function JobCard({
               {t("job.open")}
             </button>
           )}
+        </div>
+      )}
+
+      {/* Bound post-processing pipeline (mirrors the download cards): inline
+          sub-progress that runs after the encode itself has finished. */}
+      {job.pipeline?.phase === "running" && (
+        <div className="mt-2.5">
+          <div className="mb-1 flex items-center justify-between text-[11px] text-neutral-400 dark:text-neutral-500">
+            <span className="font-medium text-neutral-600 dark:text-neutral-300">
+              {t("job.pipeline.step", {
+                name: t(`tool.${job.pipelineSteps?.[job.pipeline.stepIndex]?.toolId ?? ""}.name`),
+              })}
+            </span>
+            <span className="tabular-nums">{Math.round(job.pipeline.percent)}%</span>
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
+            <div
+              className="h-full rounded-full bg-brand-500 transition-all duration-300"
+              style={{ width: `${Math.max(Math.round(job.pipeline.percent), 2)}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {job.pipeline?.phase === "done" && (
+        <p className="mt-2 flex items-center gap-1.5 text-[11px]">
+          <span className="shrink-0 font-medium text-success-600 dark:text-success-400">
+            {t("job.pipeline.done")}
+          </span>
+          {job.pipeline.output && (
+            <span
+              className="truncate text-neutral-400 dark:text-neutral-500"
+              title={job.pipeline.output}
+            >
+              {job.pipeline.output}
+            </span>
+          )}
+        </p>
+      )}
+      {job.pipeline?.phase === "done" && job.pipeline.note && (
+        <p
+          className="mt-1 text-[11px] text-amber-600 dark:text-amber-400"
+          title={job.pipeline.note}
+        >
+          {job.pipeline.note}
+        </p>
+      )}
+      {job.pipeline?.phase === "error" && job.pipeline.error && (
+        <p className="mt-2 text-[11px] text-error-600 dark:text-error-400">
+          {friendlyError(job.pipeline.error, t)}
+        </p>
+      )}
+      {job.pipeline?.phase === "cancelled" && (
+        <p className="mt-2 text-[11px] text-neutral-400 dark:text-neutral-500">
+          {t("job.pipeline.cancelled")}
+        </p>
+      )}
+
+      {!job.pipeline && (job.pipelineSteps?.length ?? 0) > 0 && (
+        <p className="mt-2 text-[11px] text-neutral-400 dark:text-neutral-500">
+          {t("job.pipeline.bound", {
+            n: job.pipelineSteps!.length,
+            names: job.pipelineSteps!.map((s) => t(`tool.${s.toolId}.name`)).join(" + "),
+          })}
+        </p>
+      )}
+
+      {isDone && onRunPipeline && job.pipeline?.phase !== "running" && pipelines.length > 0 && (
+        <select
+          value=""
+          onChange={(e) => {
+            if (!e.target.value) return;
+            onRunPipeline(job.uiId, e.target.value);
+            e.target.value = "";
+          }}
+          className="mt-2 w-full rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
+          aria-label={t("job.pipeline.runSelect")}
+        >
+          <option value="">{t("job.pipeline.runSelect")}</option>
+          {pipelines.map((p) => (
+            <option key={p.id} value={p.id}>
+              {pipelineDisplayName(p, t)}
+            </option>
+          ))}
+        </select>
+      )}
+
+      {isDone && uploads.targets.length > 0 && (job.resultFiles?.[0] ?? job.output) && (
+        <div className="mt-2 flex items-center gap-2">
+          <select
+            value=""
+            onChange={(e) => {
+              const targetId = e.target.value;
+              if (!targetId) return;
+              uploads.startUpload([job.resultFiles?.[0] ?? job.output!], [targetId]);
+              e.target.value = "";
+            }}
+            className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
+            aria-label={t("upload.card.uploadTo")}
+          >
+            <option value="">{t("upload.card.uploadTo")}</option>
+            {uploads.targets.map((x) => (
+              <option key={x.id} value={x.id}>
+                {x.name}
+              </option>
+            ))}
+          </select>
         </div>
       )}
 

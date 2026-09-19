@@ -29,26 +29,20 @@ const RECORD_SITES = [
   "NicoLive",
 ];
 
-/** Compact "supported sites" strip under the page header. */
+/** Compact "supported sites" line under the page header. Plain text (not
+ *  pills): these names are informational — pill styling would imply they
+ *  are clickable filters. */
 export default function SiteStrip({ record = false }: { record?: boolean }) {
   const { t } = useI18n();
   const sites = record ? RECORD_SITES : DOWNLOAD_SITES;
   return (
-    <div className="mb-5 flex flex-wrap items-center gap-1.5">
-      <span className="mr-0.5 text-xs text-neutral-400 dark:text-neutral-500">
-        {t(record ? "dl.record.sites.prefix" : "dl.sites.prefix")}
-      </span>
-      {sites.map((s) => (
-        <span
-          key={s}
-          className="rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] font-medium text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400"
-        >
-          {s}
-        </span>
-      ))}
-      <span className="text-xs text-neutral-400 dark:text-neutral-500">
-        {t(record ? "dl.record.sites.more" : "dl.sites.more")}
-      </span>
-    </div>
+    <p className="min-w-0 text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
+      {t(record ? "dl.record.sites.prefix" : "dl.sites.prefix")}
+      {" "}
+      <span className="text-neutral-600 dark:text-neutral-300">
+        {sites.join(" · ")}
+      </span>{" "}
+      {t(record ? "dl.record.sites.more" : "dl.sites.more")}
+    </p>
   );
 }

@@ -17,7 +17,7 @@ export default function SpeedPanel({
   return (
     <div className="space-y-3">
       <div>
-        <div className="text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+        <div className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
           {t("tool.speed.rate", { n: params.rate })}
         </div>
         <div className="mt-2 flex flex-wrap gap-1.5">

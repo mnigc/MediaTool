@@ -101,6 +101,33 @@ fn metadata_strip_args(strip: bool, with_chapters: bool) -> Vec<String> {
     a
 }
 
+/// Software HDR→SDR tone-mapping chain, prepended before any scaling: linearize
+/// the PQ/HLG transfer (1000-nit nominal peak), Hable-map into SDR, then
+/// convert to BT.709 8-bit 4:2:0. The bundled ffmpeg ships libzimg (zscale)
+/// and the tonemap filter, so this is always available; stream copy never
+/// touches it.
+fn hdr_tonemap_vf() -> &'static str {
+    "zscale=t=linear:npl=1000,format=gbrpf32le,tonemap=hable:desat=0,zscale=p=bt709:t=bt709:m=bt709:r=tv,format=yuv420p"
+}
+
+/// Full video filter chain for a job: HDR tone-mapping (HDR sources being
+/// re-encoded) followed by the optional resolution scale. Stream copy never
+/// gets filters — any filter forces a re-encode.
+fn video_filter_chain(info: &MediaInfo, codec: &str, resolution: &str) -> Option<String> {
+    if codec == "copy" {
+        return None;
+    }
+    let res = resolution_vf(resolution);
+    if !info.hdr {
+        return res;
+    }
+    let chain = hdr_tonemap_vf();
+    Some(match res {
+        Some(s) => format!("{chain},{s}"),
+        None => chain.to_string(),
+    })
+}
+
 fn resolution_vf(res: &str) -> Option<String> {
     match res {
         "original" | "" => None,
@@ -163,6 +190,13 @@ fn gpu_plan(video_codec: &str, gpu: &Option<String>) -> (String, Option<String>)
         }
         ("libx264", Some("amf")) => ("h264_amf".to_string(), Some("d3d11va".to_string())),
         ("libx264", Some("vaapi")) => ("h264_vaapi".to_string(), None),
+        ("libx265", Some("nvenc")) => ("hevc_nvenc".to_string(), Some("cuda".to_string())),
+        ("libx265", Some("qsv")) => ("hevc_qsv".to_string(), Some("qsv".to_string())),
+        ("libx265", Some("videotoolbox")) => {
+            ("hevc_videotoolbox".to_string(), Some("videotoolbox".to_string()))
+        }
+        ("libx265", Some("amf")) => ("hevc_amf".to_string(), Some("d3d11va".to_string())),
+        ("libx265", Some("vaapi")) => ("hevc_vaapi".to_string(), None),
         _ => (video_codec.to_string(), None),
     }
 }
@@ -177,10 +211,10 @@ fn crf_to_bitrate(crf: u32) -> u32 {
 
 fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) -> Vec<String> {
     let (vcodec, hwaccel) = gpu_plan(&p.video_codec, &p.gpu);
-    let is_vaapi = vcodec == "h264_vaapi";
+    let is_vaapi = vcodec == "h264_vaapi" || vcodec == "hevc_vaapi";
     let mut a: Vec<String> = vec![];
 
-    let vf = resolution_vf(&p.resolution).filter(|_| vcodec != "copy");
+    let vf = video_filter_chain(info, &vcodec, &p.resolution);
     if let Some(hw) = &hwaccel {
         a.push("-hwaccel".into());
         a.push(hw.clone());
@@ -222,6 +256,14 @@ fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) -> Vec<String
 
     match vcodec.as_str() {
         "libx264" => {
+            if p.quality_mode == "crf" {
+                a.push("-crf".into());
+                a.push(p.crf.unwrap_or(28).to_string());
+            }
+            a.push("-preset".into());
+            a.push(p.preset.clone());
+        }
+        "libx265" => {
             if p.quality_mode == "crf" {
                 a.push("-crf".into());
                 a.push(p.crf.unwrap_or(28).to_string());
@@ -289,6 +331,40 @@ fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) -> Vec<String
             }
         }
         "h264_vaapi" => {
+            if p.quality_mode == "crf" {
+                a.push("-b:v".into());
+                a.push(format!("{}k", crf_to_bitrate(p.crf.unwrap_or(28))));
+            }
+        }
+        "hevc_nvenc" => {
+            if p.quality_mode == "crf" {
+                a.push("-cq".into());
+                a.push(p.crf.unwrap_or(28).to_string());
+            }
+            a.push("-preset".into());
+            a.push("p4".into());
+        }
+        "hevc_qsv" => {
+            if p.quality_mode == "crf" {
+                a.push("-q:v".into());
+                a.push(p.crf.unwrap_or(28).to_string());
+            }
+        }
+        "hevc_videotoolbox" => {
+            if p.quality_mode == "crf" {
+                a.push("-b:v".into());
+                a.push(format!("{}k", crf_to_bitrate(p.crf.unwrap_or(28))));
+            }
+        }
+        "hevc_amf" => {
+            if p.quality_mode == "crf" {
+                a.push("-rc".into());
+                a.push("cqp".into());
+                a.push("-qp".into());
+                a.push(p.crf.unwrap_or(28).to_string());
+            }
+        }
+        "hevc_vaapi" => {
             if p.quality_mode == "crf" {
                 a.push("-b:v".into());
                 a.push(format!("{}k", crf_to_bitrate(p.crf.unwrap_or(28))));
@@ -1250,6 +1326,8 @@ fn codec_family<'a>(codec: &'a str) -> &'a str {
     match codec {
         "libx264" | "h264_nvenc" | "h264_qsv" | "h264_videotoolbox" | "h264_amf"
         | "h264_vaapi" | "h264" => "h264",
+        "libx265" | "hevc_nvenc" | "hevc_qsv" | "hevc_videotoolbox" | "hevc_amf"
+        | "hevc_vaapi" | "h265" | "hevc" => "hevc",
         "libvpx-vp9" | "vp9" => "vp9",
         "libsvtav1" | "libaom-av1" | "av1" => "av1",
         "libvpx" | "vp8" => "vp8",
@@ -1837,8 +1915,10 @@ fn merged_chain(info: &MediaInfo, steps: &[WorkflowStepInput]) -> Option<MergedC
         match id {
             "compress" | "convert" => {
                 let p: VideoParams = parse_params(&s.params).ok()?;
-                if let Some(res) = resolution_vf(&p.resolution) {
-                    ops.push(VideoOp::Filter(res));
+                // Same filter semantics as the single-job path: tone-map HDR
+                // first, then scale — unless the chain ends in stream copy.
+                if let Some(vf) = video_filter_chain(info, &p.video_codec, &p.resolution) {
+                    ops.push(VideoOp::Filter(vf));
                 }
                 // "none" means drop the audio track — same as the single-job
                 // compress path, which maps it to -an.
@@ -1934,6 +2014,14 @@ fn video_encoder_args(info: &MediaInfo, ep: &VideoParams) -> Vec<String> {
             a.push("-preset".into());
             a.push(ep.preset.clone());
         }
+        "libx265" => {
+            if ep.quality_mode == "crf" {
+                a.push("-crf".into());
+                a.push(ep.crf.unwrap_or(28).to_string());
+            }
+            a.push("-preset".into());
+            a.push(ep.preset.clone());
+        }
         "libvpx-vp9" => {
             if ep.quality_mode == "crf" {
                 a.push("-b:v".into());
@@ -1991,6 +2079,40 @@ fn video_encoder_args(info: &MediaInfo, ep: &VideoParams) -> Vec<String> {
             }
         }
         "h264_vaapi" => {
+            if ep.quality_mode == "crf" {
+                a.push("-b:v".into());
+                a.push(format!("{}k", crf_to_bitrate(ep.crf.unwrap_or(28))));
+            }
+        }
+        "hevc_nvenc" => {
+            if ep.quality_mode == "crf" {
+                a.push("-cq".into());
+                a.push(ep.crf.unwrap_or(28).to_string());
+            }
+            a.push("-preset".into());
+            a.push("p4".into());
+        }
+        "hevc_qsv" => {
+            if ep.quality_mode == "crf" {
+                a.push("-q:v".into());
+                a.push(ep.crf.unwrap_or(28).to_string());
+            }
+        }
+        "hevc_videotoolbox" => {
+            if ep.quality_mode == "crf" {
+                a.push("-b:v".into());
+                a.push(format!("{}k", crf_to_bitrate(ep.crf.unwrap_or(28))));
+            }
+        }
+        "hevc_amf" => {
+            if ep.quality_mode == "crf" {
+                a.push("-rc".into());
+                a.push("cqp".into());
+                a.push("-qp".into());
+                a.push(ep.crf.unwrap_or(28).to_string());
+            }
+        }
+        "hevc_vaapi" => {
             if ep.quality_mode == "crf" {
                 a.push("-b:v".into());
                 a.push(format!("{}k", crf_to_bitrate(ep.crf.unwrap_or(28))));
@@ -2839,6 +2961,7 @@ mod tests {
             audio_codec: Some("aac".into()),
             bitrate_kbps: Some(2000),
             size_bytes: 1_000_000,
+            hdr: false,
         }
     }
 
@@ -3307,6 +3430,40 @@ mod tests {
         info.audio_codec = Some("opus".into());
         assert!(validate_video_container("webm", "copy", "copy", &info).is_ok());
         assert!(validate_video_container("webm", "copy", "copy", &sample_info()).is_err());
+    }
+
+    #[test]
+    fn hdr_sources_get_tonemapped_to_sdr() {
+        let has_tonemap = |args: &[String]| args.iter().any(|a| a.contains("tonemap=hable"));
+        let mut info = sample_info();
+        assert!(!info.hdr);
+        let plain = build_video_args(&info, &video_params(), Path::new("out.mp4"));
+        assert!(!has_tonemap(&plain));
+
+        info.hdr = true;
+        let hdr = build_video_args(&info, &video_params(), Path::new("out.mp4"));
+        assert!(has_tonemap(&hdr));
+
+        // Stream copy never gets filters, so the HDR transfer stays untouched.
+        let mut cp = video_params();
+        cp.video_codec = "copy".into();
+        let copied = build_video_args(&info, &cp, Path::new("out.mp4"));
+        assert!(!has_tonemap(&copied));
+        assert!(!copied.contains(&"-vf".to_string()));
+    }
+
+    #[test]
+    fn hevc_container_and_gpu_mapping() {
+        // HEVC encodes fine in mp4/mkv but not webm (vp8/vp9/av1 only).
+        assert!(validate_video_container("mp4", "libx265", "aac", &sample_info()).is_ok());
+        assert!(validate_video_container("webm", "libx265", "aac", &sample_info()).is_err());
+        // GPU backends swap libx265 for their HEVC encoders.
+        let (enc, hw) = gpu_plan("libx265", &Some("nvenc".into()));
+        assert_eq!(enc, "hevc_nvenc");
+        assert_eq!(hw.as_deref(), Some("cuda"));
+        assert_eq!(gpu_plan("libx265", &None).0, "libx265");
+        // ...and the family maps to "hevc" for container checks.
+        assert_eq!(codec_family("hevc_nvenc"), "hevc");
     }
 
     /* ── remux auto-fallback ─────────────────────────────────────── */

@@ -107,7 +107,9 @@ export function estimateOutputSize(
         const crf = v.crf ?? 28;
         const crfScale = Math.pow(1.4, (23 - crf) / 3);
         let codecFactor = 1.0;
-        if (v.videoCodec === "libvpx-vp9") codecFactor = 0.7;
+        // At the same CRF number the newer codecs land well under x264's size.
+        if (v.videoCodec === "libx265") codecFactor = 0.65;
+        else if (v.videoCodec === "libvpx-vp9") codecFactor = 0.7;
         else if (v.videoCodec === "libsvtav1") codecFactor = 0.6;
         // Frame rate adjustment relative to the 30fps baseline of the table.
         const fpsScale =

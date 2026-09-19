@@ -1,8 +1,11 @@
 import { useState, type ReactNode } from "react";
 import type { AudioParams, JobParams, VideoParams } from "../types";
 import PresetsBar from "./PresetsBar";
+import { presetSummary } from "../lib/presets";
 import { useI18n } from "../i18n";
+import { useTasks } from "../contexts/TaskCenter";
 import Select from "./Select";
+import { inputClsSm } from "./ui";
 
 interface Props {
   toolId: string;
@@ -11,6 +14,7 @@ interface Props {
 }
 
 export default function OptionsPanel({ toolId, params, onChange }: Props) {
+  const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
 
   const renderContent = () => {
@@ -29,11 +33,18 @@ export default function OptionsPanel({ toolId, params, onChange }: Props) {
   };
 
   const showPresets = !toolId.endsWith("-convert");
+  // While collapsed, the header line carries a one-line params summary so
+  // multi-task lists stay scannable without expanding every card.
+  const summary = expanded ? "" : presetSummary({ name: "", toolId, params, builtin: false }, t);
 
   return (
     <div className="flex flex-col gap-3">
       {showPresets && <PresetsBar toolId={toolId} params={params} onChange={onChange} />}
-      <SettingsCollapsible expanded={expanded} onToggle={() => setExpanded(!expanded)}>
+      <SettingsCollapsible
+        expanded={expanded}
+        onToggle={() => setExpanded(!expanded)}
+        summary={summary}
+      >
         {renderContent()}
       </SettingsCollapsible>
     </div>
@@ -42,9 +53,10 @@ export default function OptionsPanel({ toolId, params, onChange }: Props) {
 
 /* ── 设置折叠面板 ─────────────────────────────────── */
 
-function SettingsCollapsible({ expanded, onToggle, children }: {
+function SettingsCollapsible({ expanded, onToggle, summary, children }: {
   expanded: boolean;
   onToggle: () => void;
+  summary: string;
   children: ReactNode;
 }) {
   const { t } = useI18n();
@@ -55,24 +67,31 @@ function SettingsCollapsible({ expanded, onToggle, children }: {
         onClick={onToggle}
         className="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left transition hover:bg-neutral-100/50 dark:hover:bg-neutral-800/50"
       >
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400 dark:text-neutral-500">
+        <span className="shrink-0 text-xs font-semibold text-neutral-600 dark:text-neutral-300">
           {t("opt.settings")}
         </span>
+        {!expanded && summary && (
+          <span className="min-w-0 flex-1 truncate px-3 text-right text-[11px] font-normal text-neutral-400 dark:text-neutral-500">
+            {summary}
+          </span>
+        )}
         <svg
           viewBox="0 0 16 16"
-          className={`h-3.5 w-3.5 text-neutral-400 transition-transform ${expanded ? "rotate-180" : ""}`}
+          className={`h-3.5 w-3.5 shrink-0 text-neutral-400 transition-transform ${expanded ? "rotate-180" : ""}`}
           fill="currentColor"
         >
           <path d="M4 6l4 4 4-4z" />
         </svg>
       </button>
       <div
-        className={`overflow-hidden transition-all duration-250 ${
-          expanded ? "max-h-[1200px] opacity-100" : "max-h-0 opacity-0"
+        className={`grid transition-[grid-template-rows] duration-200 ease-out ${
+          expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
         }`}
       >
-        <div className="rounded-xl border border-neutral-100 bg-white p-4 pt-3 dark:border-neutral-700/60 dark:bg-neutral-800/30">
-          {children}
+        <div className="overflow-hidden">
+          <div className="rounded-xl border border-neutral-100 bg-white p-4 pt-3 dark:border-neutral-700/60 dark:bg-neutral-800/30">
+            {children}
+          </div>
         </div>
       </div>
     </div>
@@ -84,7 +103,7 @@ function SettingsCollapsible({ expanded, onToggle, children }: {
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-2">
-      <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">{label}</span>
+      <span className="shrink-0 text-xs font-medium text-neutral-600 dark:text-neutral-300">{label}</span>
       <span className="min-w-0 flex-1">{children}</span>
     </div>
   );
@@ -97,13 +116,12 @@ function FieldRow({ children }: { children: ReactNode }) {
 function SectionDivider({ label }: { label: string }) {
   return (
     <div className="flex items-center justify-between py-1.5">
-      <span className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400 dark:text-neutral-500">{label}</span>
+      <span className="text-xs font-semibold text-neutral-600 dark:text-neutral-300">{label}</span>
     </div>
   );
 }
 
-const sel =
-  "w-full rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs text-neutral-700 transition focus:border-brand-400 focus:ring-1 focus:ring-brand-100 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 dark:focus:border-brand-500";
+const sel = `${inputClsSm} w-full`;
 
 const range = "mp-range flex-1";
 
@@ -125,8 +143,12 @@ export function VideoCompressOptions({
   onChange: (p: JobParams) => void;
 }) {
   const { t } = useI18n();
+  const tasks = useTasks();
   const v = params as VideoParams;
   const set = (patch: Partial<VideoParams>) => onChange({ ...params, ...patch } as JobParams);
+  // The backend silently swaps libx264 for the GPU encoder when the sidebar
+  // picked one — surface that here, since the codec select still says "H.264".
+  const gpuName = tasks.settings.gpu ? t(`gpu.${tasks.settings.gpu}`) : "";
 
   return (
     <div className="space-y-3">
@@ -143,11 +165,21 @@ export function VideoCompressOptions({
         <Field label={t("opt.codec")}>
           <Select className="w-full" value={v.videoCodec} onChange={(v) => set({ videoCodec: v })}>
             <option value="libx264">H.264</option>
+            <option value="libx265">H.265 (HEVC)</option>
             <option value="libvpx-vp9">VP9</option>
             <option value="libsvtav1">AV1</option>
             <option value="copy">{t("opt.copy")}</option>
           </Select>
         </Field>
+      </FieldRow>
+      {/* Kept outside the field rows: inside one it distorts the grid and
+          shoves the select out of the card. */}
+      {gpuName && (v.videoCodec === "libx264" || v.videoCodec === "libx265") && (
+        <p className="-mt-1.5 text-[10px] text-neutral-400 dark:text-neutral-500">
+          {t("opt.gpuActive", { name: gpuName })}
+        </p>
+      )}
+      <FieldRow>
         <Field label={t("opt.qualityMode")}>
           <Select className="w-full" value={v.qualityMode} onChange={(v) => set({ qualityMode: v })}>
             <option value="crf">{t("opt.crf")}</option>
@@ -160,20 +192,27 @@ export function VideoCompressOptions({
       <div className="space-y-2 rounded-xl bg-neutral-50/50 p-3 dark:bg-neutral-800/40">
         {v.qualityMode === "crf" && (
           <div>
-            <div className="text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+            <div className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
               {t("opt.crfQuality", { n: v.crf ?? 28 })}
             </div>
-            <div className="mt-1.5 flex items-center gap-2">
-              <span className="shrink-0 text-[9px] text-neutral-400 dark:text-neutral-600">{t("opt.highQuality")}</span>
-              <input
-                type="range"
-                min={18}
-                max={40}
-                value={v.crf ?? 28}
-                onChange={(e) => set({ crf: Number(e.target.value) })}
-                className={range}
-              />
-              <span className="shrink-0 text-[9px] text-neutral-400 dark:text-neutral-600">{t("opt.lowQuality")}</span>
+            <input
+              type="range"
+              min={18}
+              max={40}
+              value={v.crf ?? 28}
+              onChange={(e) => set({ crf: Number(e.target.value) })}
+              className={`${range} mt-2`}
+              // The job card is natively draggable for reordering, which
+              // hijacks scrubbing into a card drag — clicks still landed but
+              // the thumb never followed the pointer. Claiming draggable here
+              // makes the slider the drag source, and cancelling the drag
+              // hands mouse moves back to the range control.
+              draggable={true}
+              onDragStart={(e) => e.preventDefault()}
+            />
+            <div className="mt-0.5 flex justify-between text-[10px] text-neutral-400 dark:text-neutral-500">
+              <span>18 · {t("opt.crf.hint.low")}</span>
+              <span>{t("opt.crf.hint.high")} · 40</span>
             </div>
           </div>
         )}
@@ -268,7 +307,7 @@ function TierPicker({ value, onChange }: {
           key={tier}
           type="button"
           onClick={() => onChange(tier)}
-          className={`rounded-lg px-2.5 py-1.5 text-[10px] font-medium transition ${
+          className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${
             value === tier
               ? "bg-brand-500 text-white dark:bg-brand-600"
               : "border border-neutral-200 bg-white text-neutral-600 hover:border-brand-200 hover:bg-brand-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:border-brand-800 dark:hover:bg-brand-950/40"
@@ -361,7 +400,7 @@ export function VideoConvertOptions({
           <TierPicker value={tierOfVideo(v)} onChange={changeTier} />
         </Field>
       </FieldRow>
-      <p className="text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+      <p className="text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
         {t("opt.convert.autoHint")}
       </p>
     </div>
@@ -415,7 +454,7 @@ export function AudioConvertOptions({ params, onChange }: {
           <option value="flac">FLAC</option>
         </Select>
       </Field>
-      <p className="text-[10px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+      <p className="text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
         {t("opt.audio.autoBitrate")}
       </p>
     </div>

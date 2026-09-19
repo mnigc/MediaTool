@@ -9,12 +9,16 @@ import {
 } from "../lib/tauri";
 import { useI18n } from "../i18n";
 import { useDownloads } from "../contexts/DownloadCenter";
+import { useUploads } from "../contexts/UploadCenter";
+import UploadTargetChips from "../components/UploadTargetChips";
 import Select from "../components/Select";
+import { Button } from "../components/ui";
+import EmptyState from "../components/EmptyState";
 import { useConfirm } from "../components/ConfirmDialog";
 import SiteStrip from "./SiteStrip";
 import SaveLocationBar from "./SaveLocationBar";
 import { ConfigSidebar, Field, NetworkSection, PipelineChips, SidebarSection } from "./Sidebar";
-import { presetById } from "./pipelines";
+import { pipelineById, pipelineDisplayName } from "../workflow/pipelines";
 import type { MonitorInfo } from "../types";
 
 const QUALITIES = ["best", "2160p", "1080p", "720p", "480p"] as const;
@@ -67,10 +71,12 @@ function AddMonitorForm({
   onAdded,
   quality,
   pipelineIds,
+  uploadTo,
 }: {
   onAdded: () => void;
   quality: string;
   pipelineIds: string[];
+  uploadTo: string[];
 }) {
   const { t } = useI18n();
   const dl = useDownloads();
@@ -105,8 +111,11 @@ function AddMonitorForm({
         quality,
         outputDir: dl.settings.outputDir!,
         cookiesBrowser: dl.settings.cookiesBrowser || null,
+        cookiesFile: dl.settings.cookiesFile || null,
+        cookiesText: dl.settings.cookiesText || null,
         proxy: dl.settings.proxy || null,
-        pipeline: pipelineIds.flatMap((id) => presetById(id)?.steps ?? []),
+        pipeline: pipelineIds.flatMap((id) => pipelineById(id)?.steps ?? []),
+        uploadTo,
       });
       setUrl("");
       setName("");
@@ -127,22 +136,22 @@ function AddMonitorForm({
           placeholder={t("dl.monitor.urlPlaceholder")}
           className="min-w-0 flex-1 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-800 placeholder:text-neutral-400 focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-100 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 dark:focus:border-brand-500"
         />
-        <button
+        <Button
+          variant="primary"
           onClick={() => void submit()}
           disabled={disabled}
-          className="shrink-0 rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-brand-600 dark:hover:bg-brand-700"
         >
           {t("dl.monitor.add")}
-        </button>
+        </Button>
       </div>
 
-      <label className="mt-3 flex items-center gap-1.5 text-xs text-neutral-500 dark:text-neutral-400">
-        {t("dl.monitor.name")}
+      <label className="mt-3 flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-300">
+        <span className="shrink-0">{t("dl.monitor.name")}</span>
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder={t("dl.monitor.namePlaceholder")}
-          className="w-36 rounded-lg border border-neutral-200 bg-white px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+          className="min-w-0 max-w-xs flex-1 rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs text-neutral-800 placeholder:text-neutral-400 focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-100 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
         />
       </label>
 
@@ -379,9 +388,11 @@ function MonitorCard({ m, onChanged }: { m: MonitorInfo; onChanged: () => void }
 export default function RecordPage({ onOpenSettings }: { onOpenSettings: () => void }) {
   const { t } = useI18n();
   const dl = useDownloads();
+  const uploads = useUploads();
   const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
   const [quality, setQuality] = useState("best");
   const [pipelineIds, setPipelineIds] = useState<string[]>(["remux"]);
+  const [uploadTo, setUploadTo] = useState<string[]>([]);
 
   const refresh = () => {
     monitorList()
@@ -405,26 +416,35 @@ export default function RecordPage({ onOpenSettings }: { onOpenSettings: () => v
     };
   }, []);
 
+  const pipelineSummary = pipelineIds
+    .map((id) => {
+      const p = pipelineById(id);
+      return p ? pipelineDisplayName(p, t) : id;
+    })
+    .join(" → ");
+  const uploadSummary = uploadTo
+    .map((id) => uploads.targets.find((x) => x.id === id)?.name ?? id)
+    .join("、");
+
   return (
     <div className="mx-auto max-w-5xl">
-      <div className="mb-5">
-        <h2 className="text-xl font-semibold text-neutral-800 dark:text-neutral-100">
-          {t("dl.record.title")}
-        </h2>
-        {dl.streamlink && !dl.streamlink.installed && dl.streamlink.installable && (
-          <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-            <button
+      <div className="mb-5 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+        <div className="flex items-baseline gap-3">
+          <h2 className="text-lg font-semibold text-neutral-800 dark:text-neutral-100">
+            {t("dl.record.title")}
+          </h2>
+          {dl.streamlink && !dl.streamlink.installed && dl.streamlink.installable && (
+            <Button
+              size="sm"
               onClick={() => void dl.installStreamlink()}
               disabled={dl.streamlinkInstalling}
-              className="rounded-lg border border-neutral-200 px-2 py-0.5 text-[11px] font-medium text-neutral-600 transition hover:bg-neutral-50 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
             >
               {dl.streamlinkInstalling ? t("dl.installing") : t("dl.record.installEngine")}
-            </button>
-          </p>
-        )}
+            </Button>
+          )}
+        </div>
+        <SiteStrip record />
       </div>
-
-      <SiteStrip record />
 
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:gap-5">
         <div className="min-w-0 flex-1">
@@ -438,9 +458,10 @@ export default function RecordPage({ onOpenSettings }: { onOpenSettings: () => v
             onAdded={refresh}
             quality={quality}
             pipelineIds={pipelineIds}
+            uploadTo={uploadTo}
           />
 
-          {monitors.length > 0 && (
+          {monitors.length > 0 ? (
           <>
             <h3 className="mb-2 text-sm font-semibold text-neutral-700 dark:text-neutral-200">
               {t("dl.monitor.list", { n: monitors.length })}
@@ -451,6 +472,8 @@ export default function RecordPage({ onOpenSettings }: { onOpenSettings: () => v
               ))}
             </div>
           </>
+        ) : (
+          <EmptyState message={t("dl.record.empty.hint")} />
         )}
       </div>
 
@@ -469,8 +492,29 @@ export default function RecordPage({ onOpenSettings }: { onOpenSettings: () => v
           </Field>
         </SidebarSection>
 
-        <SidebarSection title={t("dl.pipeline.title")}>
+        <SidebarSection
+          title={t("dl.pipeline.title")}
+          collapsible
+          defaultOpen={false}
+          summary={pipelineSummary || t("dl.pipeline.noTreatment")}
+        >
           <PipelineChips selected={pipelineIds} onChange={setPipelineIds} />
+        </SidebarSection>
+
+        <SidebarSection
+          title={t("upload.pick.title")}
+          collapsible
+          defaultOpen={false}
+          summary={uploadSummary || t("upload.pick.none")}
+        >
+          <div className="space-y-1.5">
+            <UploadTargetChips selected={uploadTo} onChange={setUploadTo} />
+            {uploadTo.length > 0 && (
+              <p className="text-[11px] text-neutral-400 dark:text-neutral-500">
+                {t("upload.pick.hint")}
+              </p>
+            )}
+          </div>
         </SidebarSection>
 
         <NetworkSection onOpenSettings={onOpenSettings} />

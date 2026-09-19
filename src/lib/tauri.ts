@@ -18,11 +18,18 @@ import type {
   MonitorInfo,
   MonitorRequest,
   NetOptions,
+  OauthBeginRequest,
+  OauthBeginResult,
+  OauthResultEvent,
   ProgressEvent,
   StartJobResult,
   StartWorkflowResult,
   StreamlinkRelease,
   StreamlinkStatus,
+  UploadDoneEvent,
+  UploadProgressEvent,
+  UploadRequest,
+  UploadStartResult,
   WorkflowRequest,
   YtdlpInstallProgress,
   YtdlpStatus,
@@ -62,8 +69,18 @@ export function cacheClean(): Promise<CacheCleanResult> {
   return invoke<CacheCleanResult>("cache_clean");
 }
 
-export async function getThumbnail(path: string, mediaType: string): Promise<string | null> {
-  return invoke<string | null>("get_thumbnail", { path, mediaType });
+/** `durationSecs` (when known) lets the backend seek past black lead-in
+ *  frames instead of grabbing frame ~1. */
+export async function getThumbnail(
+  path: string,
+  mediaType: string,
+  durationSecs?: number | null
+): Promise<string | null> {
+  return invoke<string | null>("get_thumbnail", {
+    path,
+    mediaType,
+    durationSecs: durationSecs ?? null,
+  });
 }
 
 export async function detectGpu(): Promise<GpuInfo> {
@@ -167,6 +184,38 @@ export function streamlinkInstall(): Promise<StreamlinkStatus> {
 
 export function onStreamlinkInstallProgress(cb: (e: YtdlpInstallProgress) => void): Promise<UnlistenFn> {
   return listen<YtdlpInstallProgress>("streamlink-install-progress", (event) => cb(event.payload));
+}
+
+/* ── uploads (post-processing push to remote targets) ─────────── */
+
+export function uploadStart(request: UploadRequest): Promise<UploadStartResult> {
+  return invoke<UploadStartResult>("upload_start", { request });
+}
+
+export function cancelUpload(id: string): Promise<void> {
+  return invoke<void>("cancel_upload", { id });
+}
+
+/** Open a browser OAuth loop: returns the authorize URL (the backend also
+ *  opens the browser) and starts a loopback listener for the redirect. */
+export function oauthBegin(request: OauthBeginRequest): Promise<OauthBeginResult> {
+  return invoke<OauthBeginResult>("oauth_begin", { request });
+}
+
+export function oauthCancel(requestId: string): Promise<void> {
+  return invoke<void>("oauth_cancel", { requestId });
+}
+
+export function onUploadProgress(cb: (e: UploadProgressEvent) => void): Promise<UnlistenFn> {
+  return listen<UploadProgressEvent>("upload-progress", (event) => cb(event.payload));
+}
+
+export function onUploadDone(cb: (e: UploadDoneEvent) => void): Promise<UnlistenFn> {
+  return listen<UploadDoneEvent>("upload-done", (event) => cb(event.payload));
+}
+
+export function onOauthResult(cb: (e: OauthResultEvent) => void): Promise<UnlistenFn> {
+  return listen<OauthResultEvent>("oauth-result", (event) => cb(event.payload));
 }
 
 export function formatBytes(bytes: number): string {

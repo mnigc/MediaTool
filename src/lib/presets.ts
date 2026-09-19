@@ -30,6 +30,14 @@ const OVERRIDE_KEY = "mediatool.presetOverrides";
 
 const keyOf = (p: { toolId: string; name: string }) => `${p.toolId}::${p.name}`;
 
+/** Encoder ids as users know them (summaries/tooltips), not ffmpeg names. */
+const CODEC_LABEL: Record<string, string> = {
+  libx264: "H.264",
+  libx265: "H.265",
+  "libvpx-vp9": "VP9",
+  libsvtav1: "AV1",
+};
+
 /** Map builtin preset names (stored as stable Chinese identifiers) to i18n
  *  keys, so builtin preset labels follow the active UI language. Custom
  *  presets keep the name the user typed. */
@@ -168,6 +176,10 @@ export function presetSummary(
   const kbps = (n: unknown) => (n === undefined || n === null ? "" : `${n}k`);
   switch (p.toolId) {
     case "video-compress": {
+      if (q.format && q.format !== "source") parts.push(String(q.format).toUpperCase());
+      if (q.videoCodec && q.videoCodec !== "copy") {
+        parts.push(CODEC_LABEL[String(q.videoCodec)] ?? String(q.videoCodec));
+      }
       if (q.videoCodec === "copy") {
         parts.push(t("preset.sum.streamCopy"));
       } else {
@@ -184,6 +196,15 @@ export function presetSummary(
       if (q.audioCodec === "copy") parts.push(t("preset.sum.audioCopy"));
       else if (q.audioCodec === "none") parts.push(t("preset.sum.audioNone"));
       else if (q.audioCodec) parts.push(`${String(q.audioCodec).toUpperCase()} ${kbps(q.audioBitrateKbps)}`.trim());
+      break;
+    }
+    case "video-convert": {
+      if (q.format) parts.push(String(q.format).toUpperCase());
+      if (q.qualityMode === "crf") parts.push(`CRF ${q.crf ?? ""}`);
+      break;
+    }
+    case "audio-convert": {
+      if (q.format) parts.push(String(q.format).toUpperCase());
       break;
     }
     case "audio-compress": {

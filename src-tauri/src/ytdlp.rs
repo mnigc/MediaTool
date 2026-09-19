@@ -319,13 +319,44 @@ pub async fn ytdlp_install(app: AppHandle) -> Result<YtdlpStatus> {
 #[serde(rename_all = "camelCase", default)]
 pub struct NetOptions {
     pub cookies_browser: Option<String>,
+    pub cookies_file: Option<String>,
+    pub cookies_text: Option<String>,
     pub proxy: Option<String>,
 }
 
-pub(crate) fn common_net_args(bin: &Path, opts: &NetOptions) -> Vec<String> {
+/// The cookie file to hand to `--cookies` / `--cookie-file`: an explicit path
+/// wins over pasted text, which is materialised into the app data dir.
+/// Neither the browser choice nor a missing app dir produce a path.
+pub(crate) fn cookies_path(app: &AppHandle, opts: &NetOptions) -> Option<String> {
+    if let Some(f) = opts.cookies_file.as_deref().map(str::trim).filter(|f| !f.is_empty()) {
+        return Some(f.to_string());
+    }
+    let dir = app.path().app_data_dir().ok()?.join("cookies");
+    let Some(text) = opts
+        .cookies_text
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    else {
+        // The pasted text is gone — don't leave the stale cookie copy on disk.
+        let _ = std::fs::remove_file(dir.join("pasted.txt"));
+        return None;
+    };
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join("pasted.txt");
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(text) {
+        std::fs::write(&path, text).ok()?;
+    }
+    Some(path.to_string_lossy().into_owned())
+}
+
+pub(crate) fn common_net_args(app: &AppHandle, bin: &Path, opts: &NetOptions) -> Vec<String> {
     let _ = bin;
     let mut a: Vec<String> = Vec::new();
-    if let Some(c) = opts.cookies_browser.as_deref() {
+    if let Some(f) = cookies_path(app, opts) {
+        a.push("--cookies".into());
+        a.push(f);
+    } else if let Some(c) = opts.cookies_browser.as_deref() {
         if !c.is_empty() {
             a.push("--cookies-from-browser".into());
             a.push(c.to_string());
@@ -348,11 +379,14 @@ pub async fn ytdlp_probe(app: AppHandle, url: String, options: Option<NetOptions
     let opts = options.unwrap_or_default();
     tauri::async_runtime::spawn_blocking(move || {
         let mut args = vec!["-J".to_string(), "--no-playlist".to_string(), "--no-warnings".to_string(), "--socket-timeout".to_string(), "20".to_string()];
-        args.extend(common_net_args(&bin, &opts));
+        args.extend(common_net_args(&app, &bin, &opts));
         args.push(url);
         let out = run_capture(&bin, &args)?;
         if out.0 != 0 {
-            return Err(AppError(format!("解析失败: {}", tail_text(&out.2))));
+            return Err(AppError(format!(
+                "解析失败: {}",
+                map_browser_cookie_error(opts.cookies_browser.as_deref(), &tail_text(&out.2))
+            )));
         }
         serde_json::from_str::<serde_json::Value>(&out.1)
             .map_err(|e| AppError(format!("解析结果无法解析: {}", e)))
@@ -397,6 +431,36 @@ pub(crate) fn tail_text(s: &str) -> String {
     s[start..].to_string()
 }
 
+/// Fatal, engine-aborting messages from `--cookies-from-browser` (see yt-dlp
+/// cookies.py — both raise DownloadError). Chrome/Edge 127+ on Windows encrypt
+/// cookies with App-Bound Encryption, which surfaces as the DPAPI error; the
+/// other is the database being locked by a running browser.
+const BROWSER_COOKIE_ERRORS: [&str; 2] = [
+    "failed to decrypt with dpapi",
+    "could not copy chrome cookie database",
+];
+
+/// Prepend actionable guidance when a run that used `--cookies-from-browser`
+/// died on one of those errors; the raw detail is kept underneath for diagnosis.
+pub(crate) fn map_browser_cookie_error(cookies_browser: Option<&str>, detail: &str) -> String {
+    let browser = cookies_browser.map(str::trim).filter(|b| !b.is_empty());
+    let lower = detail.to_ascii_lowercase();
+    let hit = browser.filter(|_| BROWSER_COOKIE_ERRORS.iter().any(|m| lower.contains(m)));
+    match hit {
+        None => detail.to_string(),
+        Some(_) if lower.contains("dpapi") => format!(
+            "浏览器 Cookies 无法解密：Chrome/Edge 127+ 在 Windows 上启用了 App-Bound 加密，yt-dlp 读不出来。\
+             建议改用 Firefox，或用浏览器扩展导出 cookies.txt 填入「Cookies 文件」。\n\n{}",
+            detail
+        ),
+        Some(_) => format!(
+            "无法读取浏览器 Cookies：Cookie 数据库被占用（对应浏览器正在运行？）。\
+             请关闭该浏览器后重试，或改用导出的 cookies.txt。\n\n{}",
+            detail
+        ),
+    }
+}
+
 /* ── Downloads & recordings ─────────────────────────────────────── */
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -411,6 +475,8 @@ pub struct DownloadRequest {
     /// yt-dlp output template; default `%(title)s.%(ext)s`
     pub filename_template: Option<String>,
     pub cookies_browser: Option<String>,
+    pub cookies_file: Option<String>,
+    pub cookies_text: Option<String>,
     pub proxy: Option<String>,
     /// Also save subtitles (converted to srt)
     pub subtitles: Option<bool>,
@@ -484,10 +550,16 @@ fn build_download_args(
         .ok_or_else(|| AppError("找不到 ffmpeg：下载合并/转封装需要它".into()))?;
     a.push(ffmpeg.to_string_lossy().to_string());
 
-    a.extend(common_net_args(bin, &NetOptions {
-        cookies_browser: req.cookies_browser.clone(),
-        proxy: req.proxy.clone(),
-    }));
+    a.extend(common_net_args(
+        app,
+        bin,
+        &NetOptions {
+            cookies_browser: req.cookies_browser.clone(),
+            cookies_file: req.cookies_file.clone(),
+            cookies_text: req.cookies_text.clone(),
+            proxy: req.proxy.clone(),
+        },
+    ));
 
     let (qual_args, selector) = format_selector(&req.quality, req.audio_format.as_deref());
     a.extend(qual_args);
@@ -549,6 +621,9 @@ pub struct DownloadStartedEvent {
     pub kind: String,
     #[serde(default)]
     pub pipeline: Vec<WorkflowStepInput>,
+    /// Upload targets the frontend should push the final product to.
+    #[serde(default)]
+    pub upload_to: Vec<String>,
 }
 
 /// Parse one `--progress-template` line:
@@ -708,6 +783,7 @@ pub fn run_download_blocking(
     req: DownloadRequest,
     id: &str,
     pipeline: Vec<WorkflowStepInput>,
+    upload_to: Vec<String>,
 ) {
     let kind = req.kind.clone().unwrap_or_else(|| "download".into());
     let is_record = kind == "record";
@@ -720,6 +796,7 @@ pub fn run_download_blocking(
             title: req.title.clone().filter(|t| !t.is_empty()).unwrap_or_else(|| req.url.clone()),
             kind: kind.clone(),
             pipeline: pipeline.clone(),
+            upload_to: upload_to.clone(),
         },
     );
     // Live capture is streamlink's specialty: it handles the HLS/DASH
@@ -733,7 +810,7 @@ pub fn run_download_blocking(
     // the authentication.
     if is_record && req.cookies_browser.as_deref().unwrap_or("").is_empty() {
         if let Some(sl) = crate::streamlink::available(app) {
-            crate::streamlink::run_record_blocking(app, &sl, req, id, pipeline);
+            crate::streamlink::run_record_blocking(app, &sl, req, id, pipeline, upload_to);
             return;
         }
     }
@@ -747,7 +824,7 @@ pub fn run_download_blocking(
     if let Some(t) = &req.title {
         let _ = app.emit(
             "download-started",
-            DownloadStartedEvent { id: id.to_string(), url: req.url.clone(), title: t.clone(), kind: kind.clone(), pipeline: pipeline.clone() },
+            DownloadStartedEvent { id: id.to_string(), url: req.url.clone(), title: t.clone(), kind: kind.clone(), pipeline: pipeline.clone(), upload_to: upload_to.clone() },
         );
     }
     let (child, stdout, stderr_buf, drain) = match spawn_process(bin, &args) {
@@ -851,7 +928,10 @@ pub fn run_download_blocking(
     // The duration-limit stop kills the child (nonzero exit) but keeps the file.
     if code != 0 && !limit_reached {
         let buf = stderr_buf.lock().unwrap();
-        let detail = tail_text(&String::from_utf8_lossy(&buf));
+        let detail = map_browser_cookie_error(
+            req.cookies_browser.as_deref(),
+            &tail_text(&String::from_utf8_lossy(&buf)),
+        );
         emit_dl_done(
             app,
             id,
@@ -965,6 +1045,8 @@ pub struct ActiveDlTask {
     pub title: String,
     pub kind: String,
     pub pipeline: Vec<WorkflowStepInput>,
+    #[serde(default)]
+    pub upload_to: Vec<String>,
 }
 
 #[tauri::command]
@@ -978,6 +1060,7 @@ pub fn dl_active_tasks(app: AppHandle) -> Vec<ActiveDlTask> {
             title: i.title,
             kind: i.kind,
             pipeline: i.pipeline,
+            upload_to: i.upload_to,
         })
         .collect()
 }
@@ -995,7 +1078,7 @@ pub async fn ytdlp_start_download(
     let app2 = app.clone();
     let id2 = id.clone();
     std::thread::spawn(move || {
-        run_download_blocking(&app2, &bin, request, &id2, Vec::new());
+        run_download_blocking(&app2, &bin, request, &id2, Vec::new(), Vec::new());
     });
     Ok(StartJobResult { id, skipped: false, output: None, note: None })
 }
@@ -1018,10 +1101,15 @@ pub struct MonitorRequest {
     pub quality: String,
     pub output_dir: String,
     pub cookies_browser: Option<String>,
+    pub cookies_file: Option<String>,
+    pub cookies_text: Option<String>,
     pub proxy: Option<String>,
     /// Post-processing workflow bound to every recording of this monitor.
     #[serde(default)]
     pub pipeline: Vec<WorkflowStepInput>,
+    /// Upload targets bound to every recording of this monitor.
+    #[serde(default)]
+    pub upload_to: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1035,6 +1123,8 @@ pub struct MonitorInfo {
     pub quality: String,
     pub output_dir: String,
     pub cookies_browser: Option<String>,
+    pub cookies_file: Option<String>,
+    pub cookies_text: Option<String>,
     pub proxy: Option<String>,
     /// watching | recording | stopping
     pub status: String,
@@ -1046,6 +1136,8 @@ pub struct MonitorInfo {
     pub current_job: Option<String>,
     #[serde(default)]
     pub pipeline: Vec<WorkflowStepInput>,
+    #[serde(default)]
+    pub upload_to: Vec<String>,
 }
 
 impl MonitorInfo {
@@ -1059,6 +1151,8 @@ impl MonitorInfo {
             quality: r.quality.clone(),
             output_dir: r.output_dir.clone(),
             cookies_browser: r.cookies_browser.clone(),
+            cookies_file: r.cookies_file.clone(),
+            cookies_text: r.cookies_text.clone(),
             proxy: r.proxy.clone(),
             status: "watching".into(),
             title: None,
@@ -1067,6 +1161,7 @@ impl MonitorInfo {
             last_checked: None,
         current_job: None,
         pipeline: r.pipeline.clone(),
+        upload_to: r.upload_to.clone(),
     }
 }
 }
@@ -1117,6 +1212,7 @@ impl MonitorManager {
 
 /// Probe a URL's live status cheaply.
 fn check_live(
+    app: &AppHandle,
     bin: &Path,
     url: &str,
     opts: &NetOptions,
@@ -1130,7 +1226,7 @@ fn check_live(
         "--print".into(),
         "%(live_status)s\t%(title)s\t%(uploader)s".into(),
     ];
-    args.extend(common_net_args(bin, opts));
+    args.extend(common_net_args(app, bin, opts));
     args.push(url.to_string());
     let (code, out, err) = run_capture(bin, args.as_slice()).map_err(|e| e.to_string())?;
     if code != 0 {
@@ -1214,6 +1310,8 @@ fn monitor_loop(
 ) {
     let opts = |i: &MonitorInfo| NetOptions {
         cookies_browser: i.cookies_browser.clone(),
+        cookies_file: i.cookies_file.clone(),
+        cookies_text: i.cookies_text.clone(),
         proxy: i.proxy.clone(),
     };
     loop {
@@ -1234,13 +1332,14 @@ fn monitor_loop(
                 let i = info.lock().unwrap();
                 (i.url.clone(), opts(&i), i.auto_record)
             };
-            let probe = check_live(&bin, &url, &net).or_else(|_| {
+            let probe = check_live(&app, &bin, &url, &net).or_else(|_| {
                 // Some live sites (e.g. Douyin) aren't recognised by yt-dlp at
                 // all but are handled by the recording engine, so the monitor
                 // would sit on "unknown" and never auto-record. Probe with
                 // streamlink too — it's the engine that would do the capture.
                 if net.cookies_browser.as_deref().unwrap_or("").is_empty() {
-                    crate::streamlink::probe_live(&app, &url, net.proxy.as_deref())
+                    let cookies = cookies_path(&app, &net);
+                    crate::streamlink::probe_live(&app, &url, net.proxy.as_deref(), cookies.as_deref())
                 } else {
                     // Recording would stay on yt-dlp, so its answer is final.
                     Err("需要浏览器 cookies，streamlink 无法录制".into())
@@ -1319,7 +1418,7 @@ fn record_subdir(author: Option<&str>, name: &str, url: &str) -> Option<String> 
 /// monitor's status around it. `auto` decides whether the monitor keeps
 /// running for the next stream (true) or stops after this recording (false).
 fn record_once(app: &AppHandle, bin: &Path, info: &Arc<Mutex<MonitorInfo>>) {
-    let (req, pipeline, auto) = {
+    let (req, pipeline, upload_to, auto) = {
         let i = info.lock().unwrap();
         let output_dir = match record_subdir(i.author.as_deref(), &i.name, &i.url) {
             Some(sub) => Path::new(&i.output_dir).join(sub).to_string_lossy().into_owned(),
@@ -1333,6 +1432,8 @@ fn record_once(app: &AppHandle, bin: &Path, info: &Arc<Mutex<MonitorInfo>>) {
                 output_dir,
                 filename_template: None,
                 cookies_browser: i.cookies_browser.clone(),
+                cookies_file: i.cookies_file.clone(),
+                cookies_text: i.cookies_text.clone(),
                 proxy: i.proxy.clone(),
                 subtitles: Some(false),
                 kind: Some("record".into()),
@@ -1345,6 +1446,7 @@ fn record_once(app: &AppHandle, bin: &Path, info: &Arc<Mutex<MonitorInfo>>) {
                 ),
             },
             i.pipeline.clone(),
+            i.upload_to.clone(),
             i.auto_record,
         )
     };
@@ -1357,7 +1459,7 @@ fn record_once(app: &AppHandle, bin: &Path, info: &Arc<Mutex<MonitorInfo>>) {
     MonitorManager::emit_info(app, &info.lock().unwrap().clone());
     // The download-started event (emitted inside run_download_blocking via
     // req.title) creates the task item on the frontend.
-    run_download_blocking(app, bin, req, &id, pipeline);
+    run_download_blocking(app, bin, req, &id, pipeline, upload_to);
     {
         let mut i = info.lock().unwrap();
         i.current_job = None;
@@ -1509,5 +1611,33 @@ mod tests {
         assert!(validate_live_url("https://live.bilibili.com/123").is_ok());
         assert!(validate_live_url("https://www.twitch.tv/x").is_ok());
         assert!(validate_live_url("https://www.douyin.com/video/123").is_ok());
+    }
+
+    #[test]
+    fn app_bound_decrypt_failure_gets_guidance() {
+        let raw = "ERROR: Failed to decrypt with DPAPI. See  https://github.com/yt-dlp/yt-dlp/issues/10927  for more info";
+        let mapped = map_browser_cookie_error(Some("chrome"), raw);
+        assert!(mapped.starts_with("浏览器 Cookies 无法解密"));
+        assert!(mapped.contains(raw));
+    }
+
+    #[test]
+    fn locked_cookie_database_gets_guidance() {
+        let raw = "ERROR: Could not copy Chrome cookie database. See  https://github.com/yt-dlp/yt-dlp/issues/7271  for more info";
+        let mapped = map_browser_cookie_error(Some("edge"), raw);
+        assert!(mapped.starts_with("无法读取浏览器 Cookies"));
+        assert!(mapped.contains(raw));
+    }
+
+    #[test]
+    fn unrelated_failures_pass_through() {
+        let raw = "ERROR: HTTP Error 403: Forbidden";
+        assert_eq!(map_browser_cookie_error(Some("chrome"), raw), raw);
+        // And the same error text without a browser choice is left alone —
+        // DPAPI failures can also come from a cookies file, where the
+        // browser guidance would be wrong.
+        let dpapi = "ERROR: Failed to decrypt with DPAPI";
+        assert_eq!(map_browser_cookie_error(None, dpapi), dpapi);
+        assert_eq!(map_browser_cookie_error(Some(""), dpapi), dpapi);
     }
 }

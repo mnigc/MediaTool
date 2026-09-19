@@ -10,7 +10,6 @@ import {
   InfoIcon,
   MusicIcon,
   RadioIcon,
-  SettingsIcon,
   SlidersIcon,
   WorkflowIcon,
 } from "./icons";
@@ -21,7 +20,6 @@ const MODULE_ICONS: Record<ModuleId, ComponentType<{ className?: string }>> = {
   video: FilmIcon,
   audio: MusicIcon,
   workflow: WorkflowIcon,
-  tools: SettingsIcon,
   tasks: ChartIcon,
   presets: SlidersIcon,
   settings: GlobeIcon,
@@ -34,7 +32,6 @@ const MODULE_LABEL: Record<ModuleId, string> = {
   video: "nav.module.video",
   audio: "nav.module.audio",
   workflow: "nav.module.workflow",
-  tools: "nav.module.tools",
   tasks: "nav.module.tasks",
   presets: "nav.module.presets",
   settings: "nav.module.settings",
@@ -112,9 +109,6 @@ export default function ToolNav({ route, onNavigate }: Props) {
                   </span>
                 )}
               </span>
-              {isActive && (
-                <span className="ml-auto flex h-1.5 w-1.5 shrink-0 rounded-full bg-brand-500" />
-              )}
             </button>
           );
         })}

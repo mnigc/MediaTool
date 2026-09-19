@@ -10,6 +10,7 @@ mod models;
 mod state;
 mod streamlink;
 mod thumbnail;
+mod upload;
 mod ytdlp;
 
 use tauri::Manager;
@@ -26,6 +27,8 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(JobManager::new())
         .manage(MonitorManager::default())
+        .manage(upload::UploadManager::default())
+        .manage(upload::OauthManager::default())
         .invoke_handler(tauri::generate_handler![
             cache::cache_report,
             cache::cache_clean,
@@ -38,6 +41,10 @@ pub fn run() {
             commands::detect_gpu,
             commands::inspect_media,
             thumbnail::get_thumbnail,
+            upload::upload_start,
+            upload::cancel_upload,
+            upload::oauth_begin,
+            upload::oauth_cancel,
             ytdlp::ytdlp_status,
             ytdlp::ytdlp_install,
             ytdlp::ytdlp_latest_version,

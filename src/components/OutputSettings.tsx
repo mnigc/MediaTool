@@ -25,7 +25,7 @@ interface OutputSettingsProps {
 
 /** The suffix is concatenated into output filenames — strip path separators
  *  and characters Windows filenames forbid. */
-const sanitizeSuffix = (raw: string) =>
+export const sanitizeSuffix = (raw: string) =>
   raw.replace(/[/\\:*?"<>|]/g, "").replace(/[\x00-\x1f]/g, "");
 
 export default function OutputSettings({ compact = false }: OutputSettingsProps) {
@@ -95,7 +95,7 @@ export default function OutputSettings({ compact = false }: OutputSettingsProps)
     <div className="rounded-xl bg-neutral-50/50 dark:bg-neutral-900/50 ring-1 ring-neutral-200/50 dark:ring-neutral-800/50 p-3">
       <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
         <div>
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+          <div className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
             {t("sidebar.output")}
           </div>
           <div className="mt-1 flex items-center rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-800">
@@ -125,7 +125,7 @@ export default function OutputSettings({ compact = false }: OutputSettingsProps)
           </div>
         </div>
         <div>
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+          <div className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
             {t("sidebar.suffix")}
           </div>
           <input
@@ -136,7 +136,7 @@ export default function OutputSettings({ compact = false }: OutputSettingsProps)
           />
         </div>
         <div>
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+          <div className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
             {t("sidebar.overwritePolicy")}
           </div>
           <Select
@@ -150,7 +150,7 @@ export default function OutputSettings({ compact = false }: OutputSettingsProps)
           </Select>
         </div>
         <div>
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+          <div className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
             {t("sidebar.parallel")}
           </div>
           <Select

@@ -1,73 +1,106 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useI18n } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
+import { usePipelineRuns } from "../contexts/PipelineCenter";
+import {
+  addPipeline,
+  pipelineDisplayName,
+  removePipeline,
+  renamePipeline,
+  usePipelines,
+} from "../workflow/pipelines";
+import type { Pipeline } from "../workflow/pipelines";
 import { VIDEO_EXTS } from "./registry";
 import { openOutputFolder } from "../lib/tauri";
 import { friendlyError } from "../lib/errors";
 import { defaultParamsFor } from "../lib/defaults";
+import { useConfirm } from "../components/ConfirmDialog";
+import UploadTargetChips from "../components/UploadTargetChips";
 import JobParamsEditor from "./JobParamsEditor";
-import { startWorkflow } from "../workflow/engine";
-import { TERMINAL_STEP_TOOLS, WORKFLOW_STEP_TOOLS, type StepRun, type WorkflowStep } from "../workflow/types";
+import {
+  CheckIcon,
+  SpinnerIcon,
+  XIcon,
+} from "../components/icons";
+import { TERMINAL_STEP_TOOLS, WORKFLOW_STEP_TOOLS, type WorkflowStep } from "../workflow/types";
 import type { JobParams, ToolId } from "../types";
 
 let stepCounter = 0;
 const newStepId = () => `step-${++stepCounter}`;
 
-function firstVideo(paths: string[]): string | null {
-  const v = paths.find((p) => {
-    const ext = p.replace(/\\/g, "/").split(".").pop()?.toLowerCase() ?? "";
-    return VIDEO_EXTS.includes(ext);
-  });
-  return v ?? null;
+function isVideo(p: string): boolean {
+  const ext = p.replace(/\\/g, "/").split(".").pop()?.toLowerCase() ?? "";
+  return VIDEO_EXTS.includes(ext);
 }
+
+function basename(p: string): string {
+  const norm = p.replace(/\\/g, "/");
+  return norm.slice(norm.lastIndexOf("/") + 1);
+}
+
+type NameModal =
+  | { mode: "save"; name: string }
+  | { mode: "rename"; id: string; name: string }
+  | null;
 
 export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
   const { t } = useI18n();
   const tasks = useTasks();
-  const [input, setInput] = useState<string | null>(null);
+  const runs = usePipelineRuns();
+  const pipelines = usePipelines();
+  const { confirm, dialog: confirmDialog } = useConfirm();
+
+  const [files, setFiles] = useState<string[]>([]);
   const [steps, setSteps] = useState<WorkflowStep[]>([]);
+  const [uploadTo, setUploadTo] = useState<string[]>([]);
   const [addOpen, setAddOpen] = useState(false);
-  const [running, setRunning] = useState(false);
-  const [runStates, setRunStates] = useState<StepRun[]>([]);
-  const [result, setResult] = useState<{ ok: boolean; error?: string | null; output?: string | null } | null>(null);
-  const handleRef = useRef<ReturnType<typeof startWorkflow> | null>(null);
+  const [loadOpen, setLoadOpen] = useState(false);
+  const [nameModal, setNameModal] = useState<NameModal>(null);
+  /** Pipeline the current chain was loaded from / saved as — its name labels
+   *  the run; editing the chain afterwards keeps the stale label, which is
+   *  fine for a display snapshot. */
+  const [linkedPipeline, setLinkedPipeline] = useState<Pipeline | null>(null);
+  const [lastRunId, setLastRunId] = useState<string | null>(null);
   const addRef = useRef<HTMLDivElement>(null);
+  const loadRef = useRef<HTMLDivElement>(null);
+
+  const lastRun = runs.runs.find((r) => r.id === lastRunId) ?? null;
 
   useEffect(() => {
     tasks.registerDropHandler((paths) => {
-      const v = firstVideo(paths);
-      if (v) {
-        setInput(v);
-        setResult(null);
+      const v = paths.filter(isVideo);
+      if (v.length > 0) {
+        setFiles((prev) => {
+          const seen = new Set(prev);
+          return [...prev, ...v.filter((p) => !seen.has(p))];
+        });
       }
     });
     return () => tasks.registerDropHandler(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Close the "add step" dropdown when clicking outside of it.
+  // Close the "add step" / "load pipeline" dropdowns on outside clicks.
   useEffect(() => {
-    if (!addOpen) return;
+    if (!addOpen && !loadOpen) return;
     const onClick = (e: MouseEvent) => {
-      if (addRef.current && !addRef.current.contains(e.target as Node)) {
-        setAddOpen(false);
-      }
+      if (addRef.current && !addRef.current.contains(e.target as Node)) setAddOpen(false);
+      if (loadRef.current && !loadRef.current.contains(e.target as Node)) setLoadOpen(false);
     };
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
-  }, [addOpen]);
+  }, [addOpen, loadOpen]);
 
   const browse = async () => {
     const sel = await open({
-      multiple: false,
+      multiple: true,
       title: t("opt.selectFiles"),
       filters: [{ name: t("dz.filter.video"), extensions: VIDEO_EXTS }],
     });
-    if (sel && !Array.isArray(sel)) {
-      setInput(sel);
-      setResult(null);
-    }
+    if (!sel) return;
+    const list = Array.isArray(sel) ? sel : [sel];
+    setFiles((prev) => [...prev, ...list.filter((p) => isVideo(p) && !prev.includes(p))]);
   };
 
   const addStep = (toolId: string) => {
@@ -92,50 +125,63 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
     });
   };
 
-  const canRun = !running && !!input && steps.length > 0;
+  const loadPipeline = (p: Pipeline) => {
+    setSteps(p.steps.map((s) => ({ id: newStepId(), toolId: s.toolId, params: { ...s.params } })));
+    setLinkedPipeline(p);
+    setLoadOpen(false);
+  };
+
+  const savePipeline = (name: string) => {
+    const created = addPipeline(
+      name,
+      steps.map((s) => ({ toolId: s.toolId, params: s.params }))
+    );
+    setLinkedPipeline(created);
+    setNameModal(null);
+  };
+
+  const applyRename = (id: string, name: string) => {
+    renamePipeline(id, name);
+    setLinkedPipeline((p) => (p && p.id === id ? { ...p, name: name.trim() } : p));
+    setNameModal(null);
+  };
+
+  const deletePipeline = async (p: Pipeline) => {
+    const ok = await confirm({
+      title: t("workflow.pipeline.delete"),
+      message: t("workflow.pipeline.deleteMsg", { name: pipelineDisplayName(p, t) }),
+      confirmLabel: t("workflow.pipeline.delete"),
+      cancelLabel: t("confirm.cancel"),
+      danger: true,
+    });
+    if (!ok) return;
+    removePipeline(p.id);
+    setLinkedPipeline((cur) => (cur && cur.id === p.id ? null : cur));
+  };
+
   // A terminal step (screenshot/extract-audio) emits a non-video artifact:
   // nothing can run after it, so once present no further steps can be added.
   const hasTerminal = steps.some((s) => TERMINAL_STEP_TOOLS.includes(s.toolId));
+  const runName =
+    linkedPipeline?.name ??
+    steps.map((s) => t(`tool.${s.toolId}.name`)).join(" + ");
 
-  const onUpdate = useCallback((r: StepRun) => {
-    setRunStates((prev) => {
-      const next = [...prev];
-      next[r.index] = r;
-      return next;
-    });
-  }, []);
+  const canRun = files.length > 0 && steps.length > 0 && lastRun?.phase !== "running";
 
-  const run = async () => {
-    if (!input || steps.length === 0) return;
-    setRunning(true);
-    setResult(null);
-    setRunStates(steps.map(() => ({ index: 0, status: "idle", percent: 0 })));
-    handleRef.current = startWorkflow({
-      input,
-      steps,
-      settings: {
-        outputDir: tasks.settings.outputDir ?? undefined,
-        outputSuffix: tasks.settings.outputSuffix,
-        gpu: tasks.settings.gpu,
-        overwritePolicy: tasks.settings.overwritePolicy,
-      },
-      onUpdate,
-      onFinish: (ok, error, output) => {
-        setRunning(false);
-        setResult({ ok, error, output });
-      },
-      t,
-    });
-    try {
-      await handleRef.current.promise;
-    } catch {
-      setRunning(false);
-    }
+  const start = () => {
+    if (!canRun) return;
+    setLastRunId(
+      runs.startRun({
+        name: runName,
+        steps: steps.map((s) => ({ id: s.id, toolId: s.toolId, params: s.params })),
+        files,
+        uploadTo,
+      })
+    );
   };
 
-  const cancel = () => handleRef.current?.cancel();
-
-  const runningState = (i: number): StepRun | undefined => runStates[i];
+  const doneCount = lastRun?.files.filter((f) => f.status === "done" || f.status === "skipped").length ?? 0;
+  const runningFile = lastRun?.files.find((f) => f.status === "running");
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -164,41 +210,154 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
         )}
       </div>
 
-      {/* Input */}
+      {/* Input files */}
       <div className="rounded-xl bg-neutral-50 p-3 ring-1 ring-neutral-200 dark:bg-neutral-900/50 dark:ring-neutral-800">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={() => void browse()}
-            disabled={running}
+            disabled={lastRun?.phase === "running"}
             className="shrink-0 rounded-lg border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs font-medium text-brand-700 transition hover:bg-brand-100 disabled:opacity-40 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-300 dark:hover:bg-brand-900"
           >
-            {input ? t("workflow.changeInput") : t("workflow.chooseInput")}
+            {t("workflow.addFiles")}
           </button>
-          {input ? (
-            <span className="min-w-0 flex-1 truncate text-sm text-neutral-700 dark:text-neutral-200" title={input}>
-              {input.replace(/\\/g, "/").split("/").pop()}
-            </span>
-          ) : (
-            <span className="text-xs text-neutral-400 dark:text-neutral-500">{t("workflow.noInputHint")}</span>
+          {files.length > 0 && (
+            <>
+              <span className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                {t("workflow.filesCount", { n: files.length })}
+              </span>
+              <button
+                type="button"
+                onClick={() => setFiles([])}
+                disabled={lastRun?.phase === "running"}
+                className="ml-auto rounded-lg px-2 py-1 text-xs text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-600 disabled:opacity-40 dark:hover:bg-neutral-800"
+              >
+                {t("workflow.clearFiles")}
+              </button>
+            </>
           )}
         </div>
-        {!input && (
-          <p className="mt-2 text-xs text-neutral-400 dark:text-neutral-500">{t("workflow.dragHint")}</p>
+        {files.length > 0 ? (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {files.map((f) => (
+              <span
+                key={f}
+                className="inline-flex max-w-full items-center gap-1 rounded-full bg-white px-2.5 py-1 text-xs text-neutral-700 ring-1 ring-neutral-200 dark:bg-neutral-800 dark:text-neutral-200 dark:ring-neutral-700"
+                title={f}
+              >
+                <span className="max-w-[220px] truncate">{basename(f)}</span>
+                {lastRun?.phase !== "running" && (
+                  <button
+                    type="button"
+                    onClick={() => setFiles((prev) => prev.filter((x) => x !== f))}
+                    className="text-neutral-300 transition hover:text-error-500 dark:text-neutral-500"
+                    aria-label={t("job.remove")}
+                  >
+                    <XIcon className="h-3 w-3" />
+                  </button>
+                )}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-2 text-xs text-neutral-400 dark:text-neutral-500">
+            {t("workflow.dragHint")}
+          </p>
         )}
+      </div>
+
+      {/* Pipeline save / load */}
+      <div className="mt-3 flex items-center gap-2">
+        <div className="relative" ref={loadRef}>
+          <button
+            type="button"
+            onClick={() => setLoadOpen((v) => !v)}
+            disabled={lastRun?.phase === "running"}
+            className="rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 disabled:opacity-40 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+          >
+            {t("workflow.pipeline.load")}
+          </button>
+          {loadOpen && (
+            <div className="absolute left-0 top-full z-30 mt-1 max-h-72 w-64 overflow-y-auto rounded-xl border border-neutral-200 bg-white p-1.5 shadow-card dark:border-neutral-700 dark:bg-neutral-900 animate-slide-up">
+              {pipelines.length === 0 && (
+                <p className="px-2.5 py-2 text-xs text-neutral-400 dark:text-neutral-500">
+                  {t("workflow.pipeline.none")}
+                </p>
+              )}
+              {pipelines.map((p) => (
+                <div key={p.id} className="group flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => loadPipeline(p)}
+                    title={p.descKey ? t(p.descKey) : undefined}
+                    className="min-w-0 flex-1 truncate rounded-lg px-2.5 py-2 text-left text-xs text-neutral-700 transition hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800"
+                  >
+                    {pipelineDisplayName(p, t)}
+                    {p.builtin && (
+                      <span className="ml-1.5 text-[10px] text-neutral-400 dark:text-neutral-500">
+                        {t("preset.builtin")}
+                      </span>
+                    )}
+                  </button>
+                  {!p.builtin && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setNameModal({ mode: "rename", id: p.id, name: p.name })}
+                        className="rounded px-1 py-1 text-[10px] text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-600 dark:hover:bg-neutral-800"
+                        title={t("workflow.pipeline.rename")}
+                      >
+                        {t("workflow.pipeline.rename")}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void deletePipeline(p)}
+                        className="rounded px-1 py-1 text-[10px] text-neutral-400 transition hover:bg-error-50 hover:text-error-500 dark:hover:bg-error-950/30"
+                        title={t("workflow.pipeline.delete")}
+                      >
+                        {t("workflow.pipeline.delete")}
+                      </button>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={() => setNameModal({ mode: "save", name: linkedPipeline?.name ?? "" })}
+          disabled={steps.length === 0}
+          className="rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 disabled:opacity-40 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+        >
+          {t("workflow.pipeline.save")}
+        </button>
+        {linkedPipeline && (
+          <span className="min-w-0 truncate text-xs text-neutral-400 dark:text-neutral-500">
+            {t("workflow.pipeline.loaded", { name: linkedPipeline.name })}
+          </span>
+        )}
+      </div>
+
+      {/* Upload targets: the run's products go here when finished. */}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <span className="shrink-0 text-xs font-medium text-neutral-500 dark:text-neutral-400">
+          {t("upload.pick.title")}
+        </span>
+        <UploadTargetChips selected={uploadTo} onChange={setUploadTo} />
       </div>
 
       {/* Steps */}
       <div className="mt-4">
         <div className="mb-2 flex items-center justify-between">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400 dark:text-neutral-500">
+          <span className="text-xs font-semibold text-neutral-600 dark:text-neutral-300">
             {t("workflow.steps")} · {steps.length}
           </span>
           <div className="relative" ref={addRef}>
             <button
               type="button"
               onClick={() => setAddOpen((v) => !v)}
-              disabled={running}
+              disabled={lastRun?.phase === "running"}
               className="rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 disabled:opacity-40 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
             >
               {t("workflow.addStep")}
@@ -234,7 +393,7 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
         ) : (
           <div className="space-y-2">
             {steps.map((st, i) => {
-              const rs = runningState(i);
+              const locked = lastRun?.phase === "running";
               return (
                 <div
                   key={st.id}
@@ -247,22 +406,7 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
                     <span className="min-w-0 flex-1 truncate text-sm font-medium text-neutral-800 dark:text-neutral-100">
                       {t(`tool.${st.toolId}.name`)}
                     </span>
-                    {rs && rs.status === "running" && (
-                      <span className="text-[10px] text-brand-600 dark:text-brand-400">
-                        {Math.round(rs.percent)}%
-                      </span>
-                    )}
-                    {rs && rs.status === "done" && (
-                      <span className="rounded-full bg-success-50 px-2 py-0.5 text-[10px] font-medium text-success-600 dark:bg-success-950/30 dark:text-success-400">
-                        {t("app.doneBadge")}
-                      </span>
-                    )}
-                    {rs && rs.status === "error" && (
-                      <span className="rounded-full bg-error-50 px-2 py-0.5 text-[10px] font-medium text-error-600 dark:bg-error-950/30 dark:text-error-400">
-                        {t("app.failedBadge")}
-                      </span>
-                    )}
-                    {!running && (
+                    {!locked && (
                       <>
                         <button
                           type="button"
@@ -297,13 +441,7 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
                     )}
                   </div>
 
-                  {rs && rs.status === "error" && rs.error && (
-                    <div className="mt-2 rounded-lg bg-error-50 px-3 py-2 text-[11px] text-error-600 dark:bg-error-950/30 dark:text-error-400">
-                      {rs.error}
-                    </div>
-                  )}
-
-                  {!running && (
+                  {!locked && (
                     <div className="mt-3 border-t border-neutral-100 pt-3 dark:border-neutral-700/60">
                       <JobParamsEditor
                         toolId={st.toolId}
@@ -319,12 +457,12 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
         )}
       </div>
 
-      {/* Actions */}
+      {/* Run */}
       <div className="mt-4 flex items-center gap-2">
-        {running ? (
+        {lastRun?.phase === "running" ? (
           <button
             type="button"
-            onClick={cancel}
+            onClick={() => runs.cancelRun(lastRun.id)}
             className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-error-200 bg-error-50 px-4 py-2.5 text-sm font-medium text-error-600 transition hover:bg-error-100 dark:border-error-800 dark:bg-error-950/30 dark:text-error-400"
           >
             {t("confirm.cancel")}
@@ -332,35 +470,185 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
         ) : (
           <button
             type="button"
-            onClick={() => void run()}
+            onClick={start}
             disabled={!canRun}
             className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-brand-600 dark:hover:bg-brand-700"
           >
-            {t("workflow.run")}
-          </button>
-        )}
-        {result && result.output && (
-          <button
-            type="button"
-            onClick={() => openOutputFolder(result.output!)}
-            className="flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
-          >
-            {t("job.open")}
+            {t("workflow.run.start")}
           </button>
         )}
       </div>
 
-      {result && (
-        <div
-          className={`mt-3 rounded-xl px-4 py-3 text-sm ${
-            result.ok
-              ? "bg-success-50 text-neutral-800 ring-1 ring-success-100 dark:bg-success-950/20 dark:ring-success-900/50"
-              : "bg-error-50 text-error-700 ring-1 ring-error-100 dark:bg-error-950/30 dark:text-error-400"
-          }`}
-        >
-          {result.ok
-            ? t("workflow.finished")
-            : `${t("workflow.failed")}${result.error ? ` · ${friendlyError(result.error, t)}` : ""}`}
+      {/* Run progress */}
+      {lastRun && (
+        <div className="mt-4 rounded-xl bg-white p-4 ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-800">
+          <div className="flex items-center gap-2">
+            <span className="min-w-0 flex-1 truncate text-sm font-semibold text-neutral-800 dark:text-neutral-100">
+              {lastRun.name}
+            </span>
+            <span className="shrink-0 text-xs text-neutral-400 dark:text-neutral-500">
+              {t("workflow.run.fileOf", { i: Math.min(doneCount + (runningFile ? 1 : 0), lastRun.files.length), n: lastRun.files.length })}
+            </span>
+          </div>
+
+          {lastRun.phase === "running" && (
+            <>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
+                <div
+                  className="h-full rounded-full bg-brand-500 transition-all duration-300"
+                  style={{ width: `${Math.max(Math.round(runningFile?.percent ?? 0), 2)}%` }}
+                />
+              </div>
+              <p className="mt-1 flex items-center gap-1.5 text-[11px] text-neutral-400 dark:text-neutral-500">
+                <SpinnerIcon className="h-3 w-3 animate-spin text-brand-500" />
+                {t("workflow.run.step", {
+                  name: t(
+                    `tool.${lastRun.steps[runningFile?.stepIndex ?? 0]?.toolId ?? lastRun.steps[0]?.toolId ?? ""}.name`
+                  ),
+                })}
+              </p>
+            </>
+          )}
+
+          {(lastRun.phase === "done" || lastRun.phase === "error") && (
+            <p
+              className={`mt-2 flex items-center gap-1.5 text-xs font-medium ${
+                lastRun.phase === "done"
+                  ? "text-success-600 dark:text-success-400"
+                  : "text-error-600 dark:text-error-400"
+              }`}
+            >
+              {lastRun.phase === "done" ? (
+                <>
+                  <CheckIcon className="h-3.5 w-3.5" />
+                  {t("workflow.run.done")}
+                </>
+              ) : (
+                t("workflow.run.failed")
+              )}
+            </p>
+          )}
+          {lastRun.phase === "cancelled" && (
+            <p className="mt-2 text-xs text-neutral-400 dark:text-neutral-500">
+              {t("workflow.run.cancelled")}
+            </p>
+          )}
+
+          <div className="mt-3 space-y-1.5 border-t border-neutral-100 pt-3 dark:border-neutral-700/60">
+            {lastRun.files.map((f, i) => {
+              const ok = f.status === "done" || f.status === "skipped";
+              return (
+                <div key={`${f.input}-${i}`} className="flex items-center gap-2 text-xs">
+                  <span className="w-4 shrink-0 text-center">
+                    {ok ? (
+                      <CheckIcon className="h-3 w-3 text-success-500" />
+                    ) : f.status === "running" ? (
+                      <SpinnerIcon className="h-3 w-3 animate-spin text-brand-500" />
+                    ) : f.status === "error" ? (
+                      <span className="text-error-500">✕</span>
+                    ) : f.status === "cancelled" ? (
+                      <span className="text-neutral-300 dark:text-neutral-600">—</span>
+                    ) : (
+                      <span className="text-neutral-300 dark:text-neutral-600">·</span>
+                    )}
+                  </span>
+                  <span
+                    className={`min-w-0 flex-1 truncate ${
+                      f.status === "pending"
+                        ? "text-neutral-400 dark:text-neutral-500"
+                        : "text-neutral-700 dark:text-neutral-200"
+                    }`}
+                    title={f.input}
+                  >
+                    {basename(f.input)}
+                  </span>
+                  {f.status === "error" && f.error && (
+                    <span
+                      className="max-w-[45%] truncate text-[11px] text-error-500 dark:text-error-400"
+                      title={friendlyError(f.error, t)}
+                    >
+                      {friendlyError(f.error, t)}
+                    </span>
+                  )}
+                  {ok && f.output && (
+                    <button
+                      type="button"
+                      onClick={() => void openOutputFolder(f.output!)}
+                      className="shrink-0 text-[11px] font-medium text-brand-600 transition hover:text-brand-700 dark:text-brand-400"
+                      title={f.output}
+                    >
+                      {t("job.open")}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {(lastRun.phase === "error" || lastRun.phase === "cancelled") && (
+            <div className="mt-3 flex justify-end">
+              <button
+                type="button"
+                onClick={() => runs.retryRun(lastRun.id)}
+                className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs font-medium text-brand-700 transition hover:bg-brand-100 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-300 dark:hover:bg-brand-900"
+              >
+                {t("workflow.run.retry")}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {confirmDialog}
+
+      {nameModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setNameModal(null)} />
+          <div className="relative z-10 w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-700 slide-up">
+            <h3 className="text-sm font-semibold text-neutral-800 dark:text-neutral-100">
+              {nameModal.mode === "save" ? t("workflow.pipeline.saveTitle") : t("workflow.pipeline.rename")}
+            </h3>
+            <label className="mt-3 flex flex-col gap-1">
+              <span className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                {t("workflow.pipeline.nameLabel")}
+              </span>
+              <input
+                autoFocus
+                value={nameModal.name}
+                onChange={(e) => setNameModal({ ...nameModal, name: e.target.value } as NameModal)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && nameModal.name.trim()) {
+                    nameModal.mode === "save"
+                      ? savePipeline(nameModal.name)
+                      : applyRename(nameModal.id, nameModal.name);
+                  }
+                }}
+                placeholder={t("workflow.pipeline.namePlaceholder")}
+                className="rounded-lg border border-neutral-300 bg-white px-2.5 py-1.5 text-sm text-neutral-700 shadow-sm focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-100 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+              />
+            </label>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setNameModal(null)}
+                className="rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-sm font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+              >
+                {t("pm.cancel")}
+              </button>
+              <button
+                type="button"
+                disabled={!nameModal.name.trim()}
+                onClick={() =>
+                  nameModal.mode === "save"
+                    ? savePipeline(nameModal.name)
+                    : applyRename(nameModal.id, nameModal.name)
+                }
+                className="rounded-lg bg-brand-500 px-4 py-1.5 text-sm font-medium text-white shadow-sm transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-brand-600 dark:hover:bg-brand-700"
+              >
+                {t("pm.save")}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

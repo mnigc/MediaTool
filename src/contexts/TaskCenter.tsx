@@ -16,7 +16,11 @@ import { useI18n } from "../i18n";
 import { isBatchEditable } from "../tools/kinds";
 import { extOk } from "../tools/FilePicker";
 import { getTool, type WorkbenchId } from "../tools/registry";
-import type { GpuInfo } from "../types";
+import { useUploads } from "./UploadCenter";
+import { runSteps } from "../workflow/runner";
+import { stepsForPipelineIds } from "../workflow/pipelines";
+import type { GpuInfo, WorkflowStepInput } from "../types";
+import type { PipelineRun } from "../workflow/types";
 import type { Job, JobParams, ToolId, ToolParams } from "../types";
 
 export interface TaskSettings {
@@ -55,8 +59,9 @@ function sanitizePersisted(j: Job): Job | null {
     createdAt: j.createdAt ?? null,
     logs: j.logs ?? null,
     resultFiles: j.resultFiles ?? undefined,
+    pipelineSteps: Array.isArray(j.pipelineSteps) ? j.pipelineSteps : [],
     // transient fields are intentionally dropped:
-    // rustId, speed, sizeEstimate, estimating
+    // rustId, speed, sizeEstimate, estimating, pipeline (runtime state)
   };
 }
 
@@ -125,7 +130,12 @@ interface TaskCenterValue {
   totalIn: number;
   totalOut: number;
   registerDropHandler: (fn: ((paths: string[]) => void) | null) => void;
-  addCompressFiles: (paths: string[], toolId: ToolId, multiFile?: boolean) => void;
+  addCompressFiles: (
+    paths: string[],
+    toolId: ToolId,
+    multiFile?: boolean,
+    opts?: { pipelineIds?: string[]; uploadTo?: string[] }
+  ) => Promise<void>;
   mergeAndStart: (toolId: WorkbenchId, paths: string[]) => void;
   pickFiles: (filters?: Array<{ name: string; extensions: string[] }>) => Promise<void>;
   chooseOutput: () => Promise<void>;
@@ -147,7 +157,14 @@ interface TaskCenterValue {
   reorderStart: (uiId: string) => void;
   reorderOver: (uiId: string) => void;
   reorderDrop: (uiId: string) => void;
-  addTasks: (toolId: ToolId, paths: string[], params: ToolParams) => Promise<void>;
+  addTasks: (
+    toolId: ToolId,
+    paths: string[],
+    params: ToolParams,
+    opts?: { pipelineIds?: string[]; uploadTo?: string[] }
+  ) => Promise<void>;
+  /** Run a pipeline over a finished job's output (card-level manual action). */
+  runJobPipeline: (uiId: string, pipelineId: string) => void;
 }
 
 const TaskCenterContext = createContext<TaskCenterValue | null>(null);
@@ -173,6 +190,11 @@ export function TaskCenterProvider({
   const [loading, setLoading] = useState(true);
   const [settings, setSettings] = useState<TaskSettings>(loadSettings);
   const [gpuInfo, setGpuInfo] = useState<GpuInfo>({ available: false, backends: [] });
+
+  // Auto-upload hook: resolved once, used inside the mount-only done listener.
+  const { uploadOnce } = useUploads();
+  const uploadOnceRef = useRef(uploadOnce);
+  uploadOnceRef.current = uploadOnce;
 
   const jobsRef = useRef<Job[]>(jobs);
   jobsRef.current = jobs;
@@ -210,6 +232,8 @@ export function TaskCenterProvider({
   const runningCount = useRef(0);
   // Jobs with an in-flight startJob call (double-click guard).
   const startingRef = useRef<Set<string>>(new Set());
+  // In-flight bound-pipeline runs keyed by job uiId.
+  const pipelineHandles = useRef(new Map<string, () => void>());
 
   const dragId = useRef<string | null>(null);
   const dragOverId = useRef<string | null>(null);
@@ -268,6 +292,19 @@ export function TaskCenterProvider({
 
       if (e.ok) {
         onToastRef.current?.("success", tRef.current("toast.done"));
+        // Completion hooks (only for jobs this center owns — pipeline step
+        // events from the download center have no matching card and are
+        // ignored above). With a bound pipeline the encode output is only an
+        // intermediate: run the pipeline after it; the pipeline's final
+        // output is what gets pushed to the auto-upload targets.
+        if (e.output && finished && finished.phase === "running") {
+          if (finished.pipelineSteps && finished.pipelineSteps.length > 0) {
+            runJobPipelineInternal(finished.uiId, e.output, finished.pipelineSteps);
+          } else {
+            // Without a bound pipeline the encode output IS the product.
+            uploadOnceRef.current(finished.uploadTo ?? [], [e.output], `job-${e.id}`);
+          }
+        }
       } else if (!e.cancelled) {
         onToastRef.current?.(
           "error",
@@ -334,8 +371,15 @@ export function TaskCenterProvider({
     onToast?.(type, msg);
   }
 
-  async function addCompressFiles(paths: string[], toolId: ToolId, multiFile = true) {
+  async function addCompressFiles(
+    paths: string[],
+    toolId: ToolId,
+    multiFile = true,
+    opts?: { pipelineIds?: string[]; uploadTo?: string[] }
+  ) {
     setError(null);
+    const pipelineSteps = stepsForPipelineIds(opts?.pipelineIds ?? []);
+    const uploadTo = opts?.uploadTo ?? [];
     const list = multiFile ? paths : paths.slice(0, 1);
     for (const p of list) {
       try {
@@ -352,6 +396,9 @@ export function TaskCenterProvider({
           output: null,
           outputSize: null,
           createdAt: Date.now(),
+          pipelineSteps,
+          uploadTo,
+          pipeline: null,
         };
         if (info.mediaType === "unknown") job.error = t("job.unknownError");
         setJobs((prev) => [...prev, job]);
@@ -363,8 +410,15 @@ export function TaskCenterProvider({
   }
 
   /** Create tasks for toolbox tools (single shared params for this batch). */
-  async function addTasks(toolId: ToolId, paths: string[], params: ToolParams) {
+  async function addTasks(
+    toolId: ToolId,
+    paths: string[],
+    params: ToolParams,
+    opts?: { pipelineIds?: string[]; uploadTo?: string[] }
+  ) {
     setError(null);
+    const pipelineSteps = stepsForPipelineIds(opts?.pipelineIds ?? []);
+    const uploadTo = opts?.uploadTo ?? [];
     for (const p of paths) {
       try {
         const info = await probeFile(p);
@@ -379,6 +433,9 @@ export function TaskCenterProvider({
           output: null,
           outputSize: null,
           createdAt: Date.now(),
+          pipelineSteps,
+          uploadTo,
+          pipeline: null,
         };
         if (info.mediaType === "unknown") job.error = t("job.unknownError");
         setJobs((prev) => [...prev, job]);
@@ -433,6 +490,96 @@ export function TaskCenterProvider({
     if (d && !Array.isArray(d)) {
       setSettings((s) => ({ ...s, outputDir: d }));
     }
+  }
+
+  /** Run the post-processing steps bound to a finished job. Progress is
+   *  written onto the job itself so its card shows an inline sub-progress
+   *  instead of spawning a separate workflow entry. */
+  function runJobPipelineInternal(uiId: string, input: string, steps: WorkflowStepInput[]) {
+    if (steps.length === 0) return;
+    const job = jobsRef.current.find((j) => j.uiId === uiId);
+    const uploadTo = job?.uploadTo ?? [];
+    setJobs((prev) =>
+      prev.map((j) =>
+        j.uiId === uiId
+          ? {
+              ...j,
+              pipeline: {
+                phase: "running",
+                stepIndex: 0,
+                percent: 0,
+                output: null,
+                error: null,
+                note: null,
+              } satisfies PipelineRun,
+            }
+          : j
+      )
+    );
+    const handle = runSteps({
+      input,
+      steps,
+      settings: {
+        outputDir: settingsRef.current.outputDir ?? undefined,
+        outputSuffix: settingsRef.current.outputSuffix || "_mediatool",
+        gpu: settingsRef.current.gpu || "",
+        overwritePolicy: settingsRef.current.overwritePolicy,
+      },
+      // Bound pipelines auto-fallback: a lossless-remux step whose source
+      // codecs don't fit MP4 is swapped for the transcode recipe; the run
+      // finishes with a note explaining it.
+      allowCopyFallback: true,
+      onProgress: (percent, stepIndex) => {
+        setJobs((prev) =>
+          prev.map((j) =>
+            j.uiId === uiId && j.pipeline
+              ? { ...j, pipeline: { ...j.pipeline, stepIndex, percent } }
+              : j
+          )
+        );
+      },
+      onFinish: (ok, error, output, note) => {
+        setJobs((prev) =>
+          prev.map((j) =>
+            j.uiId === uiId && j.pipeline
+              ? {
+                  ...j,
+                  pipeline: {
+                    ...j.pipeline,
+                    phase: ok
+                      ? "done"
+                      : error === tRef.current("job.cancelled")
+                        ? "cancelled"
+                        : "error",
+                    percent: ok ? 100 : j.pipeline.percent,
+                    output,
+                    error,
+                    note,
+                  },
+                }
+              : j
+          )
+        );
+        // The pipeline's final output is the product — push IT to the bound
+        // upload targets instead of the raw encode output.
+        if (ok && output) {
+          uploadOnceRef.current(uploadTo, [output], `jobpipe-${uiId}-${output}`);
+        }
+        pipelineHandles.current.delete(uiId);
+      },
+      t: (key, vars) => tRef.current(key, vars),
+    });
+    pipelineHandles.current.set(uiId, handle.cancel);
+  }
+
+  /** Manual card action: run a chosen pipeline over a finished job's output. */
+  function runJobPipeline(uiId: string, pipelineId: string) {
+    const job = jobsRef.current.find((j) => j.uiId === uiId);
+    if (!job || job.phase !== "done" || !job.output) return;
+    if (job.pipeline?.phase === "running") return;
+    const steps = stepsForPipelineIds([pipelineId]);
+    if (steps.length === 0) return;
+    runJobPipelineInternal(uiId, job.output, steps);
   }
 
   async function startOne(uiId: string) {
@@ -513,6 +660,8 @@ export function TaskCenterProvider({
   function cancelOne(uiId: string) {
     const job = jobsRef.current.find((j) => j.uiId === uiId);
     if (job?.rustId) cancelJob(job.rustId);
+    // A finished job may still be running its bound pipeline.
+    pipelineHandles.current.get(uiId)?.();
     // Release the concurrency slot now; the backend's done event for this
     // (already "cancelled") job won't decrement again.
     if (job?.phase === "running") {
@@ -520,19 +669,30 @@ export function TaskCenterProvider({
     }
     setJobs((prev) =>
       prev.map((j) =>
-        j.uiId === uiId ? { ...j, phase: "cancelled" } : j
+        j.uiId === uiId
+          ? {
+              ...j,
+              phase: j.phase === "running" ? ("cancelled" as const) : j.phase,
+              pipeline:
+                j.pipeline?.phase === "running"
+                  ? { ...j.pipeline, phase: "cancelled" as const }
+                  : j.pipeline,
+            }
+          : j
       )
     );
   }
 
   function removeOne(uiId: string) {
     // Removing a running card must also stop the process — otherwise ffmpeg
-    // keeps encoding with no UI left to cancel it.
+    // keeps encoding with no UI left to cancel it. Same for its pipeline.
     const job = jobsRef.current.find((j) => j.uiId === uiId);
     if (job?.phase === "running" && job.rustId) {
       cancelJob(job.rustId);
       runningCount.current = Math.max(0, runningCount.current - 1);
     }
+    pipelineHandles.current.get(uiId)?.();
+    pipelineHandles.current.delete(uiId);
     setJobs((prev) => prev.filter((j) => j.uiId !== uiId));
   }
 
@@ -620,13 +780,16 @@ export function TaskCenterProvider({
   }
 
   function clearFinished() {
+    // Keep finished jobs whose bound pipeline is still running — clearing
+    // them would orphan an in-flight post-processing run.
     setJobs((prev) =>
       prev.filter(
         (j) =>
-          j.phase !== "done" &&
-          j.phase !== "error" &&
-          j.phase !== "cancelled" &&
-          j.phase !== "skipped"
+          (j.phase !== "done" &&
+            j.phase !== "error" &&
+            j.phase !== "cancelled" &&
+            j.phase !== "skipped") ||
+          j.pipeline?.phase === "running"
       )
     );
   }
@@ -637,6 +800,10 @@ export function TaskCenterProvider({
     // to attach to, and the processes would keep running uncontrolled.
     for (const j of jobsRef.current) {
       if (j.phase === "running" && j.rustId) cancelJob(j.rustId);
+    }
+    for (const [uiId, cancel] of pipelineHandles.current) {
+      cancel();
+      pipelineHandles.current.delete(uiId);
     }
     runningCount.current = 0;
     setJobs([]);
@@ -730,6 +897,7 @@ export function TaskCenterProvider({
     reorderOver,
     reorderDrop,
     addTasks,
+    runJobPipeline,
   };
 
   return <TaskCenterContext.Provider value={value}>{children}</TaskCenterContext.Provider>;

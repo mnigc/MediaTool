@@ -11,6 +11,7 @@ interface JobListProps {
   onJobChangeParams: (uiId: string, params: JobParams) => void;
   onJobSyncParams?: (uiId: string) => void;
   onJobRetry: (uiId: string) => void;
+  onJobRunPipeline?: (uiId: string, pipelineId: string) => void;
   onReorderStart: (uiId: string) => void;
   onReorderOver: (uiId: string) => void;
   onReorderDrop: (uiId: string) => void;
@@ -25,6 +26,7 @@ export default function JobList({
   onJobChangeParams,
   onJobSyncParams,
   onJobRetry,
+  onJobRunPipeline,
   onReorderStart,
   onReorderOver,
   onReorderDrop,
@@ -50,6 +52,7 @@ export default function JobList({
           onChangeParams={onJobChangeParams}
           onSyncParams={onJobSyncParams}
           onRetry={onJobRetry}
+          onRunPipeline={onJobRunPipeline}
           onReorderStart={onReorderStart}
           onReorderOver={onReorderOver}
           onReorderDrop={onReorderDrop}

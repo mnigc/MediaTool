@@ -108,9 +108,9 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
 
   return (
     <div className="mx-auto max-w-3xl">
-      <div className="mb-6 flex items-start justify-between gap-4">
+      <div className="mb-4 flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold text-neutral-800 dark:text-neutral-100">
+          <h2 className="text-lg font-semibold text-neutral-800 dark:text-neutral-100">
             {t("module.presets.title")}
           </h2>
         </div>
@@ -141,7 +141,16 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
                 {g.presets.map((p) => (
                   <div
                     key={`${g.toolId}::${p.name}`}
-                    className="flex items-center gap-2 rounded-xl bg-white p-3 ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-800"
+                    role={onOpenTool ? "button" : undefined}
+                    tabIndex={onOpenTool ? 0 : undefined}
+                    onClick={() => onOpenTool?.(g.toolId as WorkbenchId)}
+                    onKeyDown={(e) => {
+                      if (onOpenTool && (e.key === "Enter" || e.key === " ")) {
+                        e.preventDefault();
+                        onOpenTool(g.toolId as WorkbenchId);
+                      }
+                    }}
+                    className="group flex items-center gap-2 rounded-xl bg-white p-3 ring-1 ring-neutral-200 transition hover:ring-brand-200 dark:bg-neutral-900 dark:ring-neutral-800 dark:hover:ring-brand-800"
                   >
                     <span className="min-w-0 flex-1 truncate text-sm text-neutral-800 dark:text-neutral-100">
                       {presetDisplayName(p, t)}
@@ -163,7 +172,10 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
                     </span>
                     <button
                       type="button"
-                      onClick={() => startEdit(p)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        startEdit(p);
+                      }}
                       className="rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
                     >
                       {t("pm.edit")}
@@ -171,7 +183,10 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
                     {p.builtin && p.modified && (
                       <button
                         type="button"
-                        onClick={() => restore(g.toolId, p.name)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          restore(g.toolId, p.name);
+                        }}
                         className="rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-700 transition hover:bg-brand-100 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-300 dark:hover:bg-brand-900"
                         title={t("pm.restore")}
                       >
@@ -181,7 +196,10 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
                     {!p.builtin && (
                       <button
                         type="button"
-                        onClick={() => del(g.toolId, p.name)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void del(g.toolId, p.name);
+                        }}
                         className="rounded-lg px-2.5 py-1 text-xs font-medium text-neutral-400 transition hover:bg-error-50 hover:text-error-500 dark:text-neutral-500 dark:hover:bg-error-950/30 dark:hover:text-error-400"
                         title={t("pm.delete")}
                       >
@@ -189,13 +207,11 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
                       </button>
                     )}
                     {onOpenTool && (
-                      <button
-                        type="button"
-                        onClick={() => onOpenTool(g.toolId as WorkbenchId)}
-                        className="rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-700 transition hover:bg-brand-100 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-300 dark:hover:bg-brand-900"
-                      >
-                        {t("preset.use")}
-                      </button>
+                      <span className="shrink-0 text-neutral-300 opacity-0 transition group-hover:opacity-100 dark:text-neutral-600" aria-hidden>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+                          <path d="m9 18 6-6-6-6" />
+                        </svg>
+                      </span>
                     )}
                   </div>
                 ))}
@@ -226,7 +242,7 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-3">
                   <label className="flex flex-col gap-1">
-                    <span className="text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+                    <span className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
                       {t("pm.name")}
                     </span>
                     <input
@@ -238,7 +254,7 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
                     />
                   </label>
                   <label className="flex flex-col gap-1">
-                    <span className="text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+                    <span className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
                       {t("pm.toolType")}
                     </span>
                     <Select

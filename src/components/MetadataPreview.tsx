@@ -28,7 +28,7 @@ function TagRow({ k, v }: { k: string; v: string }) {
   const priv = PRIVACY_RE.test(k);
   return (
     <div className="flex items-start justify-between gap-3 py-0.5">
-      <span className="flex shrink-0 items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+      <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-neutral-600 dark:text-neutral-300">
         {k}
         {priv && (
           <span className="rounded bg-error-100 px-1 py-0.5 text-[9px] font-semibold text-error-700 dark:bg-error-900/40 dark:text-error-300">
@@ -120,7 +120,7 @@ function FileCard({
                 key={`${s.kind}-${s.index}`}
                 className="mt-2 rounded-md bg-neutral-50/60 px-2 py-1.5 dark:bg-neutral-900/40"
               >
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+                <div className="text-xs font-semibold text-neutral-600 dark:text-neutral-300">
                   {t("stripmd.stream", { i: s.index, kind: s.kind })}
                   {s.language ? ` · ${s.language}` : ""}
                 </div>
@@ -164,7 +164,7 @@ export default function MetadataPreview({ paths }: { paths: string[] }) {
 
   return (
     <div className="mt-4 space-y-2">
-      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-neutral-400 dark:text-neutral-500">
+      <div className="mb-1 text-xs font-semibold text-neutral-600 dark:text-neutral-300">
         {t("stripmd.title")}
       </div>
       <div className="space-y-2">

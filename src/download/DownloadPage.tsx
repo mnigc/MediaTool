@@ -3,11 +3,16 @@ import { ytdlpProbe } from "../lib/tauri";
 import { formatBytes, openOutputFolder } from "../lib/tauri";
 import { useI18n } from "../i18n";
 import { useDownloads } from "../contexts/DownloadCenter";
+import { useUploads } from "../contexts/UploadCenter";
 import { CopyIcon, FilmIcon, FolderIcon, MusicIcon, XIcon } from "../components/icons";
 import Select from "../components/Select";
+import UploadTargetChips from "../components/UploadTargetChips";
+import { Button } from "../components/ui";
+import EmptyState from "../components/EmptyState";
 import SiteStrip from "./SiteStrip";
 import SaveLocationBar from "./SaveLocationBar";
 import { ConfigSidebar, NetworkSection, PipelineChips, SidebarSection } from "./Sidebar";
+import { pipelineById, pipelineDisplayName } from "../workflow/pipelines";
 import type { DownloadTask } from "../contexts/DownloadCenter";
 
 /* ── helpers ────────────────────────────────────────────────────── */
@@ -111,10 +116,12 @@ function NewDownloadForm({
   quality,
   audioFormat,
   pipelineIds,
+  uploadTo,
 }: {
   quality: string;
   audioFormat: string;
   pipelineIds: string[];
+  uploadTo: string[];
 }) {
   const { t } = useI18n();
   const dl = useDownloads();
@@ -143,6 +150,8 @@ function NewDownloadForm({
     setProbing(true);
     ytdlpProbe(u.trim(), {
       cookiesBrowser: dl.settings.cookiesBrowser || null,
+      cookiesFile: dl.settings.cookiesFile || null,
+      cookiesText: dl.settings.cookiesText || null,
       proxy: dl.settings.proxy || null,
     })
       .then((json) => {
@@ -156,7 +165,7 @@ function NewDownloadForm({
         if (probeToken.current === token) setProbing(false);
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dl.settings.cookiesBrowser, dl.settings.proxy]);
+  }, [dl.settings.cookiesBrowser, dl.settings.cookiesFile, dl.settings.cookiesText, dl.settings.proxy]);
 
   // Debounced auto-probe — only meaningful for a single link; batches start
   // without probing so a big paste doesn't fire N requests up front.
@@ -181,6 +190,7 @@ function NewDownloadForm({
             quality,
             audioFormat: quality === "audio" ? audioFormat : null,
             pipelineIds,
+            uploadTo,
           })
           .catch(() => {});
       }
@@ -209,17 +219,18 @@ function NewDownloadForm({
           placeholder={t("dl.urlPlaceholder")}
           className="max-h-60 min-w-0 flex-1 resize-none overflow-y-auto rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm leading-relaxed text-neutral-800 placeholder:text-neutral-400 focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-100 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 dark:focus:border-brand-500"
         />
-        <button
+        <Button
+          variant="primary"
           onClick={() => void start()}
           disabled={disabled}
-          className="shrink-0 self-start rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-brand-600 dark:hover:bg-brand-700"
+          className="self-start"
         >
           {starting
             ? t("dl.starting")
             : urls.length > 1
               ? t("dl.batchDownload", { n: urls.length })
               : t("dl.download")}
-        </button>
+        </Button>
       </div>
 
       {urls.length > 1 ? (
@@ -447,6 +458,15 @@ function DownloadCard({
           {!running && task.phase === "error" && task.retryReq && (
             <CardButton onClick={() => dl.retryTask(task.id)}>{t("job.retry")}</CardButton>
           )}
+          {/* Finished with a bound pipeline that isn't in flight: offer a manual
+              rerun (failed post-processing, or a re-run onto a fresh output). */}
+          {task.phase === "done" &&
+            task.pipelineSteps.length > 0 &&
+            task.pipeline?.phase !== "running" && (
+              <CardButton onClick={() => dl.runPipeline(task.id)}>
+                {t("dl.pipeline.rerun")}
+              </CardButton>
+            )}
           {task.output && (
             <button
               onClick={() => void openOutputFolder(task.output!)}
@@ -572,22 +592,32 @@ function DownloadCard({
 export default function DownloadPage({ onOpenSettings }: { onOpenSettings: () => void }) {
   const { t } = useI18n();
   const dl = useDownloads();
+  const uploads = useUploads();
   // Recordings live on the record page next to their monitors.
   const tasks = dl.tasks.filter((x) => x.kind === "download");
 
   const [quality, setQuality] = useState(dl.settings.quality);
   const [audioFormat, setAudioFormat] = useState("mp3");
   const [pipelineIds, setPipelineIds] = useState<string[]>([]);
+  const [uploadTo, setUploadTo] = useState<string[]>([]);
+  const pipelineSummary = pipelineIds
+    .map((id) => {
+      const p = pipelineById(id);
+      return p ? pipelineDisplayName(p, t) : id;
+    })
+    .join(" → ");
+  const uploadSummary = uploadTo
+    .map((id) => uploads.targets.find((x) => x.id === id)?.name ?? id)
+    .join("、");
 
   return (
     <div className="mx-auto max-w-5xl">
-      <div className="mb-5">
-        <h2 className="text-xl font-semibold text-neutral-800 dark:text-neutral-100">
+      <div className="mb-5 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+        <h2 className="text-lg font-semibold text-neutral-800 dark:text-neutral-100">
           {t("dl.page.title")}
         </h2>
+        <SiteStrip />
       </div>
-
-      <SiteStrip />
 
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:gap-5">
         <div className="min-w-0 flex-1">
@@ -596,20 +626,18 @@ export default function DownloadPage({ onOpenSettings }: { onOpenSettings: () =>
             quality={quality}
             audioFormat={audioFormat}
             pipelineIds={pipelineIds}
+            uploadTo={uploadTo}
           />
 
-          {tasks.length > 0 && (
+          {tasks.length > 0 ? (
           <>
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">
                 {t("dl.tasks")}
               </h3>
-              <button
-                onClick={() => dl.clearFinished("download")}
-                className="rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-[11px] font-medium text-neutral-500 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-800"
-              >
+              <Button size="sm" onClick={() => dl.clearFinished("download")}>
                 {t("dl.clearFinished")}
-              </button>
+              </Button>
             </div>
             <div className="space-y-2.5">
               {tasks.map((x) => (
@@ -617,6 +645,8 @@ export default function DownloadPage({ onOpenSettings }: { onOpenSettings: () =>
               ))}
             </div>
           </>
+        ) : (
+          <EmptyState message={t("dl.empty.hint")} />
         )}
       </div>
 
@@ -642,12 +672,33 @@ export default function DownloadPage({ onOpenSettings }: { onOpenSettings: () =>
           )}
         </SidebarSection>
 
-        <SidebarSection title={t("dl.pipeline.title")}>
+        <SidebarSection
+          title={t("dl.pipeline.title")}
+          collapsible
+          defaultOpen={false}
+          summary={pipelineSummary || t("dl.pipeline.noTreatment")}
+        >
           <PipelineChips selected={pipelineIds} onChange={setPipelineIds} />
         </SidebarSection>
 
-        <SidebarSection title={t("dl.advanced")}>
-          <label className="flex items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+        <SidebarSection
+          title={t("upload.pick.title")}
+          collapsible
+          defaultOpen={false}
+          summary={uploadSummary || t("upload.pick.none")}
+        >
+          <div className="space-y-1.5">
+            <UploadTargetChips selected={uploadTo} onChange={setUploadTo} />
+            {uploadTo.length > 0 && (
+              <p className="text-[11px] text-neutral-400 dark:text-neutral-500">
+                {t("upload.pick.hint")}
+              </p>
+            )}
+          </div>
+        </SidebarSection>
+
+        <SidebarSection title={t("dl.advanced")} collapsible defaultOpen={false}>
+          <label className="flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-300">
             <input
               type="checkbox"
               checked={dl.settings.subtitles}

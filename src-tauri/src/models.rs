@@ -21,12 +21,17 @@ pub struct MediaInfo {
     pub audio_codec: Option<String>,
     pub bitrate_kbps: Option<u64>,
     pub size_bytes: u64,
+    /// HDR transfer detected at probe time (HDR10/HLG, or a DV base layer
+    /// carrying HDR10 metadata). `default` keeps pre-upgrade persisted jobs
+    /// deserializable.
+    #[serde(default)]
+    pub hdr: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoParams {
-    /// libx264 | libvpx-vp9 | libsvtav1 | copy
+    /// libx264 | libx265 | libvpx-vp9 | libsvtav1 | copy
     pub video_codec: String,
     /// crf | target_size | bitrate
     pub quality_mode: String,

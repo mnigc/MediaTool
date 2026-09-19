@@ -535,11 +535,14 @@ fn run_hidden(cmd: &mut Command) -> Result<std::process::ExitStatus> {
 /// capture here). `--json` resolves the plugin and lists the streams without
 /// downloading anything: an object with "streams" means live, an "error"
 /// object means otherwise. Returns `(live_status, title, author)`.
-pub fn probe_live(app: &AppHandle, url: &str, proxy: Option<&str>) -> std::result::Result<(String, String, String), String> {
+pub fn probe_live(app: &AppHandle, url: &str, proxy: Option<&str>, cookies: Option<&str>) -> std::result::Result<(String, String, String), String> {
     let bin = available(app).ok_or_else(|| "streamlink 未安装".to_string())?;
     let mut args: Vec<String> = vec!["--json".into()];
     if let Some(p) = proxy.filter(|p| !p.is_empty()) {
         args.push(format!("--http-proxy={p}"));
+    }
+    if let Some(c) = cookies {
+        args.push(format!("--cookie-file={c}"));
     }
     args.push(url.to_string());
     let mut cmd = Command::new(&bin);
@@ -606,7 +609,7 @@ fn stream_selection(quality: &str) -> (Vec<String>, String) {
     }
 }
 
-fn build_streamlink_args(req: &DownloadRequest, ffmpeg: &Path) -> Vec<String> {
+fn build_streamlink_args(req: &DownloadRequest, ffmpeg: &Path, cookies: Option<&str>) -> Vec<String> {
     let (excludes, name) = stream_selection(&req.quality);
     let mut a = vec![
         "--stdout".into(),
@@ -624,6 +627,9 @@ fn build_streamlink_args(req: &DownloadRequest, ffmpeg: &Path) -> Vec<String> {
     a.extend(excludes);
     if let Some(p) = req.proxy.as_deref().filter(|p| !p.is_empty()) {
         a.push(format!("--http-proxy={p}"));
+    }
+    if let Some(c) = cookies {
+        a.push(format!("--cookie-file={c}"));
     }
     a.push(req.url.clone());
     a.push(name);
@@ -791,6 +797,7 @@ pub fn run_record_blocking(
     req: DownloadRequest,
     id: &str,
     pipeline: Vec<WorkflowStepInput>,
+    upload_to: Vec<String>,
 ) {
     let kind = "record".to_string();
     let fail = |e: String| emit_dl_done(app, id, false, false, &kind, None, Some(e), false, &pipeline);
@@ -804,9 +811,21 @@ pub fn run_record_blocking(
     }
     let out = unique_record_path(Path::new(&req.output_dir), &req);
 
+    // streamlink can't read a browser's cookie store, but a cookies.txt file
+    // (explicit path or materialised pasted text) works the same way.
+    let cookies = crate::ytdlp::cookies_path(
+        app,
+        &crate::ytdlp::NetOptions {
+            cookies_browser: None,
+            cookies_file: req.cookies_file.clone(),
+            cookies_text: req.cookies_text.clone(),
+            proxy: None,
+        },
+    );
+
     let session = match Session::spawn(
         bin,
-        &build_streamlink_args(&req, &ffmpeg),
+        &build_streamlink_args(&req, &ffmpeg, cookies.as_deref()),
         &ffmpeg,
         &build_muxer_args(&out),
     ) {
@@ -831,6 +850,7 @@ pub fn run_record_blocking(
             title,
             kind: kind.clone(),
             pipeline: pipeline.clone(),
+            upload_to,
         },
     );
 

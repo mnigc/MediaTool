@@ -1,11 +1,13 @@
 import {
   Children,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   isValidElement,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { CheckIcon, ChevronDownIcon } from "./icons";
 
 interface Option {
@@ -15,18 +17,20 @@ interface Option {
 }
 
 /** Extract flat options from `<option>` children so call sites keep the same
- *  markup as native selects. */
+ *  markup as native selects. Values are normalized to strings — numeric
+ *  `value={2}` shorthand would otherwise never strictly equal the string
+ *  `value` prop and the trigger would always show the first option. */
 function collectOptions(children: ReactNode): Option[] {
   const out: Option[] = [];
   Children.forEach(children, (child) => {
     if (!isValidElement(child)) return;
     const props = child.props as {
-      value?: string;
+      value?: string | number;
       disabled?: boolean;
       children?: ReactNode;
     };
     out.push({
-      value: props.value ?? "",
+      value: String(props.value ?? ""),
       label: props.children,
       disabled: props.disabled === true,
     });
@@ -63,7 +67,16 @@ export default function Select({
   const [open, setOpen] = useState(false);
   const [highlighted, setHighlighted] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
+  /** Viewport coordinates for the portaled listbox; recomputed while open. */
+  const [pos, setPos] = useState<{
+    top: number;
+    left?: number;
+    right?: number;
+    minWidth: number;
+    flipUp: boolean;
+  } | null>(null);
 
   const selectedIdx = Math.max(
     0,
@@ -81,17 +94,49 @@ export default function Select({
     setOpen(false);
   };
 
-  // Close on outside click.
+  // Close on outside click. The listbox lives in a body portal, so it is
+  // checked separately from the trigger subtree.
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      const target = e.target as Node;
+      if (rootRef.current?.contains(target) || listRef.current?.contains(target)) return;
+      setOpen(false);
     };
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [open]);
+
+  // Position the portaled listbox against the trigger; flip above / align
+  // right when the menu would leave the viewport.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const el = triggerRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const estH = Math.min(240, options.length * 29 + 10);
+      const flipUp =
+        r.bottom + estH + 8 > window.innerHeight &&
+        r.top > window.innerHeight - r.bottom;
+      const overflowsRight = r.left + 320 > window.innerWidth;
+      setPos({
+        top: flipUp ? r.top - 4 : r.bottom + 4,
+        ...(overflowsRight
+          ? { right: Math.max(8, window.innerWidth - r.right), left: undefined }
+          : { left: Math.max(8, r.left), right: undefined }),
+        minWidth: r.width,
+        flipUp,
+      });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open, options.length]);
 
   // Keep the highlighted option visible while keyboard-navigating.
   useEffect(() => {
@@ -162,6 +207,7 @@ export default function Select({
       title={title}
     >
       <button
+        ref={triggerRef}
         type="button"
         disabled={disabled}
         aria-haspopup="listbox"
@@ -190,12 +236,22 @@ export default function Select({
         />
       </button>
 
-      {open && (
-        <ul
-          ref={listRef}
-          role="listbox"
-          className="absolute left-0 top-full z-50 mt-1 max-h-60 w-max min-w-full max-w-80 overflow-y-auto rounded-lg border border-neutral-200 bg-white py-1 shadow-lg scrollbar-thin dark:border-neutral-700 dark:bg-neutral-800"
-        >
+      {open &&
+        pos &&
+        createPortal(
+          <ul
+            ref={listRef}
+            role="listbox"
+            style={{
+              position: "fixed",
+              top: pos.top,
+              left: pos.left,
+              right: pos.right,
+              minWidth: pos.minWidth,
+              transform: pos.flipUp ? "translateY(-100%)" : undefined,
+            }}
+            className="z-50 max-h-60 w-max max-w-80 overflow-y-auto rounded-lg border border-neutral-200 bg-white py-1 shadow-lg scrollbar-thin dark:border-neutral-700 dark:bg-neutral-800"
+          >
           {options.map((o, i) => {
             const isSelected = o.value === value;
             const isHl = i === highlighted;
@@ -230,8 +286,9 @@ export default function Select({
               </li>
             );
           })}
-        </ul>
-      )}
+          </ul>,
+          document.body
+        )}
     </div>
   );
 }

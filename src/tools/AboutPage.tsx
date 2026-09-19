@@ -304,7 +304,7 @@ export default function AboutPage({ currentVersion, updater, onToast }: AboutPag
 
       {/* Features */}
       <section className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-800">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+        <h2 className="text-sm font-semibold text-neutral-600 dark:text-neutral-300">
           {t("about.features.title")}
         </h2>
         <ul className="mt-4 space-y-3">
@@ -438,7 +438,7 @@ export default function AboutPage({ currentVersion, updater, onToast }: AboutPag
 
       {/* Disclaimer */}
       <section className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-800">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+        <h2 className="text-sm font-semibold text-neutral-600 dark:text-neutral-300">
           {t("about.disclaimer.title")}
         </h2>
         <p className="mt-3 text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">

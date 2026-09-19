@@ -7,7 +7,7 @@ function Row({ k, v }: { k: string; v: string | number | null | undefined }) {
   if (v == null || v === "") return null;
   return (
     <div className="flex items-start justify-between gap-3 py-1">
-      <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">{k}</span>
+      <span className="shrink-0 text-xs font-medium text-neutral-600 dark:text-neutral-300">{k}</span>
       <span className="min-w-0 break-all text-right text-xs text-neutral-700 dark:text-neutral-200">{v}</span>
     </div>
   );
@@ -16,7 +16,7 @@ function Row({ k, v }: { k: string; v: string | number | null | undefined }) {
 function Card({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="rounded-xl border border-neutral-200 bg-white p-3 dark:border-neutral-700/60 dark:bg-neutral-800/40">
-      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-neutral-400 dark:text-neutral-500">
+      <div className="mb-1 text-xs font-semibold text-neutral-600 dark:text-neutral-300">
         {title}
       </div>
       {children}

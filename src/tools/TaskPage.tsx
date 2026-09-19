@@ -1,19 +1,27 @@
 import { useCallback } from "react";
 import JobCard from "../components/JobCard";
+import UploadCard from "../components/UploadCard";
+import PipelineRunCard from "../components/PipelineRunCard";
 import EmptyState from "../components/EmptyState";
 import { useConfirm } from "../components/ConfirmDialog";
 import { openOutputFolder } from "../lib/tauri";
 import { useI18n } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
+import { useUploads } from "../contexts/UploadCenter";
+import { usePipelineRuns } from "../contexts/PipelineCenter";
 
 /** Task-center page: a compact overview of every queued job. Parameters are
  *  configured in each module, so the per-job editor lives there, not here. */
 export default function TaskPage() {
   const { t } = useI18n();
   const tasks = useTasks();
+  const uploads = useUploads();
+  const runs = usePipelineRuns();
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   const jobs = tasks.jobs;
+  const uploadTasks = uploads.uploads;
+  const pipelineRuns = runs.runs;
 
   const handleStartAll = useCallback(async () => {
     if (tasks.stats.queuedCount === 0) return;
@@ -77,7 +85,7 @@ export default function TaskPage() {
         </h2>
       </div>
 
-      {jobs.length === 0 ? (
+      {jobs.length === 0 && uploadTasks.length === 0 && pipelineRuns.length === 0 ? (
         <EmptyState />
       ) : (
         <>
@@ -152,11 +160,50 @@ export default function TaskPage() {
                 key={job.uiId}
                 job={job}
                 startIndex={i}
+                showToolBadge
                 onStart={tasks.startOne}
                 onCancel={tasks.cancelOne}
                 onRemove={tasks.removeOne}
                 onOpenFolder={openOutputFolder}
                 onRetry={tasks.retryOne}
+                onRunPipeline={tasks.runJobPipeline}
+              />
+            ))}
+            {pipelineRuns.length > 0 && (
+              <div className="pt-2">
+                <div className="mb-2 flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">
+                    {t("module.tasks.pipelines")}
+                  </h3>
+                  {pipelineRuns.some((r) => r.phase !== "running") && (
+                    <button
+                      onClick={runs.clearFinishedRuns}
+                      className="rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+                    >
+                      {t("app.clearFinishedBtn")}
+                    </button>
+                  )}
+                </div>
+                <div className="space-y-3" role="list" aria-label={t("module.tasks.pipelines")}>
+                  {pipelineRuns.map((r) => (
+                    <PipelineRunCard
+                      key={r.id}
+                      run={r}
+                      onCancel={runs.cancelRun}
+                      onRetry={runs.retryRun}
+                      onRemove={runs.removeRun}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+            {uploadTasks.map((u) => (
+              <UploadCard
+                key={u.id}
+                task={u}
+                onCancel={uploads.cancelUploadTask}
+                onRetry={uploads.retryUploadTask}
+                onRemove={uploads.removeUploadTask}
               />
             ))}
           </div>

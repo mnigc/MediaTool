@@ -7,7 +7,7 @@ export const sel =
 export function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-2">
-      <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+      <span className="shrink-0 text-xs font-medium text-neutral-600 dark:text-neutral-300">
         {label}
       </span>
       <span className="min-w-0 flex-1">{children}</span>

@@ -1,9 +1,9 @@
 import type { ToolId } from "../types";
 
-export type ToolCategory = "video" | "audio" | "tools";
+export type ToolCategory = "video" | "audio";
 
 /** Top-level navigation modules. "tasks" and "presets" are full pages, the
- *  rest (video/audio/tools) render a function-card grid. "workflow" is a
+ *  rest (video/audio) render a function-card grid. "workflow" is a
  *  full-page multi-step pipeline builder. "download"/"record" are the
  *  yt-dlp powered acquisition pages. */
 export type ModuleId =
@@ -11,7 +11,6 @@ export type ModuleId =
   | "record"
   | "video"
   | "audio"
-  | "tools"
   | "tasks"
   | "presets"
   | "workflow"
@@ -56,7 +55,6 @@ export const MODULES: ModuleId[] = [
   "video",
   "audio",
   "workflow",
-  "tools",
   "tasks",
   "presets",
   "settings",
@@ -77,18 +75,18 @@ export const TOOLS: ToolMeta[] = [
   { id: "video-frames", category: "video", accepts: VIDEO_EXTS, multiFile: false, mediaType: "video" },
   { id: "video-contact", category: "video", accepts: VIDEO_EXTS, multiFile: false, mediaType: "video" },
   { id: "video-silence", category: "video", accepts: VIDEO_EXTS, multiFile: false, mediaType: "video" },
+  // Instant ffprobe report; accepts any media type, listed last on the video page.
+  { id: "inspect", category: "video", accepts: ALL_EXTS, multiFile: false },
   // audio
   { id: "audio-compress", category: "audio", accepts: AUDIO_EXTS, multiFile: true, mediaType: "audio" },
   { id: "audio-convert", category: "audio", accepts: AUDIO_EXTS, multiFile: true, mediaType: "audio" },
   { id: "extract-audio", category: "audio", accepts: VIDEO_EXTS, multiFile: true },
   { id: "audio-volume", category: "audio", accepts: AUDIO_EXTS, multiFile: false, mediaType: "audio" },
   { id: "audio-merge", category: "audio", accepts: AUDIO_EXTS, multiFile: true, mediaType: "audio" },
-  // tools (utilities)
-  { id: "inspect", category: "tools", accepts: ALL_EXTS, multiFile: false },
 ];
 
 function categoryToModule(cat: ToolCategory): ModuleId {
-  return cat; // video/audio/tools map 1:1 to their module
+  return cat; // video/audio map 1:1 to their module
 }
 
 export function getTool(id: WorkbenchId): ToolMeta | undefined {
@@ -97,7 +95,7 @@ export function getTool(id: WorkbenchId): ToolMeta | undefined {
 
 /** The top-level module a tool belongs to. */
 export function toolToModule(tool: WorkbenchId): ModuleId {
-  return categoryToModule(getTool(tool)?.category ?? "tools");
+  return categoryToModule(getTool(tool)?.category ?? "video");
 }
 
 /** Function cards shown on a module landing page (empty for tasks/presets). */

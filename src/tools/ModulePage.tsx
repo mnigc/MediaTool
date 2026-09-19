@@ -53,7 +53,6 @@ const MODULE_TITLE: Record<ModuleId, string> = {
   record: "nav.module.record",
   video: "module.video.title",
   audio: "module.audio.title",
-  tools: "module.tools.title",
   tasks: "module.tasks.title",
   presets: "module.presets.title",
   workflow: "module.workflow.title",
@@ -110,8 +109,8 @@ export default function ModulePage({
 
   return (
     <div className="mx-auto max-w-3xl">
-      <div className="mb-6">
-        <h2 className="text-xl font-semibold text-neutral-800 dark:text-neutral-100">
+      <div className="mb-4">
+        <h2 className="text-lg font-semibold text-neutral-800 dark:text-neutral-100">
           {t(MODULE_TITLE[module])}
         </h2>
       </div>

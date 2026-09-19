@@ -43,6 +43,7 @@ pub(crate) fn probe_sync(app: &AppHandle, path: &str) -> Result<MediaInfo> {
     let mut audio_codec = None;
     let mut has_video = false;
     let mut has_audio = false;
+    let mut hdr = false;
 
     if let Some(streams) = v.get("streams").and_then(|s| s.as_array()) {
         for s in streams {
@@ -53,6 +54,14 @@ pub(crate) fn probe_sync(app: &AppHandle, path: &str) -> Result<MediaInfo> {
                     video_codec = s.get("codec_name").and_then(|c| c.as_str()).map(String::from);
                     width = s.get("width").and_then(|w| w.as_u64()).map(|w| w as u32);
                     height = s.get("height").and_then(|h| h.as_u64()).map(|h| h as u32);
+                    // HDR10 (smpte2084) and HLG (arib-std-b67) transfers; DV
+                    // sources expose the same transfer on their base layer.
+                    let transfer = s.get("color_transfer").and_then(|c| c.as_str()).unwrap_or("");
+                    let primaries =
+                        s.get("color_primaries").and_then(|c| c.as_str()).unwrap_or("");
+                    if transfer == "smpte2084" || transfer == "arib-std-b67" || primaries == "bt2020" {
+                        hdr = true;
+                    }
                 }
                 "audio" => {
                     has_audio = true;
@@ -83,6 +92,7 @@ pub(crate) fn probe_sync(app: &AppHandle, path: &str) -> Result<MediaInfo> {
         audio_codec,
         bitrate_kbps,
         size_bytes,
+        hdr,
     })
 }
 

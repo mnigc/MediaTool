@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState, type ComponentType } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useI18n } from "../i18n";
 import { LOCALES, LOCALE_NAMES } from "../i18n/translations";
 import { useConfirm } from "../components/ConfirmDialog";
 import { cacheClean, cacheReport, formatBytes } from "../lib/tauri";
 import { useDownloads } from "../contexts/DownloadCenter";
-import { AutoIcon, MoonIcon, SearchIcon, SpinnerIcon, SunIcon, TrashIcon } from "../components/icons";
+import { AutoIcon, MoonIcon, RefreshIcon, SpinnerIcon, SunIcon, TrashIcon } from "../components/icons";
 import Select from "../components/Select";
+import UploadSection from "./UploadSettings";
 import type { ThemeMode } from "../hooks/useTheme";
 import type { CacheCleanResult, CacheReport } from "../types";
 
@@ -14,6 +16,10 @@ const THEME_ICONS: Record<ThemeMode, ComponentType<{ className?: string }>> = {
   auto: AutoIcon,
   dark: MoonIcon,
 };
+
+// Safari only ships on macOS — its cookie extractor fails everywhere else.
+const isMac = /Mac/i.test(navigator.userAgent);
+const COOKIE_BROWSERS = ["chrome", "edge", "firefox", ...(isMac ? ["safari"] : []), "brave", "opera"];
 
 interface SettingsPageProps {
   themeMode: ThemeMode;
@@ -24,6 +30,12 @@ interface SettingsPageProps {
 export default function SettingsPage({ themeMode, onThemeChange }: SettingsPageProps) {
   const { t, locale, setLocale } = useI18n();
   const dl = useDownloads();
+
+  // Effective cookie source mirrors the backend priority: file > pasted text
+  // > browser choice. Dimmed inputs are being overridden (still editable).
+  const fileSet = dl.settings.cookiesFile.trim() !== "";
+  const textSet = dl.settings.cookiesText.trim() !== "";
+  const hasCookies = fileSet || textSet || dl.settings.cookiesBrowser !== "";
 
   const row =
     "flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3";
@@ -102,15 +114,63 @@ export default function SettingsPage({ themeMode, onThemeChange }: SettingsPageP
             <Select
               value={dl.settings.cookiesBrowser}
               onChange={(v) => dl.updateSettings({ cookiesBrowser: v })}
-              className="w-full sm:w-44"
+              className={`w-full sm:w-44 ${fileSet || textSet ? "opacity-50" : ""}`}
             >
               <option value="">{t("dl.cookiesNone")}</option>
-              {["chrome", "edge", "firefox", "safari", "brave", "opera"].map((b) => (
+              {COOKIE_BROWSERS.map((b) => (
                 <option key={b} value={b}>
                   {b}
                 </option>
               ))}
             </Select>
+          </div>
+          <div className={row}>
+            <span className={labelCls}>{t("settings.cookiesFile")}</span>
+            <div className="flex min-w-0 flex-1 gap-2">
+              <input
+                value={dl.settings.cookiesFile}
+                onChange={(e) => dl.updateSettings({ cookiesFile: e.target.value })}
+                placeholder="cookies.txt"
+                className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+              />
+              <button
+                onClick={async () => {
+                  const sel = await open({ multiple: false });
+                  if (typeof sel === "string") dl.updateSettings({ cookiesFile: sel });
+                }}
+                className="shrink-0 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+              >
+                {t("settings.cookiesBrowse")}
+              </button>
+            </div>
+          </div>
+          <div className={row}>
+            <span className={labelCls}>{t("settings.cookiesText")}</span>
+            <textarea
+              value={dl.settings.cookiesText}
+              onChange={(e) => dl.updateSettings({ cookiesText: e.target.value })}
+              rows={3}
+              spellCheck={false}
+              placeholder="# Netscape HTTP Cookie File"
+              className={`min-w-0 flex-1 resize-y rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 font-mono text-[11px] leading-relaxed transition-opacity dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 ${fileSet ? "opacity-50" : ""}`}
+            />
+          </div>
+          <div className="space-y-1 pl-0 sm:pl-27">
+            <p className="flex items-center gap-1.5 text-xs font-medium text-neutral-600 dark:text-neutral-300">
+              <span
+                className={`inline-block size-1.5 rounded-full ${hasCookies ? "bg-emerald-500" : "bg-neutral-300 dark:bg-neutral-600"}`}
+              />
+              {fileSet
+                ? t("settings.cookiesEffectiveFile")
+                : textSet
+                  ? t("settings.cookiesEffectiveText")
+                  : dl.settings.cookiesBrowser
+                    ? t("settings.cookiesEffectiveBrowser", { browser: dl.settings.cookiesBrowser })
+                    : t("settings.cookiesEffectiveNone")}
+            </p>
+            <p className="text-xs text-neutral-400 dark:text-neutral-500">
+              {t("settings.cookiesHint")}
+            </p>
           </div>
           <div className={row}>
             <span className={labelCls}>{t("dl.proxy")}</span>
@@ -124,6 +184,8 @@ export default function SettingsPage({ themeMode, onThemeChange }: SettingsPageP
         </div>
       </div>
 
+      <UploadSection />
+
       <CacheSection />
     </div>
   );
@@ -136,11 +198,16 @@ function CacheSection() {
   const { t } = useI18n();
   const { confirm, dialog: confirmDialog } = useConfirm();
   const [report, setReport] = useState<CacheReport | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [cleaning, setCleaning] = useState(false);
   const [result, setResult] = useState<CacheCleanResult | null>(null);
 
   const refresh = useCallback(() => {
-    cacheReport().then(setReport).catch(() => {});
+    setRefreshing(true);
+    cacheReport()
+      .then(setReport)
+      .catch(() => {})
+      .finally(() => setRefreshing(false));
   }, []);
 
   useEffect(() => {
@@ -184,11 +251,16 @@ function CacheSection() {
           )}
           <button
             onClick={refresh}
-            className="flex h-7 w-7 items-center justify-center rounded-lg border border-neutral-200 text-neutral-500 transition hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-400 dark:hover:bg-neutral-800"
+            disabled={refreshing}
+            className="flex h-7 w-7 items-center justify-center rounded-lg border border-neutral-200 text-neutral-500 transition hover:bg-neutral-50 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-400 dark:hover:bg-neutral-800"
             title={t("about.cache.refresh")}
             aria-label={t("about.cache.refresh")}
           >
-            <SearchIcon className="h-4 w-4" />
+            {refreshing ? (
+              <SpinnerIcon className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshIcon className="h-4 w-4" />
+            )}
           </button>
         </div>
       </div>
