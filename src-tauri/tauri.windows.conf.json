@@ -6,6 +6,11 @@
       "binaries/ffprobe.exe": "binaries/ffprobe.exe",
       "binaries/yt-dlp.exe": "binaries/yt-dlp.exe",
       "binaries/streamlink.zip": "binaries/streamlink.zip"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "./windows-installer-hooks.nsis"
+      }
     }
   }
 }

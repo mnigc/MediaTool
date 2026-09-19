@@ -1,0 +1,11 @@
+; Custom NSIS installer hooks (wired via bundle.windows.nsis.installerHooks).
+;
+; Releases before 0.1.5 shipped the engine resources collapsed into a single
+; FILE named `binaries` (see the resources mapping fix in tauri.*.conf.json).
+; Installing 0.1.5 over such an install cannot create the `binaries` DIRECTORY
+; while that file exists, and the engine copies are silently skipped. Delete
+; the stale file before anything is written; Delete only removes files, so it
+; is a no-op on installs that already have the directory.
+!macro NSIS_HOOK_PREINSTALL
+  Delete "$INSTDIR\binaries"
+!macroend
