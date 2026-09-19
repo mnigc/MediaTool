@@ -17,7 +17,7 @@ import DownloadPage from "./download/DownloadPage";
 import RecordPage from "./download/RecordPage";
 import SettingsPage from "./tools/SettingsPage";
 import AboutPage from "./tools/AboutPage";
-import { toolToModule, type Route, type WorkbenchId } from "./tools/registry";
+import { MODULES, toolToModule, type Route, type WorkbenchId } from "./tools/registry";
 
 function AppShell({
   themeMode,
@@ -32,7 +32,8 @@ function AppShell({
   dismissToast: (id: number) => void;
   onToast: (type: "success" | "error" | "info", msg: string) => void;
 }) {
-  const [route, setRoute] = useState<Route>({ kind: "module", id: "video" });
+  // Land on the first sidebar entry (下载), not a hardcoded module id.
+  const [route, setRoute] = useState<Route>({ kind: "module", id: MODULES[0] });
   const updater = useUpdater();
   const { checkForUpdates } = updater;
   const [currentVersion, setCurrentVersion] = useState("");

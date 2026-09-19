@@ -42,9 +42,14 @@ pub fn cancel_job(app: AppHandle, id: String) {
     manager.kill(&id);
 }
 
+/// `ffmpeg -encoders` blocks while the 164 MB sidecar image loads; keep it on
+/// a worker thread so the startup probe cannot freeze the window (this runs
+/// on TaskCenter mount).
 #[tauri::command]
-pub fn detect_gpu(app: AppHandle) -> Result<crate::gpu::GpuInfo> {
-    gpu::detect_gpu(&app)
+pub async fn detect_gpu(app: AppHandle) -> Result<crate::gpu::GpuInfo> {
+    tauri::async_runtime::spawn_blocking(move || gpu::detect_gpu(&app))
+        .await
+        .map_err(|e| crate::error::AppError(e.to_string()))?
 }
 
 #[tauri::command]

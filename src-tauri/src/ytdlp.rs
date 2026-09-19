@@ -102,17 +102,25 @@ pub struct YtdlpStatus {
     pub ffmpeg_found: bool,
 }
 
+/// Status probing runs each engine's `--version`; those subprocesses block for
+/// seconds (PyInstaller self-extracts on every run, the streamlink tree boots
+/// an embedded Python), so this must stay async — a sync command would pin the
+/// main thread and freeze the whole window until they exit.
 #[tauri::command]
-pub fn ytdlp_status(app: AppHandle) -> YtdlpStatus {
-    let path = resolve(&app);
-    let version = path.as_ref().and_then(|p| run_version(p));
-    let installed = path.is_some() && version.is_some();
-    YtdlpStatus {
-        installed,
-        version: version.filter(|_| installed),
-        path: path.filter(|_| installed).map(|p| p.to_string_lossy().to_string()),
-        ffmpeg_found: crate::ffmpeg::resolve(&app, "ffmpeg").is_some(),
-    }
+pub async fn ytdlp_status(app: AppHandle) -> Result<YtdlpStatus> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = resolve(&app);
+        let version = path.as_ref().and_then(|p| run_version(p));
+        let installed = path.is_some() && version.is_some();
+        Ok(YtdlpStatus {
+            installed,
+            version: version.filter(|_| installed),
+            path: path.filter(|_| installed).map(|p| p.to_string_lossy().to_string()),
+            ffmpeg_found: crate::ffmpeg::resolve(&app, "ffmpeg").is_some(),
+        })
+    })
+    .await
+    .map_err(|e| AppError(e.to_string()))?
 }
 
 /// Latest yt-dlp release tag, queried from GitHub without downloading

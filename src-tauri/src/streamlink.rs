@@ -222,17 +222,24 @@ fn installable() -> bool {
     cfg!(all(target_os = "windows", target_arch = "x86_64"))
 }
 
+/// Probing runs streamlink's `--version`, an embedded-Python boot that blocks
+/// for a second or more; keep it on a worker thread (see `ytdlp_status` — a
+/// sync command would pin the main thread and freeze the window at startup).
 #[tauri::command]
-pub fn streamlink_status(app: AppHandle) -> StreamlinkStatus {
-    let path = available(&app);
-    let version = path.as_ref().and_then(|p| run_version(p));
-    StreamlinkStatus {
-        installed: path.is_some(),
-        version,
-        path: path.map(|p| p.to_string_lossy().to_string()),
-        ffmpeg_found: crate::ffmpeg::resolve(&app, "ffmpeg").is_some(),
-        installable: installable(),
-    }
+pub async fn streamlink_status(app: AppHandle) -> Result<StreamlinkStatus> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = available(&app);
+        let version = path.as_ref().and_then(|p| run_version(p));
+        Ok(StreamlinkStatus {
+            installed: path.is_some(),
+            version,
+            path: path.map(|p| p.to_string_lossy().to_string()),
+            ffmpeg_found: crate::ffmpeg::resolve(&app, "ffmpeg").is_some(),
+            installable: installable(),
+        })
+    })
+    .await
+    .map_err(|e| AppError(e.to_string()))?
 }
 
 /* ── Install / update (Windows portable archive) ────────────────── */
