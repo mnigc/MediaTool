@@ -98,7 +98,7 @@ export default function ConfirmDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center animate-fade-in"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in"
       role="dialog"
       aria-modal="true"
       aria-labelledby="confirm-title"
@@ -107,7 +107,7 @@ export default function ConfirmDialog({
         className="absolute inset-0 bg-black/40 backdrop-blur-sm"
         onClick={onCancel}
       />
-      <div className="relative z-10 w-full max-w-sm rounded-2xl bg-white p-6 shadow-popover ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-700 animate-pop">
+      <div className="relative z-10 w-full max-w-sm min-w-0 rounded-2xl bg-white p-6 shadow-popover ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-700 animate-pop">
         <button
           onClick={onCancel}
           className="absolute right-4 top-4 rounded-lg p-1.5 text-neutral-300 transition hover:bg-neutral-100 hover:text-neutral-600 dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-neutral-300"
@@ -117,11 +117,11 @@ export default function ConfirmDialog({
         </button>
         <h3
           id="confirm-title"
-          className="text-base font-semibold text-neutral-900 dark:text-neutral-100"
+          className="break-words text-base font-semibold text-neutral-900 dark:text-neutral-100"
         >
           {title}
         </h3>
-        <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">
+        <p className="mt-2 break-words text-sm text-neutral-500 dark:text-neutral-400">
           {message}
         </p>
         <div className="mt-6 flex items-center justify-end gap-2">

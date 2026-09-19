@@ -15,7 +15,7 @@ import {
   onUploadDone,
   onUploadProgress,
   uploadStart,
-} from "../lib/tauri";
+} from "../lib/engine";
 import { readStorage, writeStorage } from "../lib/storage";
 import { useI18n } from "../i18n";
 import type {
@@ -80,6 +80,7 @@ export interface OauthFlowState {
   requestId: string;
   kind: UploadTarget["kind"];
   redirectUri: string;
+  authUrl: string;
   error: string | null;
   done: boolean;
 }
@@ -449,6 +450,10 @@ export function UploadCenterProvider({
       requestId: req.requestId,
       kind: draft.kind,
       redirectUri: req.redirectUri,
+      // Desktop opens the consent page from the engine; a browser tab cannot,
+      // and a `window.open` after an await is popup-blocked anyway, so the UI
+      // renders `authUrl` as a link the user clicks themselves.
+      authUrl: req.authUrl,
       error: null,
       done: false,
     });

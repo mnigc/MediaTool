@@ -8,7 +8,8 @@ import { Button } from "../components/ui";
 import DropZone from "../components/DropZone";
 import UploadTargetChips from "../components/UploadTargetChips";
 import { useConfirm } from "../components/ConfirmDialog";
-import { formatBytes, openOutputFolder } from "../lib/tauri";
+import { formatBytes, openOutputFolder } from "../lib/engine";
+import { canRevealInFolder } from "../lib/shell";
 import { estimateOutputSize } from "../lib/estimate";
 import { useI18n } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
@@ -365,7 +366,7 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
               <Button size="sm" onClick={() => void tasks.chooseOutput()}>
                 {t("dl.changeDir")}
               </Button>
-              {dir && (
+              {dir && canRevealInFolder && (
                 <Button size="sm" onClick={() => void openOutputFolder(dir)}>
                   {t("dl.openDir")}
                 </Button>

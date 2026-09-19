@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState, type ComponentType } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { pickPaths } from "../lib/shell";
 import { useI18n } from "../i18n";
 import { LOCALES, LOCALE_NAMES } from "../i18n/translations";
 import { useConfirm } from "../components/ConfirmDialog";
-import { cacheClean, cacheReport, formatBytes } from "../lib/tauri";
+import { cacheClean, cacheReport, formatBytes } from "../lib/engine";
 import { useDownloads } from "../contexts/DownloadCenter";
 import { AutoIcon, MoonIcon, RefreshIcon, SpinnerIcon, SunIcon, TrashIcon } from "../components/icons";
 import Select from "../components/Select";
@@ -17,10 +17,6 @@ const THEME_ICONS: Record<ThemeMode, ComponentType<{ className?: string }>> = {
   dark: MoonIcon,
 };
 
-// Safari only ships on macOS — its cookie extractor fails everywhere else.
-const isMac = /Mac/i.test(navigator.userAgent);
-const COOKIE_BROWSERS = ["chrome", "edge", "firefox", ...(isMac ? ["safari"] : []), "brave", "opera"];
-
 interface SettingsPageProps {
   themeMode: ThemeMode;
   onThemeChange: (mode: ThemeMode) => void;
@@ -31,11 +27,11 @@ export default function SettingsPage({ themeMode, onThemeChange }: SettingsPageP
   const { t, locale, setLocale } = useI18n();
   const dl = useDownloads();
 
-  // Effective cookie source mirrors the backend priority: file > pasted text
-  // > browser choice. Dimmed inputs are being overridden (still editable).
+  // Effective cookie source mirrors the backend priority: file > pasted text.
+  // Dimmed inputs are being overridden (still editable).
   const fileSet = dl.settings.cookiesFile.trim() !== "";
   const textSet = dl.settings.cookiesText.trim() !== "";
-  const hasCookies = fileSet || textSet || dl.settings.cookiesBrowser !== "";
+  const hasCookies = fileSet || textSet;
 
   const row =
     "flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3";
@@ -110,21 +106,6 @@ export default function SettingsPage({ themeMode, onThemeChange }: SettingsPageP
 
         <div className="mt-4 space-y-4">
           <div className={row}>
-            <span className={labelCls}>{t("dl.cookies")}</span>
-            <Select
-              value={dl.settings.cookiesBrowser}
-              onChange={(v) => dl.updateSettings({ cookiesBrowser: v })}
-              className={`w-full sm:w-44 ${fileSet || textSet ? "opacity-50" : ""}`}
-            >
-              <option value="">{t("dl.cookiesNone")}</option>
-              {COOKIE_BROWSERS.map((b) => (
-                <option key={b} value={b}>
-                  {b}
-                </option>
-              ))}
-            </Select>
-          </div>
-          <div className={row}>
             <span className={labelCls}>{t("settings.cookiesFile")}</span>
             <div className="flex min-w-0 flex-1 gap-2">
               <input
@@ -135,8 +116,8 @@ export default function SettingsPage({ themeMode, onThemeChange }: SettingsPageP
               />
               <button
                 onClick={async () => {
-                  const sel = await open({ multiple: false });
-                  if (typeof sel === "string") dl.updateSettings({ cookiesFile: sel });
+                  const [sel] = await pickPaths({});
+                  if (sel) dl.updateSettings({ cookiesFile: sel });
                 }}
                 className="shrink-0 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
               >
@@ -164,9 +145,7 @@ export default function SettingsPage({ themeMode, onThemeChange }: SettingsPageP
                 ? t("settings.cookiesEffectiveFile")
                 : textSet
                   ? t("settings.cookiesEffectiveText")
-                  : dl.settings.cookiesBrowser
-                    ? t("settings.cookiesEffectiveBrowser", { browser: dl.settings.cookiesBrowser })
-                    : t("settings.cookiesEffectiveNone")}
+                  : t("settings.cookiesEffectiveNone")}
             </p>
             <p className="text-xs text-neutral-400 dark:text-neutral-500">
               {t("settings.cookiesHint")}

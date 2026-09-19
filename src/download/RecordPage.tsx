@@ -6,7 +6,7 @@ import {
   monitorRemove,
   monitorUpdate,
   onMonitorStatus,
-} from "../lib/tauri";
+} from "../lib/engine";
 import { useI18n } from "../i18n";
 import { useDownloads } from "../contexts/DownloadCenter";
 import { useUploads } from "../contexts/UploadCenter";
@@ -110,7 +110,6 @@ function AddMonitorForm({
         autoRecord: true,
         quality,
         outputDir: dl.settings.outputDir!,
-        cookiesBrowser: dl.settings.cookiesBrowser || null,
         cookiesFile: dl.settings.cookiesFile || null,
         cookiesText: dl.settings.cookiesText || null,
         proxy: dl.settings.proxy || null,

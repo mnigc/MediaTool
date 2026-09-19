@@ -1,4 +1,4 @@
-import { open } from "@tauri-apps/plugin-dialog";
+import { pickPaths } from "../../lib/shell";
 import { useI18n } from "../../i18n";
 import type { SubtitleParams } from "../../types";
 import { Field, Checkbox, RequiredHint } from "./ui";
@@ -13,12 +13,12 @@ export default function VideoSubtitlePanel({
   const { t } = useI18n();
   const set = (patch: Partial<SubtitleParams>) => onChange({ ...params, ...patch });
   const pick = async () => {
-    const s = await open({
-      multiple: false,
+    const [s] = await pickPaths({
       title: t("opt.subtitlePick"),
-      filters: [{ name: "Subtitle", extensions: ["srt", "ass", "vtt", "sub"] }],
+      filterName: "Subtitle",
+      extensions: ["srt", "ass", "vtt", "sub"],
     });
-    if (s && !Array.isArray(s)) set({ path: s });
+    if (s) set({ path: s });
   };
   return (
     <div className="space-y-3">

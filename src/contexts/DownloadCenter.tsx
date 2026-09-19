@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { downloadDir } from "@tauri-apps/api/path";
+import { defaultDownloadDir } from "../lib/shell";
 import {
   cancelJob,
   dlActiveTasks,
@@ -25,7 +25,7 @@ import {
   ytdlpLatestVersion,
   ytdlpStartDownload,
   ytdlpStatus,
-} from "../lib/tauri";
+} from "../lib/engine";
 import { readStorage, writeStorage } from "../lib/storage";
 import { useI18n } from "../i18n";
 import { useUploads } from "./UploadCenter";
@@ -77,7 +77,6 @@ export interface DownloadTask {
 export interface DownloadSettings {
   outputDir: string | null;
   quality: string;
-  cookiesBrowser: string;
   cookiesFile: string;
   cookiesText: string;
   proxy: string;
@@ -120,7 +119,6 @@ function loadSettings(): DownloadSettings {
   const fallback: DownloadSettings = {
     outputDir: null,
     quality: "best",
-    cookiesBrowser: "",
     cookiesFile: "",
     cookiesText: "",
     proxy: "",
@@ -262,6 +260,13 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
   /** In-flight pipeline runs keyed by their owning task id. */
   const pipelineHandles = useRef(new Map<string, () => void>());
 
+  /** Placeholder ids whose card was cancelled/deleted before the backend
+   *  returned the real job id. A cancel aimed at a placeholder is a no-op on
+   *  the engine (the yt-dlp process registers milliseconds later under the
+   *  real id), so the real id gets the cancel once it lands — otherwise the
+   *  download runs on with no card and no way to stop it. */
+  const cancelRequestedRef = useRef(new Set<string>());
+
   /* persist tasks (terminal only) + settings */
   useEffect(() => {
     try {
@@ -281,7 +286,7 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
   /* resolve the default output dir once (system Downloads folder) */
   useEffect(() => {
     if (settingsRef.current.outputDir) return;
-    downloadDir()
+    defaultDownloadDir()
       .then((d) =>
         setSettings((s) => (s.outputDir ? s : { ...s, outputDir: d }))
       )
@@ -620,33 +625,40 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
     };
   }, [runPipelineInternal, kickThumb]);
 
-  /* Re-adopt in-flight jobs after a reload/HMR: their download-started event
-     fired while no listener existed and loadTasks() drops running entries. */
+  /* Re-adopt in-flight jobs: their download-started event fired while no
+     listener existed (reload/HMR) or their card was lost to the
+     placeholder→real-id race. Runs on mount and then polls, so a running
+     engine job can never stay cardless — an orphan with no way to cancel. */
   useEffect(() => {
-    dlActiveTasks()
-      .then((list) => {
-        setTasks((prev) => {
-          const missing = list.filter((j) => !prev.some((x) => x.id === j.id));
-          if (missing.length === 0) return prev;
-          return [
-            ...missing.map((j) => ({
-              id: j.id,
-              url: j.url,
-              title: j.title,
-              kind: (j.kind === "record" ? "record" : "download") as DownloadTask["kind"],
-              quality: "",
-              phase: "running" as const,
-              percent: 0,
-              pipelineSteps: j.pipeline ?? [],
-              uploadTo: j.uploadTo ?? [],
-              pipeline: null,
-              createdAt: Date.now(),
-            })),
-            ...prev,
-          ];
-        });
-      })
-      .catch(() => {});
+    const adopt = () => {
+      dlActiveTasks()
+        .then((list) => {
+          setTasks((prev) => {
+            const missing = list.filter((j) => !prev.some((x) => x.id === j.id));
+            if (missing.length === 0) return prev;
+            return [
+              ...missing.map((j) => ({
+                id: j.id,
+                url: j.url,
+                title: j.title,
+                kind: (j.kind === "record" ? "record" : "download") as DownloadTask["kind"],
+                quality: "",
+                phase: "running" as const,
+                percent: 0,
+                pipelineSteps: j.pipeline ?? [],
+                uploadTo: j.uploadTo ?? [],
+                pipeline: null,
+                createdAt: Date.now(),
+              })),
+              ...prev,
+            ];
+          });
+        })
+        .catch(() => {});
+    };
+    adopt();
+    const timer = setInterval(adopt, 5000);
+    return () => clearInterval(timer);
   }, []);
 
   /* ── actions ──────────────────────────────────────────────────── */
@@ -671,7 +683,6 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
         quality,
         audioFormat: opts.audioFormat ?? (quality === "audio" ? "mp3" : null),
         outputDir: dir,
-        cookiesBrowser: s.cookiesBrowser || null,
         cookiesFile: s.cookiesFile || null,
         cookiesText: s.cookiesText || null,
         proxy: s.proxy || null,
@@ -699,14 +710,16 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
       setTasks((prev) => [card, ...prev]);
       try {
         const res = await ytdlpStartDownload(req);
-        setTasks((prev) => {
-          // A download-started/progress event may have created the real card
-          // already; in that case drop the placeholder instead of duplicating.
-          if (prev.some((x) => x.id === res.id)) {
-            return prev.filter((x) => x.id !== tempId);
-          }
-          return prev.map((x) => (x.id === tempId ? { ...x, id: res.id } : x));
-        });
+      setTasks((prev) => {
+        // A download-started/progress event may have created the real card
+        // already; in that case drop the placeholder instead of duplicating.
+        if (prev.some((x) => x.id === res.id)) {
+          return prev.filter((x) => x.id !== tempId);
+        }
+        return prev.map((x) => (x.id === tempId ? { ...x, id: res.id } : x));
+      });
+      const cancelPending = cancelRequestedRef.current.delete(tempId);
+      if (cancelPending) void cancelJob(res.id);
       } catch (err) {
         setTasks((prev) =>
           prev.map((x) =>
@@ -722,6 +735,11 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
   const cancelTask = useCallback((id: string) => {
     // A finished download may still be running its bound pipeline.
     pipelineHandles.current.get(id)?.();
+    // A running placeholder carries a temp id the engine doesn't know yet;
+    // remember it so startDownload re-aims the cancel at the real id.
+    if (tasksRef.current.some((x) => x.id === id && x.phase === "running")) {
+      cancelRequestedRef.current.add(id);
+    }
     void cancelJob(id);
     setTasks((prev) =>
       prev.map((x) => (x.id === id && x.phase === "running" ? { ...x, phase: "cancelled" } : x))
@@ -730,7 +748,15 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
 
   const removeTask = useCallback((id: string) => {
     const task = tasksRef.current.find((x) => x.id === id);
-    if (task?.phase === "running") void cancelJob(id);
+    if (task?.phase === "running") {
+      cancelRequestedRef.current.add(id);
+      void cancelJob(id);
+    } else {
+      // Terminal cards normally have no backend entry, so this is a no-op —
+      // but a stale "cancelled" card whose engine process lingers still gets
+      // reaped here instead of being orphaned with its card deleted.
+      void cancelJob(id);
+    }
     if (task?.pipeline?.phase === "running") pipelineHandles.current.get(id)?.();
     setTasks((prev) => prev.filter((x) => x.id !== id));
     setThumbs((prev) => dropThumb(prev, id));
@@ -748,7 +774,15 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
         audioFormat: task.retryReq.audioFormat,
         pipelineSteps: task.pipelineSteps,
         uploadTo: task.uploadTo,
-      });
+      }).then(
+        // The retry card replaces the failed one; if the retry never even
+        // started, keep the old card so the failure isn't lost.
+        () => {
+          setTasks((prev) => prev.filter((x) => x.id !== id));
+          setThumbs((prev) => dropThumb(prev, id));
+        },
+        () => {}
+      );
     },
     [startDownload]
   );
@@ -786,7 +820,10 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
 
   const clearAll = useCallback(() => {
     for (const x of tasksRef.current) {
-      if (x.phase === "running" || x.pipeline?.phase === "running") void cancelJob(x.id);
+      if (x.phase === "running" || x.pipeline?.phase === "running") {
+        cancelRequestedRef.current.add(x.id);
+        void cancelJob(x.id);
+      }
     }
     for (const [id, cancel] of pipelineHandles.current) {
       cancel();

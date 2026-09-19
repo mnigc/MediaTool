@@ -224,9 +224,9 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
       {editing && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setEditing(null)} />
-          <div className="relative z-10 flex max-h-[85vh] w-full max-w-lg flex-col rounded-2xl bg-white shadow-2xl ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-700 slide-up">
+          <div className="relative z-10 flex max-h-[85vh] w-full min-w-0 max-w-lg flex-col rounded-2xl bg-white shadow-2xl ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-700 slide-up">
             <div className="flex items-center justify-between border-b border-neutral-100 px-5 py-4 dark:border-neutral-700/60">
-              <h2 className="text-base font-semibold text-neutral-800 dark:text-neutral-100">
+              <h2 className="break-words text-base font-semibold text-neutral-800 dark:text-neutral-100">
                 {isNew ? t("pm.new") : t("pm.edit")}
               </h2>
               <button

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Job, JobParams } from "../types";
 import JobParamsEditor from "../tools/JobParamsEditor";
-import { getThumbnail } from "../lib/tauri";
+import { getThumbnail } from "../lib/engine";
 import { estimateOutputSize } from "../lib/estimate";
 import { friendlyError } from "../lib/errors";
 import {
@@ -16,7 +16,8 @@ import {
   SpinnerIcon,
   XIcon,
 } from "./icons";
-import { formatBytes } from "../lib/tauri";
+import { formatBytes } from "../lib/engine";
+import { canRevealInFolder } from "../lib/shell";
 import { useI18n } from "../i18n";
 import { isBatchEditable } from "../tools/kinds";
 import { useUploads } from "../contexts/UploadCenter";
@@ -437,7 +438,7 @@ export default function JobCard({
               })}
             </span>
           </div>
-          {job.output && (
+          {job.output && canRevealInFolder && (
             <button
               onClick={() => onOpenFolder(job.output!)}
               className="flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-brand-700 shadow-sm ring-1 ring-brand-200 transition hover:bg-brand-50 dark:bg-neutral-800 dark:text-brand-300 dark:ring-neutral-700 dark:hover:bg-neutral-700"

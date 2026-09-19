@@ -4,7 +4,7 @@ import UploadCard from "../components/UploadCard";
 import PipelineRunCard from "../components/PipelineRunCard";
 import EmptyState from "../components/EmptyState";
 import { useConfirm } from "../components/ConfirmDialog";
-import { openOutputFolder } from "../lib/tauri";
+import { openOutputFolder } from "../lib/engine";
 import { useI18n } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
 import { useUploads } from "../contexts/UploadCenter";

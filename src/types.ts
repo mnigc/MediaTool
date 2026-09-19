@@ -395,7 +395,6 @@ export interface StreamlinkRelease {
 }
 
 export interface NetOptions {
-  cookiesBrowser?: string | null;
   cookiesFile?: string | null;
   cookiesText?: string | null;
   proxy?: string | null;
@@ -407,7 +406,6 @@ export interface DownloadRequest {
   audioFormat?: string | null; // mp3 | m4a | opus | flac (quality=audio)
   outputDir: string;
   filenameTemplate?: string | null;
-  cookiesBrowser?: string | null;
   cookiesFile?: string | null;
   cookiesText?: string | null;
   proxy?: string | null;
@@ -455,7 +453,6 @@ export interface MonitorRequest {
   autoRecord: boolean;
   quality: string;
   outputDir: string;
-  cookiesBrowser?: string | null;
   cookiesFile?: string | null;
   cookiesText?: string | null;
   proxy?: string | null;
@@ -479,7 +476,6 @@ export interface MonitorInfo {
   autoRecord: boolean;
   quality: string;
   outputDir: string;
-  cookiesBrowser?: string | null;
   cookiesFile?: string | null;
   cookiesText?: string | null;
   proxy?: string | null;
@@ -620,4 +616,21 @@ export interface OauthResultEvent {
   ok: boolean;
   error?: string | null;
   refreshToken?: string | null;
+}
+
+/* ── server-side directory browsing (web mode) ──────────────────── */
+
+export interface FsEntry {
+  name: string;
+  path: string;
+  isDir: boolean;
+  size: number;
+  modified?: number | null;
+}
+
+export interface DirListing {
+  path: string;
+  parent?: string | null;
+  entries: FsEntry[];
+  truncated: boolean;
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { canRevealInFolder, pickPaths } from "../lib/shell";
 import { useI18n } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
 import { usePipelineRuns } from "../contexts/PipelineCenter";
@@ -12,7 +12,7 @@ import {
 } from "../workflow/pipelines";
 import type { Pipeline } from "../workflow/pipelines";
 import { VIDEO_EXTS } from "./registry";
-import { openOutputFolder } from "../lib/tauri";
+import { openOutputFolder } from "../lib/engine";
 import { friendlyError } from "../lib/errors";
 import { defaultParamsFor } from "../lib/defaults";
 import { useConfirm } from "../components/ConfirmDialog";
@@ -93,13 +93,13 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
   }, [addOpen, loadOpen]);
 
   const browse = async () => {
-    const sel = await open({
+    const list = await pickPaths({
       multiple: true,
       title: t("opt.selectFiles"),
-      filters: [{ name: t("dz.filter.video"), extensions: VIDEO_EXTS }],
+      filterName: t("dz.filter.video"),
+      extensions: VIDEO_EXTS,
     });
-    if (!sel) return;
-    const list = Array.isArray(sel) ? sel : [sel];
+    if (!list.length) return;
     setFiles((prev) => [...prev, ...list.filter((p) => isVideo(p) && !prev.includes(p))]);
   };
 
@@ -570,7 +570,7 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
                       {friendlyError(f.error, t)}
                     </span>
                   )}
-                  {ok && f.output && (
+                  {ok && f.output && canRevealInFolder && (
                     <button
                       type="button"
                       onClick={() => void openOutputFolder(f.output!)}
@@ -604,8 +604,8 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
       {nameModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setNameModal(null)} />
-          <div className="relative z-10 w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-700 slide-up">
-            <h3 className="text-sm font-semibold text-neutral-800 dark:text-neutral-100">
+          <div className="relative z-10 w-full max-w-sm min-w-0 rounded-2xl bg-white p-5 shadow-2xl ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-700 slide-up">
+            <h3 className="break-words text-sm font-semibold text-neutral-800 dark:text-neutral-100">
               {nameModal.mode === "save" ? t("workflow.pipeline.saveTitle") : t("workflow.pipeline.rename")}
             </h3>
             <label className="mt-3 flex flex-col gap-1">

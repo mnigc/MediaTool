@@ -27,7 +27,7 @@ export default function ToastContainer({
                 : "bg-brand-600 text-white ring-brand-700"
           }`}
         >
-          <span className="flex-1">{toast.msg}</span>
+          <span className="min-w-0 flex-1 break-words">{toast.msg}</span>
           <button
             onClick={() => onDismiss(toast.id)}
             className="shrink-0 opacity-60 transition hover:opacity-100"

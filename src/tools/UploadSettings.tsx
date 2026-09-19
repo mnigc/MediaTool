@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { isDesktop } from "../lib/shell";
 import { useI18n } from "../i18n";
 import { useConfirm } from "../components/ConfirmDialog";
 import { useUploads } from "../contexts/UploadCenter";
@@ -324,10 +325,22 @@ export default function UploadSection() {
                   {t(`upload.help.${draft.kind}`)}
                 </p>
                 {oauthRunning && uploads.oauth && (
-                  <p className="flex items-center gap-1.5 text-xs text-brand-600 dark:text-brand-400">
-                    <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
-                    {t("upload.oauth.waiting")} {uploads.oauth.redirectUri}
-                  </p>
+                  <>
+                    <p className="flex items-center gap-1.5 text-xs text-brand-600 dark:text-brand-400">
+                      <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
+                      {t("upload.oauth.waiting")} {uploads.oauth.redirectUri}
+                    </p>
+                    {!isDesktop && (
+                      <a
+                        href={uploads.oauth.authUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs font-medium text-brand-600 underline dark:text-brand-400"
+                      >
+                        {t("upload.oauth.openConsent")}
+                      </a>
+                    )}
+                  </>
                 )}
                 {draftAuthorized && (
                   <p className="flex items-center gap-1.5 text-xs text-success-600 dark:text-success-400">

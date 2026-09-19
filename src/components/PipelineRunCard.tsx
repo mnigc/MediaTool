@@ -1,5 +1,6 @@
 import type { PipelineRunTask } from "../workflow/types";
-import { openOutputFolder } from "../lib/tauri";
+import { openOutputFolder } from "../lib/engine";
+import { canRevealInFolder } from "../lib/shell";
 import { useI18n } from "../i18n";
 import { FilmIcon, FolderIcon, SpinnerIcon, XIcon } from "./icons";
 
@@ -113,7 +114,7 @@ export default function PipelineRunCard({
               {t("workflow.run.retry")}
             </button>
           )}
-          {lastOutput && run.phase !== "running" && (
+          {lastOutput && run.phase !== "running" && canRevealInFolder && (
             <button
               onClick={() => void openOutputFolder(lastOutput)}
               className="flex h-6 w-6 items-center justify-center rounded-lg border border-neutral-200 text-neutral-500 transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand-600 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-brand-800 dark:hover:bg-brand-950/40 dark:hover:text-brand-400"

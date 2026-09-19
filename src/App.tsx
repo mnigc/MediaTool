@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
-import { getVersion } from "@tauri-apps/api/app";
 import Header from "./components/Header";
 import ToolNav from "./components/ToolNav";
 import ToastContainer from "./components/ToastContainer";
+import WebGate from "./components/WebGate";
+import { FileBrowserProvider } from "./components/FileBrowser";
+import { appVersion } from "./lib/shell";
 import { useTheme, type ThemeMode } from "./hooks/useTheme";
 import { useToasts, type ToastItem } from "./hooks/useToasts";
 import { useUpdater } from "./hooks/useUpdater";
@@ -41,7 +43,7 @@ function AppShell({
   const [currentVersion, setCurrentVersion] = useState("");
 
   useEffect(() => {
-    getVersion()
+    appVersion()
       .then(setCurrentVersion)
       .catch(() => {});
     const timer = setTimeout(() => {
@@ -109,20 +111,24 @@ export default function App() {
   const { toasts, pushToast, dismissToast } = useToasts();
 
   return (
-    <UploadCenterProvider onToast={pushToast}>
-      <TaskCenterProvider onToast={pushToast}>
-        <PipelineCenterProvider>
-          <DownloadCenterProvider>
-            <AppShell
-              themeMode={themeMode}
-              setThemeMode={setThemeMode}
-              toasts={toasts}
-              dismissToast={dismissToast}
-              onToast={pushToast}
-            />
-          </DownloadCenterProvider>
-        </PipelineCenterProvider>
-      </TaskCenterProvider>
-    </UploadCenterProvider>
+    <WebGate>
+      <FileBrowserProvider>
+        <UploadCenterProvider onToast={pushToast}>
+          <TaskCenterProvider onToast={pushToast}>
+            <PipelineCenterProvider>
+              <DownloadCenterProvider>
+                <AppShell
+                  themeMode={themeMode}
+                  setThemeMode={setThemeMode}
+                  toasts={toasts}
+                  dismissToast={dismissToast}
+                  onToast={pushToast}
+                />
+              </DownloadCenterProvider>
+            </PipelineCenterProvider>
+          </TaskCenterProvider>
+        </UploadCenterProvider>
+      </FileBrowserProvider>
+    </WebGate>
   );
 }

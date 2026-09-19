@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { formatBytes, inspectMedia } from "../lib/tauri";
+import { formatBytes, inspectMedia } from "../lib/engine";
 import { useI18n } from "../i18n";
 import type { MediaReport } from "../types";
 

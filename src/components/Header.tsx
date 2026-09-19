@@ -1,9 +1,13 @@
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  closeWindow,
+  hasWindowControls,
+  minimizeWindow,
+  toggleMaximized,
+} from "../lib/shell";
 import { LogoIcon, MaximizeIcon, MinimizeIcon, XIcon } from "./icons";
 import { useI18n } from "../i18n";
 
 export default function Header() {
-  const appWindow = getCurrentWindow();
   const { t } = useI18n();
 
   return (
@@ -11,7 +15,7 @@ export default function Header() {
       <div className="flex w-full items-center gap-3 px-4 py-3">
         <div
           data-tauri-drag-region
-          onDoubleClick={() => appWindow.toggleMaximize()}
+          onDoubleClick={toggleMaximized}
           className="flex min-w-0 flex-1 cursor-default items-center gap-3"
         >
           <LogoIcon className="h-9 w-9 drop-shadow-sm" />
@@ -29,33 +33,35 @@ export default function Header() {
           {t("header.tagline")}
         </span>
 
-        {/* Window controls */}
-        <div className="flex items-center gap-1 pl-1">
-          <button
-            onClick={() => appWindow.minimize()}
-            className="flex h-9 w-9 items-center justify-center rounded-lg text-neutral-500 transition hover:bg-brand-50 hover:text-brand-600 dark:text-neutral-300 dark:hover:bg-neutral-800 dark:hover:text-white"
-            title={t("header.minimize")}
-            aria-label={t("header.minimize")}
-          >
-            <MinimizeIcon className="h-4.5 w-4.5" />
-          </button>
-          <button
-            onClick={() => appWindow.toggleMaximize()}
-            className="flex h-9 w-9 items-center justify-center rounded-lg text-neutral-500 transition hover:bg-brand-50 hover:text-brand-600 dark:text-neutral-300 dark:hover:bg-neutral-800 dark:hover:text-white"
-            title={t("header.maximize")}
-            aria-label={t("header.maximize")}
-          >
-            <MaximizeIcon className="h-4.5 w-4.5" />
-          </button>
-          <button
-            onClick={() => appWindow.close()}
-            className="flex h-9 w-9 items-center justify-center rounded-lg text-neutral-500 transition hover:bg-error-50 hover:text-error-600 dark:text-neutral-300 dark:hover:bg-error-900/30 dark:hover:text-error-400"
-            title={t("header.close")}
-            aria-label={t("header.close")}
-          >
-            <XIcon className="h-4.5 w-4.5" />
-          </button>
-        </div>
+        {/* Window controls — a browser tab is not a window we own. */}
+        {hasWindowControls && (
+          <div className="flex items-center gap-1 pl-1">
+            <button
+              onClick={minimizeWindow}
+              className="flex h-9 w-9 items-center justify-center rounded-lg text-neutral-500 transition hover:bg-brand-50 hover:text-brand-600 dark:text-neutral-300 dark:hover:bg-neutral-800 dark:hover:text-white"
+              title={t("header.minimize")}
+              aria-label={t("header.minimize")}
+            >
+              <MinimizeIcon className="h-4.5 w-4.5" />
+            </button>
+            <button
+              onClick={toggleMaximized}
+              className="flex h-9 w-9 items-center justify-center rounded-lg text-neutral-500 transition hover:bg-brand-50 hover:text-brand-600 dark:text-neutral-300 dark:hover:bg-neutral-800 dark:hover:text-white"
+              title={t("header.maximize")}
+              aria-label={t("header.maximize")}
+            >
+              <MaximizeIcon className="h-4.5 w-4.5" />
+            </button>
+            <button
+              onClick={closeWindow}
+              className="flex h-9 w-9 items-center justify-center rounded-lg text-neutral-500 transition hover:bg-error-50 hover:text-error-600 dark:text-neutral-300 dark:hover:bg-error-900/30 dark:hover:text-error-400"
+              title={t("header.close")}
+              aria-label={t("header.close")}
+            >
+              <XIcon className="h-4.5 w-4.5" />
+            </button>
+          </div>
+        )}
       </div>
     </header>
   );

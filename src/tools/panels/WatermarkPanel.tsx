@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
-import { getThumbnail } from "../../lib/tauri";
+import { pickPaths } from "../../lib/shell";
+import { getThumbnail } from "../../lib/engine";
 import { useI18n } from "../../i18n";
 import type { WatermarkParams } from "../../types";
 import { Field, FieldRow, NumInput, RequiredHint } from "./ui";
@@ -32,12 +32,12 @@ export default function WatermarkPanel({
   }, [params.imagePath]);
 
   const pickImage = async () => {
-    const sel2 = await open({
-      multiple: false,
+    const [sel2] = await pickPaths({
       title: t("tool.wm.pickImage"),
-      filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp"] }],
+      filterName: "Image",
+      extensions: ["png", "jpg", "jpeg", "webp"],
     });
-    if (sel2 && !Array.isArray(sel2)) set({ imagePath: sel2 });
+    if (sel2) set({ imagePath: sel2 });
   };
 
   return (

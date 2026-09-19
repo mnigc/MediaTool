@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { onSystemThemeChange } from "../lib/shell";
 import { readStorage, writeStorage } from "../lib/storage";
 
 export type ThemeMode = "light" | "dark" | "auto";
@@ -40,32 +40,23 @@ export function useTheme() {
 
     setDark(effectiveDark(themeMode, systemPrefersDark()));
 
-    const mql = window.matchMedia("(prefers-color-scheme: dark)");
-    const onMediaChange = (e: MediaQueryListEvent) => {
-      setDark(effectiveDark(themeMode, e.matches));
-    };
-    mql.addEventListener("change", onMediaChange);
-
     let unlisten: (() => void) | undefined;
     let cancelled = false;
-    getCurrentWindow()
-      .onThemeChanged((e) => {
-        setDark(effectiveDark(themeMode, e.payload === "dark"));
-      })
-      .then((fn) => {
-        if (cancelled) {
-          // The effect already cleaned up before the promise resolved —
-          // unregister immediately instead of leaking the listener (which
-          // would keep firing with a stale themeMode closure).
-          fn();
-          return;
-        }
-        unlisten = fn;
-      });
+    onSystemThemeChange((sysDark) => {
+      setDark(effectiveDark(themeMode, sysDark));
+    }).then((fn) => {
+      if (cancelled) {
+        // The effect already cleaned up before the promise resolved —
+        // unregister immediately instead of leaking the listener (which
+        // would keep firing with a stale themeMode closure).
+        fn();
+        return;
+      }
+      unlisten = fn;
+    });
 
     return () => {
       cancelled = true;
-      mql.removeEventListener("change", onMediaChange);
       unlisten?.();
     };
   }, [themeMode]);

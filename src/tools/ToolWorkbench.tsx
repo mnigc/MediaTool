@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { inspectMedia } from "../lib/tauri";
+import { inspectMedia } from "../lib/engine";
 import { useI18n } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
 import { useConfirm } from "../components/ConfirmDialog";

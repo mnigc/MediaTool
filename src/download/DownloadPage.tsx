@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ytdlpProbe } from "../lib/tauri";
-import { formatBytes, openOutputFolder } from "../lib/tauri";
+import { ytdlpProbe } from "../lib/engine";
+import { formatBytes, openOutputFolder } from "../lib/engine";
+import { canRevealInFolder } from "../lib/shell";
 import { useI18n } from "../i18n";
 import { useDownloads } from "../contexts/DownloadCenter";
 import { useUploads } from "../contexts/UploadCenter";
@@ -9,6 +10,7 @@ import Select from "../components/Select";
 import UploadTargetChips from "../components/UploadTargetChips";
 import { Button } from "../components/ui";
 import EmptyState from "../components/EmptyState";
+import { useConfirm } from "../components/ConfirmDialog";
 import SiteStrip from "./SiteStrip";
 import SaveLocationBar from "./SaveLocationBar";
 import { ConfigSidebar, NetworkSection, PipelineChips, SidebarSection } from "./Sidebar";
@@ -145,11 +147,13 @@ function NewDownloadForm({
     const token = ++probeToken.current;
     if (!u.trim()) {
       setProbe(null);
+      // Clearing the box bumps the token, so an in-flight probe's .finally
+      // will never reset this flag — reset it here or the spinner sticks.
+      setProbing(false);
       return;
     }
     setProbing(true);
     ytdlpProbe(u.trim(), {
-      cookiesBrowser: dl.settings.cookiesBrowser || null,
       cookiesFile: dl.settings.cookiesFile || null,
       cookiesText: dl.settings.cookiesText || null,
       proxy: dl.settings.proxy || null,
@@ -165,7 +169,7 @@ function NewDownloadForm({
         if (probeToken.current === token) setProbing(false);
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dl.settings.cookiesBrowser, dl.settings.cookiesFile, dl.settings.cookiesText, dl.settings.proxy]);
+  }, [dl.settings.cookiesFile, dl.settings.cookiesText, dl.settings.proxy]);
 
   // Debounced auto-probe — only meaningful for a single link; batches start
   // without probing so a big paste doesn't fire N requests up front.
@@ -415,6 +419,7 @@ function DownloadCard({
 }) {
   const { t } = useI18n();
   const dl = useDownloads();
+  const { confirm, dialog } = useConfirm();
   const running = task.phase === "running";
   const pct = Math.round(task.percent);
   const pipelineRunning = task.pipeline?.phase === "running";
@@ -429,6 +434,7 @@ function DownloadCard({
 
   return (
     <div className="group rounded-2xl bg-white p-4 shadow-card ring-1 ring-neutral-200 transition-shadow hover:shadow-card-hover dark:bg-neutral-900 dark:ring-neutral-800">
+      {dialog}
       <div className="flex gap-3">
         {showThumb && <Thumb src={thumbSrc} audio={audio} />}
 
@@ -467,7 +473,7 @@ function DownloadCard({
                 {t("dl.pipeline.rerun")}
               </CardButton>
             )}
-          {task.output && (
+          {task.output && canRevealInFolder && (
             <button
               onClick={() => void openOutputFolder(task.output!)}
               className="flex h-6 w-6 items-center justify-center rounded-lg border border-neutral-200 text-neutral-500 transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand-600 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-brand-800 dark:hover:bg-brand-950/40 dark:hover:text-brand-400"
@@ -477,15 +483,25 @@ function DownloadCard({
               <FolderIcon className="h-4 w-4" />
             </button>
           )}
-          {!running && !pipelineRunning && (
-            <button
-              onClick={() => dl.removeTask(task.id)}
-              className="flex h-6 w-6 items-center justify-center rounded-lg text-neutral-300 transition hover:bg-error-50 hover:text-error-500 dark:text-neutral-600 dark:hover:bg-error-950/40"
-              title={t("job.remove")}
-            >
-              <XIcon className="h-3.5 w-3.5" />
-            </button>
-          )}
+          <button
+            onClick={async () => {
+              const deleting = running || pipelineRunning;
+              const ok = await confirm({
+                title: t("dl.removeTask.title"),
+                message: deleting
+                  ? t("dl.removeTask.runningMsg", { name: task.title })
+                  : t("dl.removeTask.msg", { name: task.title }),
+                confirmLabel: t("confirm.delete"),
+                cancelLabel: t("confirm.cancel"),
+                danger: true,
+              });
+              if (ok) dl.removeTask(task.id);
+            }}
+            className="flex h-6 w-6 items-center justify-center rounded-lg text-neutral-300 transition hover:bg-error-50 hover:text-error-500 dark:text-neutral-600 dark:hover:bg-error-950/40"
+            title={t("job.remove")}
+          >
+            <XIcon className="h-3.5 w-3.5" />
+          </button>
         </div>
       </div>
 
@@ -593,8 +609,24 @@ export default function DownloadPage({ onOpenSettings }: { onOpenSettings: () =>
   const { t } = useI18n();
   const dl = useDownloads();
   const uploads = useUploads();
+  const { confirm, dialog } = useConfirm();
   // Recordings live on the record page next to their monitors.
   const tasks = dl.tasks.filter((x) => x.kind === "download");
+  const removable = tasks.filter(
+    (x) => x.phase !== "running" && x.pipeline?.phase !== "running"
+  ).length;
+
+  const handleClearFinished = async () => {
+    if (removable === 0) return;
+    const ok = await confirm({
+      title: t("app.clearFinished.title"),
+      message: t("app.clearFinished.msg", { n: removable }),
+      confirmLabel: t("app.clearFinished.confirm"),
+      cancelLabel: t("confirm.cancel"),
+      danger: true,
+    });
+    if (ok) dl.clearFinished("download");
+  };
 
   const [quality, setQuality] = useState(dl.settings.quality);
   const [audioFormat, setAudioFormat] = useState("mp3");
@@ -612,6 +644,7 @@ export default function DownloadPage({ onOpenSettings }: { onOpenSettings: () =>
 
   return (
     <div className="mx-auto max-w-5xl">
+      {dialog}
       <div className="mb-5 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
         <h2 className="text-lg font-semibold text-neutral-800 dark:text-neutral-100">
           {t("dl.page.title")}
@@ -635,7 +668,7 @@ export default function DownloadPage({ onOpenSettings }: { onOpenSettings: () =>
               <h3 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">
                 {t("dl.tasks")}
               </h3>
-              <Button size="sm" onClick={() => dl.clearFinished("download")}>
+              <Button size="sm" onClick={() => void handleClearFinished()}>
                 {t("dl.clearFinished")}
               </Button>
             </div>

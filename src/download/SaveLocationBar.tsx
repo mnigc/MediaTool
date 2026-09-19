@@ -1,5 +1,5 @@
-import { open } from "@tauri-apps/plugin-dialog";
-import { openOutputFolder } from "../lib/tauri";
+import { canRevealInFolder, pickPaths } from "../lib/shell";
+import { openOutputFolder } from "../lib/engine";
 import { useI18n } from "../i18n";
 import { useDownloads } from "../contexts/DownloadCenter";
 import { FolderIcon } from "../components/icons";
@@ -13,8 +13,8 @@ export default function SaveLocationBar() {
   const dir = dl.settings.outputDir;
 
   const choose = async () => {
-    const d = await open({ directory: true, title: t("dl.outputDir") });
-    if (d && !Array.isArray(d)) dl.updateSettings({ outputDir: d });
+    const [d] = await pickPaths({ directory: true, title: t("dl.outputDir") });
+    if (d) dl.updateSettings({ outputDir: d });
   };
 
   return (
@@ -33,7 +33,7 @@ export default function SaveLocationBar() {
         <Button size="sm" onClick={() => void choose()}>
           {t("dl.changeDir")}
         </Button>
-        {dir && (
+        {dir && canRevealInFolder && (
           <Button size="sm" onClick={() => void openOutputFolder(dir)}>
             {t("dl.openDir")}
           </Button>

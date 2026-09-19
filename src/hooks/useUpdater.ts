@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
-import { check, type Update } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
+import type { Update } from "@tauri-apps/plugin-updater";
+import { canSelfUpdate } from "../lib/shell";
 
 export type UpdaterPhase =
   | "idle"
@@ -10,6 +10,7 @@ export type UpdaterPhase =
   | "installing";
 
 export const DEV_UNAVAILABLE = "DEV_MODE";
+export const WEB_UNAVAILABLE = "WEB_MODE";
 
 export type CheckResult =
   | { ok: true; update: Update | null }
@@ -25,6 +26,9 @@ export function useUpdater() {
   const checkForUpdates = useCallback(
     async (silent: boolean): Promise<CheckResult> => {
       if (busy.current) return { ok: false, message: "BUSY" };
+      // A container updates by pulling a new image, not by rewriting its own
+      // binary from inside itself.
+      if (!canSelfUpdate) return { ok: false, message: WEB_UNAVAILABLE };
       if (import.meta.env.DEV) {
         if (!silent) setError(DEV_UNAVAILABLE);
         return { ok: false, message: DEV_UNAVAILABLE };
@@ -33,6 +37,7 @@ export function useUpdater() {
       setPhase("checking");
       setError(null);
       try {
+        const { check } = await import("@tauri-apps/plugin-updater");
         const next = await check();
         if (next) {
           setUpdate(next);
@@ -92,6 +97,7 @@ export function useUpdater() {
     setPhase("installing");
     try {
       await update.install();
+      const { relaunch } = await import("@tauri-apps/plugin-process");
       await relaunch();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

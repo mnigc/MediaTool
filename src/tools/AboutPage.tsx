@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { canSelfUpdate, openExternal } from "../lib/shell";
 import { useI18n } from "../i18n";
 import { DEV_UNAVAILABLE, useUpdater } from "../hooks/useUpdater";
 import { useDownloads } from "../contexts/DownloadCenter";
@@ -293,7 +293,7 @@ export default function AboutPage({ currentVersion, updater, onToast }: AboutPag
           href={GITHUB_URL}
           onClick={(e) => {
             e.preventDefault();
-            openUrl(GITHUB_URL).catch(() => {});
+            openExternal(GITHUB_URL);
           }}
           className="ml-auto inline-flex shrink-0 items-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-brand-600 active:bg-brand-700"
         >
@@ -330,24 +330,26 @@ export default function AboutPage({ currentVersion, updater, onToast }: AboutPag
           <StreamlinkSection />
         </div>
 
-        <div className="mt-5 border-t border-neutral-200 pt-5 dark:border-neutral-800">
-          <div className="flex items-center justify-between gap-4">
-            <h2 className="text-sm font-semibold text-neutral-800 dark:text-neutral-200">
-              {t("about.update.title")}
-            </h2>
-            {phase === "idle" && !hasUpdate && (
-              <button
-                onClick={handleCheck}
-                className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-1.5 text-sm font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
-              >
-                <DownloadIcon className="h-4 w-4" />
-                {t("updater.check")}
-              </button>
-            )}
-          </div>
-        </div>
+        {canSelfUpdate && (
+          <>
+            <div className="mt-5 border-t border-neutral-200 pt-5 dark:border-neutral-800">
+              <div className="flex items-center justify-between gap-4">
+                <h2 className="text-sm font-semibold text-neutral-800 dark:text-neutral-200">
+                  {t("about.update.title")}
+                </h2>
+                {phase === "idle" && !hasUpdate && (
+                  <button
+                    onClick={handleCheck}
+                    className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-1.5 text-sm font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+                  >
+                    <DownloadIcon className="h-4 w-4" />
+                    {t("updater.check")}
+                  </button>
+                )}
+              </div>
+            </div>
 
-        <div className={showUpdateState ? "mt-4 space-y-4" : "hidden"}>
+            <div className={showUpdateState ? "mt-4 space-y-4" : "hidden"}>
           {error && (
             <div className="flex items-start justify-between gap-3 rounded-xl bg-error-50 p-3 text-sm text-error-700 ring-1 ring-error-200 dark:bg-error-900/20 dark:text-error-300 dark:ring-error-900/40">
               <div className="min-w-0">
@@ -433,7 +435,9 @@ export default function AboutPage({ currentVersion, updater, onToast }: AboutPag
               </div>
             </div>
           )}
-        </div>
+            </div>
+          </>
+        )}
       </section>
 
       {/* Disclaimer */}

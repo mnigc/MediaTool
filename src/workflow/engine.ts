@@ -4,7 +4,7 @@ import {
   onProgress,
   startJob,
   startWorkflow as startWorkflowRust,
-} from "../lib/tauri";
+} from "../lib/engine";
 import type { JobRequest } from "../types";
 import type {
   RunSettings,

@@ -105,7 +105,7 @@ export function NetworkSection({ onOpenSettings }: { onOpenSettings: () => void 
   const dl = useDownloads();
   const value = "min-w-0 truncate text-xs text-neutral-600 dark:text-neutral-300";
   const manualCookies = dl.settings.cookiesFile || dl.settings.cookiesText;
-  const configured = dl.settings.cookiesBrowser || manualCookies || dl.settings.proxy;
+  const configured = manualCookies || dl.settings.proxy;
   return (
     <SidebarSection
       title={t("settings.network")}
@@ -114,8 +114,8 @@ export function NetworkSection({ onOpenSettings }: { onOpenSettings: () => void 
       summary={configured ? "·" : t("dl.notSet")}
     >
       <Field label={t("dl.cookies")}>
-        <span className={value} title={dl.settings.cookiesBrowser || dl.settings.cookiesFile || undefined}>
-          {dl.settings.cookiesBrowser || (manualCookies ? t("dl.cookiesManual") : t("dl.notSet"))}
+        <span className={value} title={dl.settings.cookiesFile || undefined}>
+          {manualCookies ? t("dl.cookiesManual") : t("dl.notSet")}
         </span>
       </Field>
       <Field label={t("dl.proxy")}>

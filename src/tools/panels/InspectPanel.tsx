@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { formatBytes } from "../../lib/tauri";
+import { formatBytes } from "../../lib/engine";
 import { useI18n } from "../../i18n";
 import type { MediaReport } from "../../types";
 

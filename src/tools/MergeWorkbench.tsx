@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { canRevealInFolder, pickPaths } from "../lib/shell";
 import { useI18n } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
 import { extOk } from "./FilePicker";
 import { getTool, type WorkbenchId } from "./registry";
 import { MergeIcon } from "../components/icons";
-import { openOutputFolder } from "../lib/tauri";
+import { openOutputFolder } from "../lib/engine";
 
 export default function MergeWorkbench({
   tool,
@@ -37,16 +37,13 @@ export default function MergeWorkbench({
   const inFlight = job?.phase === "running" || job?.phase === "queued";
 
   const pick = async () => {
-    const selected = await open({
+    const selected = await pickPaths({
       multiple: true,
       title: t("merge.select"),
-      filters: [{ name: t(`dz.filter.${meta.mediaType}`), extensions: accepts }],
+      filterName: t(`dz.filter.${meta.mediaType}`),
+      extensions: accepts,
     });
-    if (Array.isArray(selected)) {
-      setFiles((prev) => Array.from(new Set([...prev, ...selected])));
-    } else if (typeof selected === "string") {
-      setFiles((prev) => Array.from(new Set([...prev, selected])));
-    }
+    if (selected.length) setFiles((prev) => Array.from(new Set([...prev, ...selected])));
   };
 
   const removeAt = (i: number) => setFiles((prev) => prev.filter((_, idx) => idx !== i));
@@ -175,7 +172,7 @@ export default function MergeWorkbench({
               </div>
             </div>
           )}
-          {job.phase === "done" && job.output && (
+          {job.phase === "done" && job.output && canRevealInFolder && (
             <div className="flex items-center justify-between">
               <span className="text-sm text-success-700 dark:text-success-400">{t("merge.done")}</span>
               <button

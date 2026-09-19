@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
-import { getThumbnail } from "../lib/tauri";
+import { pickPaths } from "../lib/shell";
+import { getThumbnail } from "../lib/engine";
 import { useI18n } from "../i18n";
 import { useToasts } from "../hooks/useToasts";
 import type { ToolMeta } from "./registry";
@@ -51,12 +51,12 @@ export default function FilePicker({ meta, files, onChange }: Props) {
 
   const browse = async () => {
     const filterName = meta.mediaType ? t(`dz.filter.${meta.mediaType}`) : t("dz.filter.any");
-    const sel = await open({
+    const arr = await pickPaths({
       multiple: meta.multiFile,
       title: t("opt.selectFiles"),
-      filters: [{ name: filterName, extensions: meta.accepts }],
+      filterName,
+      extensions: meta.accepts,
     });
-    const arr = Array.isArray(sel) ? sel : sel ? [sel] : [];
     if (arr.length === 0) return; // user cancelled — keep the current selection
     const valid = arr.filter((p) => extOk(p, meta.accepts));
     if (valid.length === 0) {

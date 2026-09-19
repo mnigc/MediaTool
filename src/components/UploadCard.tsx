@@ -1,6 +1,6 @@
 import type { UploadTargetKind, UploadTask } from "../types";
-import { formatBytes, openOutputFolder } from "../lib/tauri";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { formatBytes, openOutputFolder } from "../lib/engine";
+import { canRevealInFolder, openExternal } from "../lib/shell";
 import {
   CheckIcon,
   UploadIcon,
@@ -141,14 +141,14 @@ export default function UploadCard({ task, onCancel, onRetry, onRemove }: Props)
           <div className="flex items-center gap-2">
             {isDone && task.url && (
               <button
-                onClick={() => void openUrl(task.url!)}
+                onClick={() => openExternal(task.url!)}
                 className="flex items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 text-xs font-medium text-brand-700 ring-1 ring-brand-200 transition hover:bg-brand-50 dark:bg-neutral-800 dark:text-brand-300 dark:ring-neutral-700 dark:hover:bg-neutral-700"
               >
                 <GlobeIcon className="h-3.5 w-3.5" />
                 {t("upload.card.openLink")}
               </button>
             )}
-            {isDone && (
+            {isDone && canRevealInFolder && (
               <button
                 onClick={() => openOutputFolder(task.filePath)}
                 className="flex items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 text-xs font-medium text-neutral-600 ring-1 ring-neutral-200 transition hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-300 dark:ring-neutral-700 dark:hover:bg-neutral-700"

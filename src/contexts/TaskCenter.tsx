@@ -1,6 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { onFileDrop, pickPaths } from "../lib/shell";
 import {
   cancelJob,
   detectGpu,
@@ -9,7 +8,7 @@ import {
   onProgress,
   probeFile,
   startJob,
-} from "../lib/tauri";
+} from "../lib/engine";
 import { defaultParamsFor } from "../lib/defaults";
 import { readStorage, writeStorage } from "../lib/storage";
 import { useI18n } from "../i18n";
@@ -336,19 +335,13 @@ export function TaskCenterProvider({
       unlisteners.push(a, b);
     });
 
-    void getCurrentWebview()
-      .onDragDropEvent((event) => {
-        if (event.payload.type === "drop") {
-          dropHandlerRef.current?.(event.payload.paths);
-        }
-      })
-      .then((fn) => {
-        if (!active) {
-          fn();
-          return;
-        }
-        unlisteners.push(fn);
-      });
+    void onFileDrop((paths) => dropHandlerRef.current?.(paths)).then((fn) => {
+      if (!active) {
+        fn();
+        return;
+      }
+      unlisteners.push(fn);
+    });
 
     return () => {
       active = false;
@@ -446,12 +439,13 @@ export function TaskCenterProvider({
   }
 
   async function pickFiles(filters?: Array<{ name: string; extensions: string[] }>) {
-    const selected = await open({ multiple: true, title: t("opt.selectFiles"), filters });
-    if (selected && !Array.isArray(selected)) {
-      dropHandlerRef.current?.([selected]);
-    } else if (Array.isArray(selected)) {
-      dropHandlerRef.current?.(selected);
-    }
+    const selected = await pickPaths({
+      multiple: true,
+      title: t("opt.selectFiles"),
+      filterName: filters?.[0]?.name,
+      extensions: filters?.[0]?.extensions,
+    });
+    if (selected.length) dropHandlerRef.current?.(selected);
   }
 
   /** Create a single merge job from multiple input files and start it. */
@@ -486,10 +480,8 @@ export function TaskCenterProvider({
   }
 
   async function chooseOutput() {
-    const d = await open({ directory: true, title: t("sidebar.changeOutput") });
-    if (d && !Array.isArray(d)) {
-      setSettings((s) => ({ ...s, outputDir: d }));
-    }
+    const [dir] = await pickPaths({ directory: true, title: t("sidebar.changeOutput") });
+    if (dir) setSettings((s) => ({ ...s, outputDir: dir }));
   }
 
   /** Run the post-processing steps bound to a finished job. Progress is
