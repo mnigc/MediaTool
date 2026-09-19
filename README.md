@@ -4,176 +4,68 @@
 
 # MediaTool
 
-A local media **toolbox** for batch processing of video, image, and audio files. Built on **Tauri 2 + React + TypeScript** with **FFmpeg** as the processing engine.
+**Your entire media workflow in one local app.** Download and record from the web, compress and convert video & audio, chain everything into automated pipelines, and push the results wherever you want — no cloud, no accounts, no uploads you didn't ask for. Every byte is processed on your own machine with FFmpeg.
 
-> Legal compliance: Only royalty-free encoders are enabled by default (H.264/AAC patents have expired, VP9/Opus/WebP/AVIF/AV1 are royalty-free). **HEVC/H.265** and other patent-encumbered encoders are **not provided**.
+## ✨ Features
 
-## Features
+### 📥 Download & record from the web
 
-- **Toolbox Layout** — categorized tool tree (video / audio / image / tools, 37 tools in total) with a unified bottom task dock; different tools can run tasks simultaneously
-- **Video Compress** — H.264, VP9, AV1 (SVT-AV1) encoding with CRF/target size/fixed bitrate quality modes, resolution (480p ~ 2160p), frame rate and speed presets
-- **Video Convert** — free container & codec combos (MP4/WebM/MKV/MOV × H.264/VP9/AV1); switching containers auto-selects matching codecs
-- **Video Trim** — lossless quick mode (stream copy, keyframe-aligned) or precise mode (re-encode)
-- **Remove Audio** — lossless audio-track removal via stream copy
-- **Rotate & Flip** — 90° CW/CCW, 180°, horizontal/vertical mirror
-- **Video → GIF** — high-quality palette-based GIF conversion (start/duration/fps/width)
-- **Screenshot Export** — single frame or interval series export to PNG/JPEG
-- **Speed Change** — 0.25x ~ 4x video/audio speed change with chained atempo, optional mute
-- **Image Watermark** — overlay watermark on video with 9-grid positioning, scale & opacity control
-- **Audio Compress / Convert** — lower bitrate keeping the source codec, or convert between MP3/AAC/M4A/Opus/FLAC
-- **Extract Audio** — pull the audio track out of a video into its own file
-- **Image Compress / Convert** — adjust quality & size keeping the source format, or convert between WebP/JPEG/PNG/AVIF
-- **Strip Metadata** — remove EXIF/GPS and other metadata; lossless stream-copy for A/V, high-quality re-encode for images
-- **Media Info** — instant full codec/stream inspection report via ffprobe
-- **GPU Acceleration** — Auto-detects NVIDIA NVENC, Intel QSV, Apple VideoToolbox, AMD AMF, VAAPI backends
-- **Batch Processing** — Drag-and-drop import, concurrent task execution (1/2/4), unified task dock with progress/retry/cancel
-- **Name Conflict Policy** — auto-rename, skip, or overwrite when output files already exist
-- **Built-in & Custom Presets** — per-tool scoped preset system for quick reuse
-- **Output Size Estimation** — theoretical estimation + sample encoding for accurate prediction
-- **Real-time Progress** — Progress bar, speed, and ETA estimation
-- **Drag-and-Drop Sorting** — Reorder task list by dragging
-- **Output Suffix** — Custom output filename suffix to avoid overwriting source files
+- **Video downloader** powered by yt-dlp — thousands of supported sites including YouTube, Bilibili, TikTok/抖音, X/Twitter, Instagram, Twitch, Weibo and Vimeo. Grab the best available quality or pick an exact resolution.
+- **Livestream recorder** powered by Streamlink — YouTube, Twitch, Bilibili, 斗鱼, 虎牙, Kick, NicoLive and ~155 more platforms.
+- **Live monitors** — register a channel once and MediaTool watches it; recording starts automatically the moment the stream goes live.
 
-## Screenshot
+### 🎬 Video tools
 
-![MediaTool Screenshot](https://via.placeholder.com/800x500?text=MediaTool+Screenshot)
+- **Compress** — H.264, HEVC, VP9 and AV1 (SVT-AV1) with CRF, fixed-bitrate or *target file size* modes, plus resolution, frame-rate and encoding-speed presets.
+- **Convert** — any container/codec combo (MP4 · MKV · WebM · MOV × H.264 · HEVC · VP9 · AV1); switching containers auto-matches the right codecs.
+- **Trim** — multi-segment cutting in lossless keyframe mode or precise re-encode mode.
+- **Subtitle** — burn in or soft-mux external subtitle files.
+- **Merge** — concatenate clips into one video.
+- **Speed change** — 0.25× to 4× with audio pitch preserved, optional mute.
+- **Watermark** — image overlay with 9-position anchoring, scale, margin and opacity controls.
+- **Screenshots & frames** — extract a single frame or an interval series to PNG/JPEG; sample frames into a time-lapse video; build contact sheets / player-preview sprite grids.
+- **Remove audio** — lossless mute via stream copy.
+- **Silence detector** — find silent segments and export a report, tuned by threshold and minimum length.
+- **Media inspector** — a full ffprobe report for any file, with one-click metadata stripping.
 
-## Requirements
+### 🎧 Audio tools
 
-- **Node.js** ≥ 18 (with npm)
-- **Rust** toolchain ([rustup](https://rustup.rs/), including `stable` and MSVC target)
-- **FFmpeg**: Runtime requires `ffmpeg` / `ffprobe`. The app searches in this order:
-  1. Same directory as the executable (`ffmpeg.exe` / `ffprobe.exe`);
-  2. Tauri resource directory (`resource_dir`);
-  3. System `PATH`.
-  - If none found, the app will prompt "FFmpeg not found".
-  - Recommended: run `pwsh scripts/fetch-ffmpeg.ps1` to download and place in `src-tauri/binaries/`.
-  - Alternatively, install FFmpeg system-wide and add it to `PATH`.
+- **Compress & convert** between MP3, AAC, M4A, Opus and FLAC at any bitrate.
+- **Extract audio** from any video, losslessly or re-encoded.
+- **Volume** — loudness normalization or manual gain.
+- **Merge** — concatenate audio files.
 
-## Install Dependencies
+### 🔗 Automated pipelines
 
-```bash
-npm install
-```
+- **Workflow builder** — chain multiple tools into a reusable pipeline; each step feeds the previous one's output, with a single flattened progress bar.
+- **Post-processing on completion** — bind a pipeline to a download, recording or job and it runs automatically when the source finishes.
+- **Smart fallback** — a lossless remux that can't fit its container is automatically swapped for the right transcode, and the run tells you why.
 
-## Start Development
+### ☁️ Upload when it's done
 
-```bash
-npm run tauri dev
-```
+- Push finished outputs straight to **WebDAV** (坚果云, NAS, Alist…), **Telegram**, **YouTube**, **Google Drive** or **OneDrive**.
+- Streaming transfers with real-time progress, cancellation and OAuth token refresh — credentials live only in the app, never on disk in the backend.
 
-This launches the Vite frontend (http://localhost:1420), then compiles and starts the Rust backend window. Frontend changes hot-reload, Rust changes trigger recompilation.
+### ⚡ Batch that behaves
 
-## Build Installer
+- Drag in dozens of files and run them **concurrently** across different tools.
+- A unified task dock with progress, speed, ETA, retry and cancel; drag to reorder.
+- **Name-conflict policy** (auto-rename / skip / overwrite) and customizable output suffixes — your originals are never clobbered by surprise.
+- **Output size estimation** — theoretical prediction plus an actual sample encode when you need precision.
 
-```bash
-npm run tauri build
-```
+### 🎛 Built for quality and speed
 
-Output is in `src-tauri/target/release/bundle/` (Windows: `.msi` / `.exe`).
+- **GPU encoding, auto-detected** — NVIDIA NVENC, Intel QSV, Apple VideoToolbox, AMD AMF and VAAPI are probed at startup and offered as one-click options.
+- **Presets everywhere** — built-in recipes per tool, plus your own custom presets, ready in the presets bar.
 
-## Auto-Update & Release
+### 🔒 Private by design
 
-The app uses the Tauri 2 updater: on launch it silently checks
-`https://github.com/mnigc/MediaTool/releases/latest/download/latest.json`, and the
-header download button triggers a manual check. When a newer version is found the
-user is prompted to download and install (NSIS installer, auto-restart). The upgrade
-installer is signed with an updater key pair that is **NOT** tracked in git.
+- 100% local processing — nothing ever leaves your machine unless you configure an upload target.
+- **Auto-updates** keep you current without reinstalling.
+- **Bilingual interface** (中文 / English) with light & dark themes.
 
-### One-time setup (already done)
+---
 
-- Generating the key pair:
-  `npx @tauri-apps/cli signer generate --password <pw> --write-keys <PATH>`
-  - Private key: keep it offline / in key manager, e.g. `C:\Users\<you>\.tauri\mediatool.key`
-  - Public key: stored in `src-tauri/tauri.conf.json` -> `plugins.updater.pubkey`
-- Add GitHub repo Secrets (Settings → Secrets and variables → Actions):
-  - `TAURI_SIGNING_PRIVATE_KEY` — content of the private key file
-  - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — the key password
-
-### Publishing a new version
-
-1. Bump `version` in `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml`
-   (keep them in sync; optionally also `package.json`).
-2. Commit and push, then create a tag and push it:
-   `git tag v0.2.0 && git push origin v0.2.0`
-3. The `Release` workflow (`.github/workflows/release.yml`) builds the NSIS
-   installer with the signing key, generates `latest.json` and uploads everything
-   to a **draft** GitHub Release.
-4. Review the draft release, edit the release notes, and click **Publish**.
-   Existing apps will now see the update button in the header.
-
-### Building update artifacts locally
-
-Set the signing env vars first, then run `tauri build`:
-
-```powershell
-$env:TAURI_SIGNING_PRIVATE_KEY = (Get-Content "$env:USERPROFILE\.tauri\mediatool.key" -Raw).Trim()
-$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "<pw>"
-npx @tauri-apps/cli build --bundles nsis
-```
-
-This produces `MediaTool_<ver>_x64-setup.exe` and its `.sig` signature; CI generates
-the `latest.json` manifest on release. The updater only works with NSIS installers
-(MSI is not supported for updates).
-
-## Scripts
-
-| Command | Description |
-| --- | --- |
-| `npm run dev` | Frontend only (Vite, no Tauri window) |
-| `npm run build` | Build frontend static assets only |
-| `npm run tauri dev` | Full desktop app (development) |
-| `npm run tauri build` | Package desktop app (release) |
-
-## Directory Structure
-
-```
-MediaTool/
-├── src/                    # React frontend
-│   ├── components/         # UI components (JobCard, JobList, ToolNav, OptionsPanel, etc.)
-│   ├── contexts/           # TaskCenter (unified task queue, events, settings)
-│   ├── tools/              # Toolbox: tool registry, workbenches, tool param panels
-│   ├── workflow/           # Multi-step workflow engine & types
-│   ├── hooks/              # Custom hooks (useTheme, useToasts)
-│   ├── i18n/               # Internationalization (2 languages: Chinese / English)
-│   ├── lib/                # Utilities (preset management, output estimation, Tauri calls)
-│   ├── App.tsx             # Main app component
-│   ├── main.tsx            # Entry point
-│   ├── types.ts            # TypeScript type definitions
-│   └── index.css           # Styles (Tailwind CSS 4)
-├── src-tauri/              # Rust backend
-│   ├── src/                # Rust source
-│   │   ├── commands.rs     # Tauri command registration
-│   │   ├── jobs.rs         # Per-tool FFmpeg arg builders, task queue, progress/events
-│   │   ├── inspect.rs      # ffprobe-based full media inspection
-│   │   ├── ffmpeg.rs       # FFmpeg process lookup & spawn
-│   │   ├── media.rs        # ffprobe media detection
-│   │   ├── gpu.rs          # GPU acceleration detection
-│   │   ├── thumbnail.rs    # Video/image thumbnail generation
-│   │   ├── models.rs       # Data models
-│   │   ├── state.rs        # Job manager (child process lifecycle)
-│   │   └── error.rs        # Error types
-│   ├── binaries/           # FFmpeg sidecar binaries (gitignored)
-│   ├── icons/              # App icons
-│   └── tauri.conf.json     # Tauri configuration
-├── scripts/                # Helper scripts
-│   ├── fetch-ffmpeg.ps1    # Download FFmpeg binary
-│   └── await-ffmpeg.ps1    # Wait for FFmpeg readiness
-├── package.json
-├── vite.config.ts
-└── tsconfig.json
-```
-
-## Tech Stack
-
-- **Frontend**: React 19 + TypeScript + Tailwind CSS 4
-- **Desktop Framework**: Tauri 2
-- **Backend**: Rust (Tauri commands)
-- **Processing Engine**: FFmpeg (sidecar process)
-- **Build Tool**: Vite 7
-
-## Notes
-
-- FFmpeg binaries are large. `scripts/fetch-ffmpeg.ps1` downloads a GPL build from GitHub (includes x264 / VP9 / AV1 / MP3 / Opus encoders). Please be patient if the download is slow, or install FFmpeg to `PATH` manually.
-- For development, place `ffmpeg.exe` / `ffprobe.exe` in `src-tauri/binaries/` (or the same directory as the app / `PATH`).
-- The frontend uses Tailwind CSS 4 (`@tailwindcss/vite` plugin), no PostCSS config file needed.
+<p align="center">
+  Grab the latest installer from <a href="https://github.com/mnigc/MediaTool/releases">Releases</a> — Windows .exe / .msi, with in-app auto-update.
+</p>

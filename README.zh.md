@@ -4,130 +4,68 @@
 
 # MediaTool
 
-本地媒体**工具箱**，支持视频、图片、音频的批量处理与多种实用工具。基于 **Tauri 2 + React + TypeScript** 桌面端，底层使用 **FFmpeg** 作为处理引擎。
+**把整套媒体工作流装进一个本地应用。** 从网页下载与录制、压缩与转换音视频、把多个步骤串成自动化流水线、处理完自动上传到你指定的地方 —— 没有云端、没有账号，除你主动配置的上传外，数据从不离开你的电脑。底层由 FFmpeg 驱动。
 
-> 法律合规说明：默认仅启用无专利风险的编码（H.264/AAC 已过期、VP9/Opus/WebP/AVIF/AV1 均为免版税），**不提供 HEVC/H.265** 等有专利风险的编码。
+## ✨ 特性
 
-## 功能特性
+### 📥 网页下载与直播录制
 
-- **工具箱布局** — 左侧分类工具树（视频/音频/图片/工具，共 37 个小工具）+ 底部统一任务坞，不同工具的任务可同时进行
-- **视频压缩** — H.264、VP9、AV1 (SVT-AV1) 编码，CRF/目标大小/固定码率三种质量模式，分辨率（480p ~ 2160p）、帧率、编码速度
-- **视频转换** — 自由选择容器与编码组合（MP4/WebM/MKV/MOV × H.264/VP9/AV1），切换容器自动匹配默认编码器
-- **视频裁剪** — 无损快速模式（流复制、关键帧对齐）与精确模式（重编码）两种裁剪方式
-- **移除音轨** — 无损流复制移除音频轨，瞬间完成
-- **旋转翻转** — 90° 顺/逆时针、180° 旋转及水平/垂直镜像
-- **转 GIF** — 调色板算法高质量动图（起止时间/帧率/宽度可调）
-- **截图导出** — 单帧截图或定时序列导出 PNG/JPEG
-- **变速** — 视频/音频 0.25x ~ 4x 变速（atempo 链式处理），可选移除音频
-- **图片水印** — 视频叠加图片水印，九宫格定位、缩放与不透明度调节
-- **音频压缩 / 音频转换** — 保持格式降码率，或 MP3/AAC/M4A/Opus/FLAC 格式互转
-- **提取音频** — 从视频中提取音轨为独立音频文件
-- **图片压缩 / 图片转换** — 保持原格式调质量限尺寸，或 WebP/JPEG/PNG/AVIF 格式互转
-- **去除元数据** — 删除 EXIF/GPS 等隐私信息；音视频无损流复制处理，图片高质量重编码
-- **格式体检** — 基于 ffprobe 的完整封装/流信息即时查看
-- **GPU 加速** — 自动检测 NVIDIA NVENC、Intel QSV、Apple VideoToolbox、AMD AMF、VAAPI 后端
-- **批量处理** — 拖拽添加或文件选择器批量导入，并发数控制（1/2/4），任务坞统一进度/重试/取消
-- **重名冲突策略** — 输出文件重名时可自动重命名、跳过或覆盖
-- **内置与自定义预设** — 按工具隔离的预设系统，常用参数快速复用
-- **输出大小预估** — 基于参数的理论估算 + 采样编码精确估算
-- **多语言** — 中文、English | **主题** — 浅色 / 深色 / 跟随系统
+- **视频下载** 基于 yt-dlp，支持数千个站点：YouTube、Bilibili、抖音/TikTok、X/Twitter、Instagram、Twitch、微博、Vimeo 等，可取最高画质或指定分辨率。
+- **直播录制** 基于 Streamlink，覆盖 YouTube、Twitch、Bilibili、抖音、斗鱼、虎牙、Kick、NicoLive 等约 155 个平台。
+- **开播监控** — 登记一个直播间后自动盯守，主播一开播就开始录制。
 
-## 截图
+### 🎬 视频工具
 
-![MediaTool 界面](https://via.placeholder.com/800x500?text=MediaTool+Screenshot)
+- **压缩** — H.264、HEVC、VP9、AV1 (SVT-AV1)，CRF / 固定码率 / *目标文件大小* 三种质量模式，另有分辨率、帧率、编码速度预设。
+- **格式转换** — 容器与编码自由组合（MP4 · MKV · WebM · MOV × H.264 · HEVC · VP9 · AV1），切换容器自动匹配对应编码器。
+- **裁剪** — 多段截取，无损关键帧模式或精确重编码模式。
+- **字幕** — 外挂字幕烧录或封装（soft-mux）。
+- **合并** — 多个片段拼接为一个视频。
+- **变速** — 0.25× 至 4×，音频音调保持不变，可选静音。
+- **水印** — 图片水印九宫格定位，支持缩放、边距与透明度调节。
+- **截图与抽帧** — 单帧或按间隔批量导出 PNG/JPEG；间隔抽帧合成延时视频；生成缩略图矩阵 / 播放器预览式雪碧图。
+- **去除音轨** — 流复制无损静音。
+- **静音检测** — 按阈值与最短时长定位静音片段，导出报告。
+- **媒体检查** — 任意文件的完整 ffprobe 报告，一键清除元数据。
 
-## 环境要求
+### 🎧 音频工具
 
-- **Node.js** ≥ 18（含 npm）
-- **Rust** 工具链（[rustup](https://rustup.rs/) 安装，需包含 `stable` 与 MSVC 编译目标）
-- **FFmpeg**：运行时需要 `ffmpeg` / `ffprobe`。程序按以下顺序查找：
-  1. 与可执行文件同一目录（`ffmpeg.exe` / `ffprobe.exe`）；
-  2. Tauri 资源目录（`resource_dir`）；
-  3. 系统 `PATH` 中的 `ffmpeg`。
-  - 若都找不到，应用会在调用时提示「找不到 ffmpeg」。
-  - 推荐用脚本一键获取：`pwsh scripts/fetch-ffmpeg.ps1`（下载并放到 `src-tauri/binaries/`）。
-  - 也可自行在系统安装 FFmpeg 并加入 `PATH`。
+- **压缩 / 转换** — MP3、AAC、M4A、Opus、FLAC 之间任意码率互转。
+- **音频提取** — 从任意视频中无损或重编码提取音频。
+- **音量** — 响度标准化或手动增益。
+- **合并** — 多个音频文件拼接。
 
-## 安装依赖
+### 🔗 自动化流水线
 
-```bash
-npm install
-```
+- **工作流编排** — 把多个工具串成可复用的流水线，上一步的产物自动成为下一步的输入，全程一条进度条。
+- **完成后处理** — 给下载、录制或任务绑定流水线，源文件一完成就自动执行。
+- **智能回退** — 无损 remux 装不进目标容器时，自动换成正确的转码方案，并在结果中说明原因。
 
-## 启动开发模式
+### ☁️ 处理完，直接上传
 
-```bash
-npm run tauri dev
-```
+- 成品可推送到 **WebDAV**（坚果云、NAS、Alist…）、**Telegram**、**YouTube**、**Google Drive** 或 **OneDrive**。
+- 流式传输、实时进度、可随时取消，OAuth 令牌自动刷新 —— 凭据只保存在应用前端，后端不落盘。
 
-该命令会：先启动 Vite 前端（http://localhost:1420），再编译并启动 Rust 后端窗口。修改前端代码会热更新，修改 Rust 代码会重新编译。
+### ⚡ 批量，且有序
 
-## 打包为安装程序
+- 一次拖入几十个文件，**跨工具并发**执行。
+- 统一任务坞：进度、速度、预计剩余、重试、取消，支持拖拽排序。
+- **重名策略**（自动改名 / 跳过 / 覆盖）与自定义输出后缀 —— 原始文件永远不会被意外覆盖。
+- **产物体积预估** — 理论估算 + 实际采样编码，需要时给出精确预测。
 
-```bash
-npm run tauri build
-```
+### 🎛 为画质与速度而生
 
-产物位于 `src-tauri/target/release/bundle/`（Windows 为 `.msi` / `.exe`）。
+- **GPU 编码自动探测** — 启动时检测 NVIDIA NVENC、Intel QSV、Apple VideoToolbox、AMD AMF、VAAPI，一键启用。
+- **预设随取随用** — 每个工具自带内置配方，也可保存自己的自定义预设。
 
-## 常用脚本
+### 🔒 隐私优先
 
-| 命令 | 作用 |
-| --- | --- |
-| `npm run dev` | 仅启动前端（Vite，不含 Tauri 窗口） |
-| `npm run build` | 仅构建前端静态资源 |
-| `npm run tauri dev` | 启动完整桌面应用（开发） |
-| `npm run tauri build` | 打包桌面应用（发布） |
+- 100% 本地处理 —— 除非你配置了上传目标，任何数据都不会离开电脑。
+- **自动更新**，无需重装。
+- **双语界面**（中文 / English），明暗两套主题。
 
-## 目录结构
+---
 
-```
-MediaTool/
-├── src/                    # React 前端
-│   ├── components/         # UI 组件（JobCard、JobList、ToolNav、OptionsPanel 等）
-│   ├── contexts/           # TaskCenter（统一任务队列、事件、设置）
-│   ├── tools/              # 工具箱：工具注册表、工作台、参数面板
-│   ├── workflow/           # 多步骤工作流引擎与类型
-│   ├── hooks/              # 自定义 Hooks（useTheme、useToasts）
-│   ├── i18n/               # 国际化（2 种语言：中文 / English）
-│   ├── lib/                # 工具库（预设管理、输出估算、Tauri 调用）
-│   ├── App.tsx             # 主应用组件
-│   ├── main.tsx            # 入口
-│   ├── types.ts            # TypeScript 类型定义
-│   └── index.css           # 样式（Tailwind CSS 4）
-├── src-tauri/              # Rust 后端
-│   ├── src/                # Rust 源码
-│   │   ├── commands.rs     # Tauri 命令注册
-│   │   ├── jobs.rs         # 任务队列、FFmpeg 参数构建、进度/事件
-│   │   ├── inspect.rs      # 基于 ffprobe 的完整媒体检测
-│   │   ├── ffmpeg.rs       # FFmpeg 进程查找与启动
-│   │   ├── media.rs        # ffprobe 媒体探测
-│   │   ├── gpu.rs          # GPU 加速后端检测
-│   │   ├── thumbnail.rs    # 视频/图片缩略图生成
-│   │   ├── models.rs       # 数据模型
-│   │   ├── state.rs        # 任务管理器（子进程生命周期）
-│   │   └── error.rs        # 错误类型
-│   ├── binaries/           # FFmpeg sidecar 二进制（gitignored）
-│   ├── icons/              # 应用图标
-│   └── tauri.conf.json     # Tauri 配置
-├── scripts/                # 辅助脚本
-│   ├── fetch-ffmpeg.ps1    # 下载 FFmpeg 二进制
-│   └── await-ffmpeg.ps1    # 等待 FFmpeg 就绪
-├── package.json
-├── vite.config.ts
-└── tsconfig.json
-```
-
-## 技术栈
-
-- **前端**：React 19 + TypeScript + Tailwind CSS 4
-- **桌面框架**：Tauri 2
-- **后端**：Rust（Tauri 命令）
-- **处理引擎**：FFmpeg（sidecar 进程）
-- **构建工具**：Vite 7
-
-## 备注
-
-- FFmpeg 二进制较大，`scripts/fetch-ffmpeg.ps1` 会从 GitHub 下载 GPL 构建（含 x264 / VP9 / AV1 / MP3 / Opus 等编码器）。下载较慢时请耐心等待，或自行安装到 `PATH`。
-- 开发时把 `ffmpeg.exe` / `ffprobe.exe` 放在 `src-tauri/binaries/`（或程序同目录 / `PATH`）即可运行。
-- 前端使用 Tailwind CSS 4（`@tailwindcss/vite` 插件），无需 PostCSS 配置文件。
+<p align="center">
+  前往 <a href="https://github.com/mnigc/MediaTool/releases">Releases</a> 下载最新安装包 —— Windows .exe / .msi，应用内自动更新。
+</p>
