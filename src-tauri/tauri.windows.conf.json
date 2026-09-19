@@ -2,10 +2,10 @@
   "bundle": {
     "targets": ["nsis", "msi"],
     "resources": {
-      "binaries/ffmpeg.exe": "binaries/",
-      "binaries/ffprobe.exe": "binaries/",
-      "binaries/yt-dlp.exe": "binaries/",
-      "binaries/streamlink.zip": "binaries/"
+      "binaries/ffmpeg.exe": "binaries/ffmpeg.exe",
+      "binaries/ffprobe.exe": "binaries/ffprobe.exe",
+      "binaries/yt-dlp.exe": "binaries/yt-dlp.exe",
+      "binaries/streamlink.zip": "binaries/streamlink.zip"
     }
   }
 }

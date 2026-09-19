@@ -2,9 +2,9 @@
   "bundle": {
     "targets": ["deb", "rpm", "appimage"],
     "resources": {
-      "binaries/ffmpeg": "binaries/",
-      "binaries/ffprobe": "binaries/",
-      "binaries/yt-dlp": "binaries/"
+      "binaries/ffmpeg": "binaries/ffmpeg",
+      "binaries/ffprobe": "binaries/ffprobe",
+      "binaries/yt-dlp": "binaries/yt-dlp"
     }
   }
 }
