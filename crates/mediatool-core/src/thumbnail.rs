@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::time::{Duration, Instant};
 
+use crate::ctx::AppEnv;
 use crate::error::Result;
 use crate::ffmpeg;
 
@@ -12,31 +13,40 @@ const THUMB_TIMEOUT: Duration = Duration::from_secs(15);
 /// settling for it.
 const SUSPICIOUS_THUMB_BYTES: usize = 3 * 1024;
 
-/// Return a data-URL thumbnail (base64) for the given media path, or `None` if
-/// no preview is available (audio, unknown, or generation failed).
-#[tauri::command]
-pub async fn get_thumbnail(
-    app: tauri::AppHandle,
+/// Async wrapper: ffmpeg runs block for seconds; keep them off async workers.
+pub async fn get_thumbnail_spawn(
+    env: std::sync::Arc<dyn AppEnv>,
     path: String,
     media_type: String,
     duration_secs: Option<f64>,
 ) -> Result<Option<String>> {
-    let path = PathBuf::from(&path);
+    tokio::task::spawn_blocking(move || {
+        get_thumbnail_sync(&*env, &path, &media_type, duration_secs)
+    })
+    .await
+    .map_err(|e| crate::error::AppError(e.to_string()))?
+}
+
+/// Return a data-URL thumbnail (base64) for the given media path, or `None` if
+/// no preview is available (audio, unknown, or generation failed). Blocking;
+/// call within spawn_blocking.
+pub fn get_thumbnail_sync(
+    env: &dyn AppEnv,
+    path: &str,
+    media_type: &str,
+    duration_secs: Option<f64>,
+) -> Result<Option<String>> {
+    let path = PathBuf::from(path);
     if !path.exists() {
         return Ok(None);
     }
     if media_type != "image" && media_type != "video" {
         return Ok(None);
     }
-
-    // ffmpeg runs block for seconds; keep them off the async runtime workers.
-    let res = tauri::async_runtime::spawn_blocking(move || match media_type.as_str() {
-        "image" => image_thumbnail(&app, &path),
-        _ => video_thumbnail(&app, &path, duration_secs),
-    })
-    .await
-    .map_err(|e| crate::error::AppError(e.to_string()))?;
-    res
+    match media_type {
+        "image" => image_thumbnail(env, &path),
+        _ => video_thumbnail(env, &path, duration_secs),
+    }
 }
 
 /// Wait for a child to exit with a hard timeout; kill it when it hangs
@@ -63,7 +73,7 @@ fn wait_with_timeout(mut child: Child, timeout: Duration) -> bool {
 /// as a fallback while later attempts run; if every attempt fails or looks
 /// black, the least-bad frame still wins over no preview at all.
 fn render_thumbnail(
-    app: &tauri::AppHandle,
+    env: &dyn AppEnv,
     attempts: Vec<Vec<String>>,
     tmp: &Path,
     mime: &str,
@@ -71,14 +81,16 @@ fn render_thumbnail(
     let mut fallback: Option<Vec<u8>> = None;
     for args in attempts {
         let _ = std::fs::remove_file(tmp);
-        let Ok((child, _stdout, _stderr, _drain)) = ffmpeg::spawn(app, "ffmpeg", &args) else {
+        let Ok((child, _stdout, _stderr, _drain)) = ffmpeg::spawn(env, "ffmpeg", &args) else {
             continue;
         };
         if !wait_with_timeout(child, THUMB_TIMEOUT) || !tmp.exists() {
             continue;
         }
         let mut buf = Vec::new();
-        let read = std::fs::File::open(tmp).ok().and_then(|mut f| f.read_to_end(&mut buf).ok());
+        let read = std::fs::File::open(tmp)
+            .ok()
+            .and_then(|mut f| f.read_to_end(&mut buf).ok());
         let _ = std::fs::remove_file(tmp);
         match read {
             Some(_) if buf.len() >= SUSPICIOUS_THUMB_BYTES => {
@@ -93,7 +105,7 @@ fn render_thumbnail(
 
 /// Images stay PNG: user art (logos in the watermark tool) often carries
 /// transparency, which a JPEG would flatten to black.
-fn image_thumbnail(app: &tauri::AppHandle, path: &Path) -> Result<Option<String>> {
+fn image_thumbnail(env: &dyn AppEnv, path: &Path) -> Result<Option<String>> {
     let tmp = temp_thumb("mediatool_imgthumb", "png");
     let args: Vec<String> = vec![
         "-i".into(),
@@ -105,7 +117,7 @@ fn image_thumbnail(app: &tauri::AppHandle, path: &Path) -> Result<Option<String>
         "-y".into(),
         tmp.to_string_lossy().to_string(),
     ];
-    render_thumbnail(app, vec![args], &tmp, "image/png")
+    render_thumbnail(env, vec![args], &tmp, "image/png")
 }
 
 /// Video frames go out as JPEG: a 320px PNG frame runs ~10x larger, and these
@@ -117,7 +129,7 @@ fn image_thumbnail(app: &tauri::AppHandle, path: &Path) -> Result<Option<String>
 /// stay dark past that, and the frame-1 fallback covers clips shorter than the
 /// seek target.
 fn video_thumbnail(
-    app: &tauri::AppHandle,
+    env: &dyn AppEnv,
     path: &Path,
     duration_secs: Option<f64>,
 ) -> Result<Option<String>> {
@@ -163,7 +175,7 @@ fn video_thumbnail(
             tmp.to_string_lossy().to_string(),
         ],
     ];
-    render_thumbnail(app, attempts, &tmp, "image/jpeg")
+    render_thumbnail(env, attempts, &tmp, "image/jpeg")
 }
 
 fn temp_thumb(prefix: &str, ext: &str) -> PathBuf {
@@ -179,8 +191,7 @@ fn temp_thumb(prefix: &str, ext: &str) -> PathBuf {
 }
 
 fn base64_encode(input: &[u8]) -> String {
-    const CHARS: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
     for chunk in input.chunks(3) {
         let b0 = chunk[0] as u32;

@@ -242,7 +242,11 @@ pub struct VideoSilenceParams {
 
 impl Default for FrameSampleParams {
     fn default() -> Self {
-        Self { interval: 2.0, fps: 12.0, width: 480 }
+        Self {
+            interval: 2.0,
+            fps: 12.0,
+            width: 480,
+        }
     }
 }
 
@@ -262,7 +266,10 @@ impl Default for ContactSheetParams {
 
 impl Default for VideoSilenceParams {
     fn default() -> Self {
-        Self { threshold: -35.0, min_len: 2.0 }
+        Self {
+            threshold: -35.0,
+            min_len: 2.0,
+        }
     }
 }
 

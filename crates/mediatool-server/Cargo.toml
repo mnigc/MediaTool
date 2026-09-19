@@ -1,0 +1,21 @@
+[package]
+name = "mediatool-server"
+version = "0.1.7"
+edition = "2021"
+description = "Headless MediaTool engine exposed over HTTP + WebSocket, for 24/7 NAS deployment"
+
+[[bin]]
+name = "mediatool-server"
+path = "src/main.rs"
+
+[dependencies]
+mediatool-core = { path = "../mediatool-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+axum = { version = "0.8", features = ["ws", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "fs", "time"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+toml = "0.9"

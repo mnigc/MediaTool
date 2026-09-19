@@ -3,8 +3,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-use tauri::Manager;
-
+use crate::ctx::AppEnv;
 use crate::error::{AppError, Result};
 
 /// Platform-specific binary name (ffmpeg / ffprobe).
@@ -18,9 +17,9 @@ pub fn binary_name(base: &str) -> String {
 
 /// Locate a binary: next to the running executable, then walking up the
 /// directory tree looking for a `binaries/` folder (dev layout:
-/// `src-tauri/binaries`), then the resource dir, then the system PATH
+/// `src-tauri/binaries`), then the shell's resource dir, then the system PATH
 /// (verified by a quick `-version` probe).
-pub fn resolve(app: &tauri::AppHandle, base: &str) -> Option<PathBuf> {
+pub fn resolve(env: &dyn AppEnv, base: &str) -> Option<PathBuf> {
     let name = binary_name(base);
 
     if let Ok(exe) = std::env::current_exe() {
@@ -44,7 +43,7 @@ pub fn resolve(app: &tauri::AppHandle, base: &str) -> Option<PathBuf> {
         }
     }
 
-    if let Ok(res) = app.path().resource_dir() {
+    if let Some(res) = env.resource_dir() {
         let p = res.join(&name);
         if p.exists() {
             return Some(p);
@@ -95,7 +94,7 @@ pub(crate) fn find_in_path(name: &str) -> Option<PathBuf> {
 /// failure), and the drain-thread handle (join it before reading the buffer
 /// to make sure the tail of stderr has been captured).
 pub fn spawn(
-    app: &tauri::AppHandle,
+    env: &dyn AppEnv,
     base: &str,
     args: &[String],
 ) -> Result<(
@@ -104,7 +103,7 @@ pub fn spawn(
     Arc<Mutex<Vec<u8>>>,
     std::thread::JoinHandle<()>,
 )> {
-    let bin = resolve(app, base).ok_or_else(|| {
+    let bin = resolve(env, base).ok_or_else(|| {
         AppError(format!(
             "找不到 {}：请将 FFmpeg 放在程序同目录，或安装到系统 PATH 中",
             base

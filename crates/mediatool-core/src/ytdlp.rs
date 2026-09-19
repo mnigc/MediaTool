@@ -15,11 +15,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager};
 
+use crate::ctx::{emit, AppEnv, Ctx, Emitter};
 use crate::error::{AppError, Result};
 use crate::models::{StartJobResult, WorkflowStepInput};
-use crate::state::JobManager;
 
 /* ── Binary management ──────────────────────────────────────────── */
 
@@ -28,11 +27,10 @@ pub fn binary_name() -> String {
 }
 
 /// Install location for the managed binary: `<app_data_dir>/bin`.
-pub(crate) fn managed_dir(app: &AppHandle) -> Result<PathBuf> {
-    let dir = app
-        .path()
+pub(crate) fn managed_dir(env: &dyn AppEnv) -> Result<PathBuf> {
+    let dir = env
         .app_data_dir()
-        .map_err(|e| AppError(format!("无法定位应用数据目录: {}", e)))?
+        .ok_or_else(|| AppError("无法定位应用数据目录".into()))?
         .join("bin");
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
@@ -41,7 +39,7 @@ pub(crate) fn managed_dir(app: &AppHandle) -> Result<PathBuf> {
 /// Locate yt-dlp: next to the executable / resource dir (same walk as ffmpeg),
 /// then the managed `<app_data>/bin` copy (an in-app update — it must win
 /// over the older version bundled as a resource), then the system PATH.
-pub fn resolve(app: &AppHandle) -> Option<PathBuf> {
+pub fn resolve(env: &dyn AppEnv) -> Option<PathBuf> {
     let name = binary_name();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
@@ -61,13 +59,13 @@ pub fn resolve(app: &AppHandle) -> Option<PathBuf> {
     }
     // The managed copy exists only when the user installed/updated in-app, so
     // it always beats the (possibly older) bundled resource copy.
-    if let Ok(dir) = managed_dir(app) {
+    if let Ok(dir) = managed_dir(env) {
         let p = dir.join(&name);
         if p.exists() {
             return Some(p);
         }
     }
-    if let Ok(res) = app.path().resource_dir() {
+    if let Some(res) = env.resource_dir() {
         for cand in [res.join(&name), res.join("binaries").join(&name)] {
             if cand.exists() {
                 return Some(cand);
@@ -79,7 +77,9 @@ pub fn resolve(app: &AppHandle) -> Option<PathBuf> {
 
 fn run_version(bin: &Path) -> Option<String> {
     let mut cmd = Command::new(bin);
-    cmd.arg("--version").stdout(Stdio::piped()).stderr(Stdio::null());
+    cmd.arg("--version")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -90,7 +90,11 @@ fn run_version(bin: &Path) -> Option<String> {
         return None;
     }
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -106,17 +110,18 @@ pub struct YtdlpStatus {
 /// seconds (PyInstaller self-extracts on every run, the streamlink tree boots
 /// an embedded Python), so this must stay async — a sync command would pin the
 /// main thread and freeze the whole window until they exit.
-#[tauri::command]
-pub async fn ytdlp_status(app: AppHandle) -> Result<YtdlpStatus> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let path = resolve(&app);
+pub async fn ytdlp_status(ctx: Ctx) -> Result<YtdlpStatus> {
+    tokio::task::spawn_blocking(move || {
+        let path = resolve(&*ctx.env);
         let version = path.as_ref().and_then(|p| run_version(p));
         let installed = path.is_some() && version.is_some();
         Ok(YtdlpStatus {
             installed,
             version: version.filter(|_| installed),
-            path: path.filter(|_| installed).map(|p| p.to_string_lossy().to_string()),
-            ffmpeg_found: crate::ffmpeg::resolve(&app, "ffmpeg").is_some(),
+            path: path
+                .filter(|_| installed)
+                .map(|p| p.to_string_lossy().to_string()),
+            ffmpeg_found: crate::ffmpeg::resolve(&*ctx.env, "ffmpeg").is_some(),
         })
     })
     .await
@@ -126,9 +131,8 @@ pub async fn ytdlp_status(app: AppHandle) -> Result<YtdlpStatus> {
 /// Latest yt-dlp release tag, queried from GitHub without downloading
 /// anything. "检查更新" calls this first; the download stays behind an
 /// explicit user action.
-#[tauri::command]
 pub async fn ytdlp_latest_version() -> Result<String> {
-    let body = tauri::async_runtime::spawn_blocking(|| {
+    let body = tokio::task::spawn_blocking(|| {
         let mut cmd = Command::new("curl");
         cmd.args([
             "-sS",
@@ -148,7 +152,9 @@ pub async fn ytdlp_latest_version() -> Result<String> {
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }
-        let out = cmd.output().map_err(|e| AppError(format!("curl 启动失败: {e}")))?;
+        let out = cmd
+            .output()
+            .map_err(|e| AppError(format!("curl 启动失败: {e}")))?;
         if !out.status.success() {
             let code = out.status.code().unwrap_or(-1);
             let stderr = String::from_utf8_lossy(&out.stderr);
@@ -171,7 +177,11 @@ pub async fn ytdlp_latest_version() -> Result<String> {
 
     let json: serde_json::Value = serde_json::from_str(&body)
         .map_err(|e| AppError(format!("GitHub 返回内容无法解析（{e}）")))?;
-    let tag = json["tag_name"].as_str().unwrap_or("").trim().trim_start_matches('v');
+    let tag = json["tag_name"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .trim_start_matches('v');
     if tag.is_empty() {
         return Err(AppError("GitHub 未返回版本号".into()));
     }
@@ -213,28 +223,28 @@ pub struct InstallProgressEvent {
 
 /// Download (or update) yt-dlp into the managed dir using system curl,
 /// trying each mirror until one succeeds. Emits `ytdlp-install-progress`.
-#[tauri::command]
-pub async fn ytdlp_install(app: AppHandle) -> Result<YtdlpStatus> {
+pub async fn ytdlp_install(ctx: Ctx) -> Result<YtdlpStatus> {
     let asset = platform_asset()?;
     let url = format!(
         "https://github.com/yt-dlp/yt-dlp/releases/latest/download/{}",
         asset
     );
-    let dir = managed_dir(&app)?;
+    let dir = managed_dir(&*ctx.env)?;
     let target = dir.join(binary_name());
     let tmp = dir.join(format!("{}.download", binary_name()));
 
-    let app2 = app.clone();
+    let emitter = ctx.emitter.clone();
     let tmp2 = tmp.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         let tmp = tmp2;
         let _ = std::fs::remove_file(&tmp);
         let mut last_err = String::from("未尝试任何下载源");
         for prefix in MIRROR_PREFIXES {
             let full = format!("{}{}", prefix, url);
-            let _ = app2.emit(
+            emit(
+                emitter.as_ref(),
                 "ytdlp-install-progress",
-                InstallProgressEvent {
+                &InstallProgressEvent {
                     stage: "downloading".into(),
                     message: if prefix.is_empty() {
                         "正在从 GitHub 下载 yt-dlp…".into()
@@ -263,19 +273,33 @@ pub async fn ytdlp_install(app: AppHandle) -> Result<YtdlpStatus> {
                 cmd.creation_flags(0x0800_0000);
             }
             match cmd.status() {
-                Ok(s) if s.success() && tmp.metadata().map(|m| m.len() > 1_000_000).unwrap_or(false) => {
+                Ok(s)
+                    if s.success()
+                        && tmp.metadata().map(|m| m.len() > 1_000_000).unwrap_or(false) =>
+                {
                     return Ok(());
                 }
                 Ok(s) => {
-                    last_err = format!("下载源 {} 退出码 {}", if prefix.is_empty() { "GitHub" } else { prefix }, s.code().unwrap_or(-1));
+                    last_err = format!(
+                        "下载源 {} 退出码 {}",
+                        if prefix.is_empty() { "GitHub" } else { prefix },
+                        s.code().unwrap_or(-1)
+                    );
                 }
                 Err(e) => {
-                    last_err = format!("下载源 {} 启动 curl 失败: {}", if prefix.is_empty() { "GitHub" } else { prefix }, e);
+                    last_err = format!(
+                        "下载源 {} 启动 curl 失败: {}",
+                        if prefix.is_empty() { "GitHub" } else { prefix },
+                        e
+                    );
                 }
             }
             let _ = std::fs::remove_file(&tmp);
         }
-        Err(AppError(format!("yt-dlp 下载失败：{}。请检查网络，或手动放置 yt-dlp 到 PATH。", last_err)))
+        Err(AppError(format!(
+            "yt-dlp 下载失败：{}。请检查网络，或手动放置 yt-dlp 到 PATH。",
+            last_err
+        )))
     })
     .await
     .map_err(|e| AppError(e.to_string()))?;
@@ -290,9 +314,10 @@ pub async fn ytdlp_install(app: AppHandle) -> Result<YtdlpStatus> {
 
     let version = run_version(&target);
     let ok = version.is_some();
-    let _ = app.emit(
+    emit(
+        ctx.emitter.as_ref(),
         "ytdlp-install-progress",
-        InstallProgressEvent {
+        &InstallProgressEvent {
             stage: if ok { "done".into() } else { "error".into() },
             message: if ok {
                 format!("yt-dlp {} 就绪", version.clone().unwrap_or_default())
@@ -309,7 +334,7 @@ pub async fn ytdlp_install(app: AppHandle) -> Result<YtdlpStatus> {
         installed: true,
         version,
         path: Some(target.to_string_lossy().to_string()),
-        ffmpeg_found: crate::ffmpeg::resolve(&app, "ffmpeg").is_some(),
+        ffmpeg_found: crate::ffmpeg::resolve(&*ctx.env, "ffmpeg").is_some(),
     })
 }
 
@@ -318,7 +343,6 @@ pub async fn ytdlp_install(app: AppHandle) -> Result<YtdlpStatus> {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct NetOptions {
-    pub cookies_browser: Option<String>,
     pub cookies_file: Option<String>,
     pub cookies_text: Option<String>,
     pub proxy: Option<String>,
@@ -326,12 +350,17 @@ pub struct NetOptions {
 
 /// The cookie file to hand to `--cookies` / `--cookie-file`: an explicit path
 /// wins over pasted text, which is materialised into the app data dir.
-/// Neither the browser choice nor a missing app dir produce a path.
-pub(crate) fn cookies_path(app: &AppHandle, opts: &NetOptions) -> Option<String> {
-    if let Some(f) = opts.cookies_file.as_deref().map(str::trim).filter(|f| !f.is_empty()) {
+/// A missing app dir produces no path.
+pub(crate) fn cookies_path(env: &dyn AppEnv, opts: &NetOptions) -> Option<String> {
+    if let Some(f) = opts
+        .cookies_file
+        .as_deref()
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+    {
         return Some(f.to_string());
     }
-    let dir = app.path().app_data_dir().ok()?.join("cookies");
+    let dir = env.app_data_dir()?.join("cookies");
     let Some(text) = opts
         .cookies_text
         .as_deref()
@@ -350,17 +379,12 @@ pub(crate) fn cookies_path(app: &AppHandle, opts: &NetOptions) -> Option<String>
     Some(path.to_string_lossy().into_owned())
 }
 
-pub(crate) fn common_net_args(app: &AppHandle, bin: &Path, opts: &NetOptions) -> Vec<String> {
+pub(crate) fn common_net_args(env: &dyn AppEnv, bin: &Path, opts: &NetOptions) -> Vec<String> {
     let _ = bin;
     let mut a: Vec<String> = Vec::new();
-    if let Some(f) = cookies_path(app, opts) {
+    if let Some(f) = cookies_path(env, opts) {
         a.push("--cookies".into());
         a.push(f);
-    } else if let Some(c) = opts.cookies_browser.as_deref() {
-        if !c.is_empty() {
-            a.push("--cookies-from-browser".into());
-            a.push(c.to_string());
-        }
     }
     if let Some(p) = opts.proxy.as_deref() {
         if !p.is_empty() {
@@ -373,20 +397,31 @@ pub(crate) fn common_net_args(app: &AppHandle, bin: &Path, opts: &NetOptions) ->
 
 /// Resolve metadata for a URL (`yt-dlp -J`). Playlist pages return the
 /// playlist object; the UI reads its first entry.
-#[tauri::command]
-pub async fn ytdlp_probe(app: AppHandle, url: String, options: Option<NetOptions>) -> Result<serde_json::Value> {
-    let bin = resolve(&app).ok_or_else(|| AppError("尚未安装 yt-dlp".into()))?;
+pub async fn ytdlp_probe(
+    ctx: Ctx,
+    url: String,
+    options: Option<NetOptions>,
+) -> Result<serde_json::Value> {
+    let bin = resolve(&*ctx.env).ok_or_else(|| AppError("尚未安装 yt-dlp".into()))?;
     let opts = options.unwrap_or_default();
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut args = vec!["-J".to_string(), "--no-playlist".to_string(), "--no-warnings".to_string(), "--socket-timeout".to_string(), "20".to_string()];
-        args.extend(common_net_args(&app, &bin, &opts));
+    tokio::task::spawn_blocking(move || {
+        // -J on a playlist/season URL dumps every entry's full metadata, which
+        // for a 50-episode season means a minute-long probe for one title.
+        // The frontend only reads entries[0], so cap the dump at item 1.
+        let mut args = vec![
+            "-J".to_string(),
+            "--no-playlist".to_string(),
+            "--playlist-items".to_string(),
+            "1".to_string(),
+            "--no-warnings".to_string(),
+            "--socket-timeout".to_string(),
+            "20".to_string(),
+        ];
+        args.extend(common_net_args(&*ctx.env, &bin, &opts));
         args.push(url);
         let out = run_capture(&bin, &args)?;
         if out.0 != 0 {
-            return Err(AppError(format!(
-                "解析失败: {}",
-                map_browser_cookie_error(opts.cookies_browser.as_deref(), &tail_text(&out.2))
-            )));
+            return Err(AppError(format!("解析失败: {}", tail_text(&out.2))));
         }
         serde_json::from_str::<serde_json::Value>(&out.1)
             .map_err(|e| AppError(format!("解析结果无法解析: {}", e)))
@@ -431,36 +466,6 @@ pub(crate) fn tail_text(s: &str) -> String {
     s[start..].to_string()
 }
 
-/// Fatal, engine-aborting messages from `--cookies-from-browser` (see yt-dlp
-/// cookies.py — both raise DownloadError). Chrome/Edge 127+ on Windows encrypt
-/// cookies with App-Bound Encryption, which surfaces as the DPAPI error; the
-/// other is the database being locked by a running browser.
-const BROWSER_COOKIE_ERRORS: [&str; 2] = [
-    "failed to decrypt with dpapi",
-    "could not copy chrome cookie database",
-];
-
-/// Prepend actionable guidance when a run that used `--cookies-from-browser`
-/// died on one of those errors; the raw detail is kept underneath for diagnosis.
-pub(crate) fn map_browser_cookie_error(cookies_browser: Option<&str>, detail: &str) -> String {
-    let browser = cookies_browser.map(str::trim).filter(|b| !b.is_empty());
-    let lower = detail.to_ascii_lowercase();
-    let hit = browser.filter(|_| BROWSER_COOKIE_ERRORS.iter().any(|m| lower.contains(m)));
-    match hit {
-        None => detail.to_string(),
-        Some(_) if lower.contains("dpapi") => format!(
-            "浏览器 Cookies 无法解密：Chrome/Edge 127+ 在 Windows 上启用了 App-Bound 加密，yt-dlp 读不出来。\
-             建议改用 Firefox，或用浏览器扩展导出 cookies.txt 填入「Cookies 文件」。\n\n{}",
-            detail
-        ),
-        Some(_) => format!(
-            "无法读取浏览器 Cookies：Cookie 数据库被占用（对应浏览器正在运行？）。\
-             请关闭该浏览器后重试，或改用导出的 cookies.txt。\n\n{}",
-            detail
-        ),
-    }
-}
-
 /* ── Downloads & recordings ─────────────────────────────────────── */
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -474,7 +479,6 @@ pub struct DownloadRequest {
     pub output_dir: String,
     /// yt-dlp output template; default `%(title)s.%(ext)s`
     pub filename_template: Option<String>,
-    pub cookies_browser: Option<String>,
     pub cookies_file: Option<String>,
     pub cookies_text: Option<String>,
     pub proxy: Option<String>,
@@ -510,13 +514,16 @@ fn format_selector(quality: &str, audio_format: Option<&str>) -> (Vec<String>, S
     }
 }
 
-fn build_download_args(
-    app: &AppHandle,
-    bin: &Path,
-    req: &DownloadRequest,
-) -> Result<Vec<String>> {
+fn build_download_args(env: &dyn AppEnv, bin: &Path, req: &DownloadRequest) -> Result<Vec<String>> {
     let is_record = req.kind.as_deref() == Some("record");
-    let mut a: Vec<String> = vec!["--no-playlist".into(), "--no-warnings".into(), "--no-mtime".into(), "--windows-filenames".into(), "--newline".into(), "--progress".into()];
+    let mut a: Vec<String> = vec![
+        "--no-playlist".into(),
+        "--no-warnings".into(),
+        "--no-mtime".into(),
+        "--windows-filenames".into(),
+        "--newline".into(),
+        "--progress".into(),
+    ];
 
     // Machine-parseable progress: downloaded | total | estimate | speed | eta,
     // "NA" when a field is unknown.
@@ -542,19 +549,22 @@ fn build_download_args(
         ));
     } else {
         a.push("-o".into());
-        a.push(format!("{}/{}", req.output_dir.replace('\\', "/").trim_end_matches('/'), template));
+        a.push(format!(
+            "{}/{}",
+            req.output_dir.replace('\\', "/").trim_end_matches('/'),
+            template
+        ));
     }
 
     a.push("--ffmpeg-location".into());
-    let ffmpeg = crate::ffmpeg::resolve(app, "ffmpeg")
+    let ffmpeg = crate::ffmpeg::resolve(env, "ffmpeg")
         .ok_or_else(|| AppError("找不到 ffmpeg：下载合并/转封装需要它".into()))?;
     a.push(ffmpeg.to_string_lossy().to_string());
 
     a.extend(common_net_args(
-        app,
+        env,
         bin,
         &NetOptions {
-            cookies_browser: req.cookies_browser.clone(),
             cookies_file: req.cookies_file.clone(),
             cookies_text: req.cookies_text.clone(),
             proxy: req.proxy.clone(),
@@ -778,7 +788,7 @@ impl DestTracker {
 /// progress/done events. Used both by `ytdlp_start_download` (own thread) and
 /// by the monitor loop (so it knows when its auto-recording ended).
 pub fn run_download_blocking(
-    app: &AppHandle,
+    ctx: &Ctx,
     bin: &Path,
     req: DownloadRequest,
     id: &str,
@@ -789,11 +799,15 @@ pub fn run_download_blocking(
     let is_record = kind == "record";
     // Registered for the whole life of the job so a frontend reload can
     // re-adopt the running card (see `dl_active_tasks`).
-    app.state::<JobManager>().track_dl(
+    ctx.jobs.track_dl(
         id,
         crate::state::ActiveDlInfo {
             url: req.url.clone(),
-            title: req.title.clone().filter(|t| !t.is_empty()).unwrap_or_else(|| req.url.clone()),
+            title: req
+                .title
+                .clone()
+                .filter(|t| !t.is_empty())
+                .unwrap_or_else(|| req.url.clone()),
             kind: kind.clone(),
             pipeline: pipeline.clone(),
             upload_to: upload_to.clone(),
@@ -804,42 +818,66 @@ pub fn run_download_blocking(
     // present, hand the whole recording over to it; yt-dlp probes live
     // status first (falling back to streamlink for sites it doesn't know)
     // and serves every VOD download.
-    //
-    // Exception: a recording that needs browser cookies stays here, because
-    // streamlink cannot extract them from a browser and would silently drop
-    // the authentication.
-    if is_record && req.cookies_browser.as_deref().unwrap_or("").is_empty() {
-        if let Some(sl) = crate::streamlink::available(app) {
-            crate::streamlink::run_record_blocking(app, &sl, req, id, pipeline, upload_to);
+    if is_record {
+        if let Some(sl) = crate::streamlink::available(&*ctx.env) {
+            crate::streamlink::run_record_blocking(ctx, &sl, req, id, pipeline, upload_to);
             return;
         }
     }
-    let args = match build_download_args(app, bin, &req) {
+    let args = match build_download_args(&*ctx.env, bin, &req) {
         Ok(a) => a,
         Err(e) => {
-            emit_dl_done(app, id, false, false, &kind, None, Some(e.to_string()), false, &pipeline);
+            emit_dl_done(
+                ctx,
+                id,
+                false,
+                false,
+                &kind,
+                None,
+                Some(e.to_string()),
+                false,
+                &pipeline,
+            );
             return;
         }
     };
     if let Some(t) = &req.title {
-        let _ = app.emit(
+        emit(
+            ctx.emitter.as_ref(),
             "download-started",
-            DownloadStartedEvent { id: id.to_string(), url: req.url.clone(), title: t.clone(), kind: kind.clone(), pipeline: pipeline.clone(), upload_to: upload_to.clone() },
+            &DownloadStartedEvent {
+                id: id.to_string(),
+                url: req.url.clone(),
+                title: t.clone(),
+                kind: kind.clone(),
+                pipeline: pipeline.clone(),
+                upload_to: upload_to.clone(),
+            },
         );
     }
     let (child, stdout, stderr_buf, drain) = match spawn_process(bin, &args) {
         Ok(v) => v,
         Err(e) => {
-            emit_dl_done(app, id, false, false, &kind, None, Some(e.to_string()), false, &pipeline);
+            emit_dl_done(
+                ctx,
+                id,
+                false,
+                false,
+                &kind,
+                None,
+                Some(e.to_string()),
+                false,
+                &pipeline,
+            );
             return;
         }
     };
     let child = Arc::new(Mutex::new(child));
-    let manager = app.state::<JobManager>();
+    let manager = ctx.jobs.clone();
     manager.register(id, child.clone());
     if manager.is_cancelled(id) {
         if let Ok(mut c) = child.lock() {
-            let _ = c.kill();
+            let _ = crate::state::kill_tree(&mut c);
         }
     }
 
@@ -875,9 +913,10 @@ pub fn run_download_blocking(
                 };
                 if (pct - last_percent).abs() >= 0.5 || pct == 0.0 {
                     last_percent = pct;
-                    let _ = app.emit(
+                    emit(
+                        ctx.emitter.as_ref(),
                         "download-progress",
-                        DownloadProgressEvent {
+                        &DownloadProgressEvent {
                             id: id.to_string(),
                             percent: pct,
                             phase: "running".into(),
@@ -890,10 +929,15 @@ pub fn run_download_blocking(
                     );
                 }
             }
-        } else if line.contains("[Merger]") || line.contains("[ExtractAudio]") || line.contains("[EmbedThumbnail]") || line.contains("[VideoRemuxer]") {
-            let _ = app.emit(
+        } else if line.contains("[Merger]")
+            || line.contains("[ExtractAudio]")
+            || line.contains("[EmbedThumbnail]")
+            || line.contains("[VideoRemuxer]")
+        {
+            emit(
+                ctx.emitter.as_ref(),
                 "download-progress",
-                DownloadProgressEvent {
+                &DownloadProgressEvent {
                     id: id.to_string(),
                     percent: 100.0,
                     phase: "running".into(),
@@ -909,37 +953,65 @@ pub fn run_download_blocking(
             if started.elapsed() >= Duration::from_secs(limit) && !limit_reached {
                 limit_reached = true;
                 if let Ok(mut c) = child.lock() {
-                    let _ = c.kill();
+                    let _ = crate::state::kill_tree(&mut c);
                 }
             }
         }
     }
     let _ = drain.join();
+    // Reap via a poll loop, never a blocking wait(): wait() holds the child
+    // mutex until exit, which deadlocks cancel_job's kill(); and finish() used
+    // to drop the registry entry before the process was confirmed dead. Either
+    // way a live yt-dlp could end up unkillable from the UI. Re-killing while
+    // the cancel flag is set also enforces a cancel whose first kill failed.
+    let code = loop {
+        let alive = match child.lock().unwrap().try_wait() {
+            Ok(Some(s)) => break s.code().unwrap_or(-1),
+            Ok(None) => true,
+            Err(_) => break -1,
+        };
+        if alive && manager.is_cancelled(id) {
+            if let Err(e) = crate::state::kill_tree(&mut child.lock().unwrap()) {
+                eprintln!("kill yt-dlp job {id}: {e}");
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
     let was_cancelled = manager.is_cancelled(id);
     manager.finish(id);
-    let code = match child.lock().unwrap().wait() {
-        Ok(s) => s.code().unwrap_or(-1),
-        Err(_) => -1,
-    };
     if was_cancelled {
-        emit_dl_done(app, id, false, true, &kind, None, Some("已取消".into()), false, &pipeline);
+        emit_dl_done(
+            ctx,
+            id,
+            false,
+            true,
+            &kind,
+            None,
+            Some("已取消".into()),
+            false,
+            &pipeline,
+        );
         return;
     }
     // The duration-limit stop kills the child (nonzero exit) but keeps the file.
     if code != 0 && !limit_reached {
-        let buf = stderr_buf.lock().unwrap();
-        let detail = map_browser_cookie_error(
-            req.cookies_browser.as_deref(),
-            &tail_text(&String::from_utf8_lossy(&buf)),
-        );
+        let detail = tail_text(&String::from_utf8_lossy(&stderr_buf.lock().unwrap()));
         emit_dl_done(
-            app,
+            ctx,
             id,
             false,
             false,
             &kind,
             None,
-            Some(format!("yt-dlp 退出码 {}{}", code, if detail.is_empty() { String::new() } else { format!("\n\n{}", detail) })),
+            Some(format!(
+                "yt-dlp 退出码 {}{}",
+                code,
+                if detail.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n\n{}", detail)
+                }
+            )),
             false,
             &pipeline,
         );
@@ -955,9 +1027,10 @@ pub fn run_download_blocking(
         .as_ref()
         .and_then(|p| std::fs::metadata(p).ok())
         .map(|m| m.len());
-    let _ = app.emit(
+    let _ = emit(
+        ctx.emitter.as_ref(),
         "download-progress",
-        DownloadProgressEvent {
+        &DownloadProgressEvent {
             id: id.to_string(),
             percent: 100.0,
             phase: "done".into(),
@@ -968,19 +1041,34 @@ pub fn run_download_blocking(
             postprocessing: Some(false),
         },
     );
-    emit_dl_done(app, id, true, false, &kind, output, None, limit_reached, &pipeline);
+    emit_dl_done(
+        ctx,
+        id,
+        true,
+        false,
+        &kind,
+        output,
+        None,
+        limit_reached,
+        &pipeline,
+    );
 }
 
 /// Media extensions considered a valid recording/download output for the
 /// fallback "newest file" scan.
-const OUTPUT_EXTS: [&str; 12] = ["mp4", "mkv", "webm", "ts", "flv", "mov", "mp3", "m4a", "opus", "flac", "wav", "aac"];
+const OUTPUT_EXTS: [&str; 12] = [
+    "mp4", "mkv", "webm", "ts", "flv", "mov", "mp3", "m4a", "opus", "flac", "wav", "aac",
+];
 
 pub(crate) fn newest_media_file(dir: &Path, since: Instant) -> Option<String> {
     let entries = std::fs::read_dir(dir).ok()?;
     let mut best: Option<(SystemTime, PathBuf)> = None;
     for e in entries.flatten() {
         let p = e.path();
-        let ext = p.extension().and_then(|x| x.to_str()).map(|x| x.to_ascii_lowercase());
+        let ext = p
+            .extension()
+            .and_then(|x| x.to_str())
+            .map(|x| x.to_ascii_lowercase());
         let Some(ext) = ext else { continue };
         // Subtitles are sidecar outputs; skip them as "the" result.
         if !OUTPUT_EXTS.contains(&ext.as_str()) {
@@ -1010,7 +1098,7 @@ fn started_threshold(since: Instant) -> SystemTime {
 }
 
 pub(crate) fn emit_dl_done(
-    app: &AppHandle,
+    ctx: &Ctx,
     id: &str,
     ok: bool,
     cancelled: bool,
@@ -1020,10 +1108,11 @@ pub(crate) fn emit_dl_done(
     limit_reached: bool,
     _pipeline: &[WorkflowStepInput],
 ) {
-    app.state::<JobManager>().untrack_dl(id);
-    let _ = app.emit(
+    ctx.jobs.untrack_dl(id);
+    emit(
+        ctx.emitter.as_ref(),
         "download-done",
-        DownloadDoneEvent {
+        &DownloadDoneEvent {
             id: id.to_string(),
             ok,
             cancelled,
@@ -1049,9 +1138,8 @@ pub struct ActiveDlTask {
     pub upload_to: Vec<String>,
 }
 
-#[tauri::command]
-pub fn dl_active_tasks(app: AppHandle) -> Vec<ActiveDlTask> {
-    app.state::<JobManager>()
+pub fn dl_active_tasks(ctx: Ctx) -> Vec<ActiveDlTask> {
+    ctx.jobs
         .active_dls()
         .into_iter()
         .map(|(id, i)| ActiveDlTask {
@@ -1065,22 +1153,30 @@ pub fn dl_active_tasks(app: AppHandle) -> Vec<ActiveDlTask> {
         .collect()
 }
 
-#[tauri::command]
-pub async fn ytdlp_start_download(
-    app: AppHandle,
-    request: DownloadRequest,
-) -> Result<StartJobResult> {
-    let bin = resolve(&app).ok_or_else(|| AppError("尚未安装 yt-dlp".into()))?;
+pub async fn ytdlp_start_download(ctx: Ctx, request: DownloadRequest) -> Result<StartJobResult> {
+    let bin = resolve(&*ctx.env).ok_or_else(|| AppError("尚未安装 yt-dlp".into()))?;
     if req_output_dir_missing(&request) {
         std::fs::create_dir_all(&request.output_dir)?;
     }
-    let id = format!("dl-{:x}-{}", std::time::SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0), std::process::id());
-    let app2 = app.clone();
+    let id = format!(
+        "dl-{:x}-{}",
+        std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+        std::process::id()
+    );
+    let ctx2 = ctx.clone();
     let id2 = id.clone();
     std::thread::spawn(move || {
-        run_download_blocking(&app2, &bin, request, &id2, Vec::new(), Vec::new());
+        run_download_blocking(&ctx2, &bin, request, &id2, Vec::new(), Vec::new());
     });
-    Ok(StartJobResult { id, skipped: false, output: None, note: None })
+    Ok(StartJobResult {
+        id,
+        skipped: false,
+        output: None,
+        note: None,
+    })
 }
 
 fn req_output_dir_missing(req: &DownloadRequest) -> bool {
@@ -1100,7 +1196,6 @@ pub struct MonitorRequest {
     pub auto_record: bool,
     pub quality: String,
     pub output_dir: String,
-    pub cookies_browser: Option<String>,
     pub cookies_file: Option<String>,
     pub cookies_text: Option<String>,
     pub proxy: Option<String>,
@@ -1122,7 +1217,6 @@ pub struct MonitorInfo {
     pub auto_record: bool,
     pub quality: String,
     pub output_dir: String,
-    pub cookies_browser: Option<String>,
     pub cookies_file: Option<String>,
     pub cookies_text: Option<String>,
     pub proxy: Option<String>,
@@ -1145,12 +1239,15 @@ impl MonitorInfo {
         MonitorInfo {
             id: id.to_string(),
             url: r.url.clone(),
-            name: r.name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| r.url.clone()),
+            name: r
+                .name
+                .clone()
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| r.url.clone()),
             interval_sec: r.interval_sec.max(30),
             auto_record: r.auto_record,
             quality: r.quality.clone(),
             output_dir: r.output_dir.clone(),
-            cookies_browser: r.cookies_browser.clone(),
             cookies_file: r.cookies_file.clone(),
             cookies_text: r.cookies_text.clone(),
             proxy: r.proxy.clone(),
@@ -1159,11 +1256,11 @@ impl MonitorInfo {
             author: None,
             live_status: None,
             last_checked: None,
-        current_job: None,
-        pipeline: r.pipeline.clone(),
-        upload_to: r.upload_to.clone(),
+            current_job: None,
+            pipeline: r.pipeline.clone(),
+            upload_to: r.upload_to.clone(),
+        }
     }
-}
 }
 
 struct MonitorHandle {
@@ -1178,18 +1275,18 @@ pub struct MonitorManager {
 }
 
 impl MonitorManager {
-    fn emit_info(app: &AppHandle, info: &MonitorInfo) {
-        let _ = app.emit("monitor-status", info.clone());
+    fn emit_info(emitter: &dyn Emitter, info: &MonitorInfo) {
+        emit(emitter, "monitor-status", info);
     }
 
-    fn persist(app: &AppHandle, mgr: &MonitorManager) {
+    fn persist(env: &dyn AppEnv, mgr: &MonitorManager) {
         let map = mgr.monitors.lock().unwrap();
         let infos: Vec<MonitorInfo> = map
             .values()
             .map(|h| h.info.lock().unwrap().clone())
             .collect();
         drop(map);
-        if let Ok(dir) = app.path().app_data_dir() {
+        if let Some(dir) = env.app_data_dir() {
             let _ = std::fs::create_dir_all(&dir);
             let path = dir.join("monitors.json");
             if let Ok(json) = serde_json::to_string_pretty(&infos) {
@@ -1198,11 +1295,11 @@ impl MonitorManager {
         }
     }
 
-    fn load(app: &AppHandle) -> Vec<MonitorInfo> {
-        let path = match app.path().app_data_dir() {
-            Ok(d) => d.join("monitors.json"),
-            Err(_) => return vec![],
+    fn load(env: &dyn AppEnv) -> Vec<MonitorInfo> {
+        let Some(dir) = env.app_data_dir() else {
+            return vec![];
         };
+        let path = dir.join("monitors.json");
         let Ok(text) = std::fs::read_to_string(path) else {
             return vec![];
         };
@@ -1212,7 +1309,7 @@ impl MonitorManager {
 
 /// Probe a URL's live status cheaply.
 fn check_live(
-    app: &AppHandle,
+    env: &dyn AppEnv,
     bin: &Path,
     url: &str,
     opts: &NetOptions,
@@ -1226,7 +1323,7 @@ fn check_live(
         "--print".into(),
         "%(live_status)s\t%(title)s\t%(uploader)s".into(),
     ];
-    args.extend(common_net_args(app, bin, opts));
+    args.extend(common_net_args(env, bin, opts));
     args.push(url.to_string());
     let (code, out, err) = run_capture(bin, args.as_slice()).map_err(|e| e.to_string())?;
     if code != 0 {
@@ -1273,20 +1370,24 @@ fn validate_live_url(url: &str) -> Result<()> {
     Ok(())
 }
 
-#[tauri::command]
-pub fn monitor_add(app: AppHandle, request: MonitorRequest) -> Result<MonitorInfo> {
-    let bin = resolve(&app).ok_or_else(|| AppError("尚未安装 yt-dlp".into()))?;
+pub fn monitor_add(ctx: Ctx, request: MonitorRequest) -> Result<MonitorInfo> {
+    let bin = resolve(&*ctx.env).ok_or_else(|| AppError("尚未安装 yt-dlp".into()))?;
     validate_live_url(&request.url)?;
-    let id = format!("mon-{:x}", std::time::SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+    let id = format!(
+        "mon-{:x}",
+        std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
     let info = MonitorInfo::from_request(&id, &request);
-    let mgr = app.state::<MonitorManager>();
-    let handle = spawn_monitor(app.clone(), bin, info.clone());
-    mgr.monitors.lock().unwrap().insert(id, handle);
-    MonitorManager::persist(&app, &mgr);
+    let handle = spawn_monitor(ctx.clone(), bin, info.clone());
+    ctx.monitors.monitors.lock().unwrap().insert(id, handle);
+    MonitorManager::persist(&*ctx.env, &ctx.monitors);
     Ok(info)
 }
 
-fn spawn_monitor(app: AppHandle, bin: PathBuf, info: MonitorInfo) -> MonitorHandle {
+fn spawn_monitor(ctx: Ctx, bin: PathBuf, info: MonitorInfo) -> MonitorHandle {
     let stop = Arc::new(AtomicBool::new(false));
     let record_now = Arc::new(AtomicBool::new(false));
     let info = Arc::new(Mutex::new(info));
@@ -1296,20 +1397,23 @@ fn spawn_monitor(app: AppHandle, bin: PathBuf, info: MonitorInfo) -> MonitorHand
     // The thread detaches: removing a monitor only signals `stop`; joining
     // could block for the whole length of an in-flight recording.
     std::thread::spawn(move || {
-        monitor_loop(app, bin, info2, stop2, record_now2);
+        monitor_loop(ctx, bin, info2, stop2, record_now2);
     });
-    MonitorHandle { stop, record_now, info }
+    MonitorHandle {
+        stop,
+        record_now,
+        info,
+    }
 }
 
 fn monitor_loop(
-    app: AppHandle,
+    ctx: Ctx,
     bin: PathBuf,
     info: Arc<Mutex<MonitorInfo>>,
     stop: Arc<AtomicBool>,
     record_now: Arc<AtomicBool>,
 ) {
     let opts = |i: &MonitorInfo| NetOptions {
-        cookies_browser: i.cookies_browser.clone(),
         cookies_file: i.cookies_file.clone(),
         cookies_text: i.cookies_text.clone(),
         proxy: i.proxy.clone(),
@@ -1321,7 +1425,11 @@ fn monitor_loop(
         let interval = {
             let mut i = info.lock().unwrap();
             i.last_checked = Some(now_secs());
-            i.status = if i.current_job.is_some() { "recording".into() } else { "watching".into() };
+            i.status = if i.current_job.is_some() {
+                "recording".into()
+            } else {
+                "watching".into()
+            };
             i.interval_sec.max(30)
         };
 
@@ -1332,18 +1440,18 @@ fn monitor_loop(
                 let i = info.lock().unwrap();
                 (i.url.clone(), opts(&i), i.auto_record)
             };
-            let probe = check_live(&app, &bin, &url, &net).or_else(|_| {
+            let probe = check_live(&*ctx.env, &bin, &url, &net).or_else(|_| {
                 // Some live sites (e.g. Douyin) aren't recognised by yt-dlp at
                 // all but are handled by the recording engine, so the monitor
                 // would sit on "unknown" and never auto-record. Probe with
                 // streamlink too — it's the engine that would do the capture.
-                if net.cookies_browser.as_deref().unwrap_or("").is_empty() {
-                    let cookies = cookies_path(&app, &net);
-                    crate::streamlink::probe_live(&app, &url, net.proxy.as_deref(), cookies.as_deref())
-                } else {
-                    // Recording would stay on yt-dlp, so its answer is final.
-                    Err("需要浏览器 cookies，streamlink 无法录制".into())
-                }
+                let cookies = cookies_path(&*ctx.env, &net);
+                crate::streamlink::probe_live(
+                    &*ctx.env,
+                    &url,
+                    net.proxy.as_deref(),
+                    cookies.as_deref(),
+                )
             });
             match probe {
                 Ok((status, title, author)) => {
@@ -1360,7 +1468,7 @@ fn monitor_loop(
                     info.lock().unwrap().live_status = Some("unknown".into());
                 }
             }
-            MonitorManager::emit_info(&app, &info.lock().unwrap().clone());
+            MonitorManager::emit_info(ctx.emitter.as_ref(), &info.lock().unwrap().clone());
         }
 
         if want_now || auto_recording {
@@ -1368,7 +1476,7 @@ fn monitor_loop(
             // Auto-monitored channels keep watching for the next stream;
             // a manual one-shot recording stops the monitor afterwards.
             let one_shot = !info.lock().unwrap().auto_record;
-            record_once(&app, &bin, &info);
+            record_once(&ctx, &bin, &info);
             if stop.load(Ordering::Relaxed) || one_shot {
                 break;
             }
@@ -1388,7 +1496,7 @@ fn monitor_loop(
         i.status = "stopped".into();
         i.current_job = None;
     }
-    MonitorManager::emit_info(&app, &info.lock().unwrap().clone());
+    MonitorManager::emit_info(ctx.emitter.as_ref(), &info.lock().unwrap().clone());
 }
 
 /// One folder per live room under the monitor's output dir, named after the
@@ -1398,30 +1506,33 @@ fn record_subdir(author: Option<&str>, name: &str, url: &str) -> Option<String> 
     let clean = |s: &str| -> String {
         s.chars()
             // Path separators and control chars would escape the output dir.
-            .filter(|c| !matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') && *c as u32 >= 0x20)
+            .filter(|c| {
+                !matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+                    && *c as u32 >= 0x20
+            })
             .collect::<String>()
             .trim()
             .chars()
             .take(60)
             .collect()
     };
-    author
-        .map(clean)
-        .filter(|a| !a.is_empty())
-        .or_else(|| {
-            let n = clean(name);
-            (!n.is_empty() && n != clean(url)).then_some(n)
-        })
+    author.map(clean).filter(|a| !a.is_empty()).or_else(|| {
+        let n = clean(name);
+        (!n.is_empty() && n != clean(url)).then_some(n)
+    })
 }
 
 /// Run one recording synchronously (blocks the monitor thread) and update the
 /// monitor's status around it. `auto` decides whether the monitor keeps
 /// running for the next stream (true) or stops after this recording (false).
-fn record_once(app: &AppHandle, bin: &Path, info: &Arc<Mutex<MonitorInfo>>) {
+fn record_once(ctx: &Ctx, bin: &Path, info: &Arc<Mutex<MonitorInfo>>) {
     let (req, pipeline, upload_to, auto) = {
         let i = info.lock().unwrap();
         let output_dir = match record_subdir(i.author.as_deref(), &i.name, &i.url) {
-            Some(sub) => Path::new(&i.output_dir).join(sub).to_string_lossy().into_owned(),
+            Some(sub) => Path::new(&i.output_dir)
+                .join(sub)
+                .to_string_lossy()
+                .into_owned(),
             None => i.output_dir.clone(),
         };
         (
@@ -1431,7 +1542,6 @@ fn record_once(app: &AppHandle, bin: &Path, info: &Arc<Mutex<MonitorInfo>>) {
                 audio_format: None,
                 output_dir,
                 filename_template: None,
-                cookies_browser: i.cookies_browser.clone(),
                 cookies_file: i.cookies_file.clone(),
                 cookies_text: i.cookies_text.clone(),
                 proxy: i.proxy.clone(),
@@ -1450,30 +1560,40 @@ fn record_once(app: &AppHandle, bin: &Path, info: &Arc<Mutex<MonitorInfo>>) {
             i.auto_record,
         )
     };
-    let id = format!("dl-{:x}-{}", std::time::SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0), std::process::id());
+    let id = format!(
+        "dl-{:x}-{}",
+        std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+        std::process::id()
+    );
     {
         let mut i = info.lock().unwrap();
         i.status = "recording".into();
         i.current_job = Some(id.clone());
     }
-    MonitorManager::emit_info(app, &info.lock().unwrap().clone());
+    MonitorManager::emit_info(ctx.emitter.as_ref(), &info.lock().unwrap().clone());
     // The download-started event (emitted inside run_download_blocking via
     // req.title) creates the task item on the frontend.
-    run_download_blocking(app, bin, req, &id, pipeline, upload_to);
+    run_download_blocking(ctx, bin, req, &id, pipeline, upload_to);
     {
         let mut i = info.lock().unwrap();
         i.current_job = None;
         // Manual one-shot recordings stop the monitor; auto recordings keep it
         // running for the next stream.
-        i.status = if auto { "watching".into() } else { "stopped".into() };
+        i.status = if auto {
+            "watching".into()
+        } else {
+            "stopped".into()
+        };
     }
-    MonitorManager::emit_info(app, &info.lock().unwrap().clone());
+    MonitorManager::emit_info(ctx.emitter.as_ref(), &info.lock().unwrap().clone());
 }
 
-#[tauri::command]
-pub fn monitor_list(app: AppHandle) -> Vec<MonitorInfo> {
-    let mgr = app.state::<MonitorManager>();
-    let list: Vec<MonitorInfo> = mgr
+pub fn monitor_list(ctx: Ctx) -> Vec<MonitorInfo> {
+    let list: Vec<MonitorInfo> = ctx
+        .monitors
         .monitors
         .lock()
         .unwrap()
@@ -1483,13 +1603,9 @@ pub fn monitor_list(app: AppHandle) -> Vec<MonitorInfo> {
     list
 }
 
-#[tauri::command]
-pub fn monitor_record_now(app: AppHandle, id: String) -> Result<()> {
-    let mgr = app.state::<MonitorManager>();
-    let map = mgr.monitors.lock().unwrap();
-    let h = map
-        .get(&id)
-        .ok_or_else(|| AppError("监控不存在".into()))?;
+pub fn monitor_record_now(ctx: Ctx, id: String) -> Result<()> {
+    let map = ctx.monitors.monitors.lock().unwrap();
+    let h = map.get(&id).ok_or_else(|| AppError("监控不存在".into()))?;
     if h.info.lock().unwrap().current_job.is_some() {
         return Err(AppError("该直播间正在录制中".into()));
     }
@@ -1508,16 +1624,20 @@ pub struct MonitorEdit {
     pub quality: Option<String>,
 }
 
-#[tauri::command]
-pub fn monitor_update(app: AppHandle, id: String, edit: MonitorEdit) -> Result<MonitorInfo> {
-    let mgr = app.state::<MonitorManager>();
+pub fn monitor_update(ctx: Ctx, id: String, edit: MonitorEdit) -> Result<MonitorInfo> {
     let info = {
-        let mut map = mgr.monitors.lock().unwrap();
-        let h = map.get_mut(&id).ok_or_else(|| AppError("监控不存在".into()))?;
+        let mut map = ctx.monitors.monitors.lock().unwrap();
+        let h = map
+            .get_mut(&id)
+            .ok_or_else(|| AppError("监控不存在".into()))?;
         let mut i = h.info.lock().unwrap();
         if let Some(name) = edit.name {
             let name = name.trim();
-            i.name = if name.is_empty() { i.url.clone() } else { name.to_string() };
+            i.name = if name.is_empty() {
+                i.url.clone()
+            } else {
+                name.to_string()
+            };
         }
         if let Some(interval) = edit.interval_sec {
             i.interval_sec = interval.max(30);
@@ -1532,34 +1652,36 @@ pub fn monitor_update(app: AppHandle, id: String, edit: MonitorEdit) -> Result<M
         // Any edit revives it so the new settings actually take effect.
         if i.status == "stopped" {
             i.status = "watching".into();
-            if let Some(bin) = resolve(&app) {
+            if let Some(bin) = resolve(&*ctx.env) {
                 let stop = Arc::new(AtomicBool::new(false));
                 let record_now = Arc::new(AtomicBool::new(false));
-                let (app2, info2, stop2, rn2) =
-                    (app.clone(), h.info.clone(), stop.clone(), record_now.clone());
-                std::thread::spawn(move || monitor_loop(app2, bin, info2, stop2, rn2));
+                let (ctx2, info2, stop2, rn2) = (
+                    ctx.clone(),
+                    h.info.clone(),
+                    stop.clone(),
+                    record_now.clone(),
+                );
+                std::thread::spawn(move || monitor_loop(ctx2, bin, info2, stop2, rn2));
                 h.stop = stop;
                 h.record_now = record_now;
             }
         }
         i.clone()
     };
-    MonitorManager::emit_info(&app, &info);
-    MonitorManager::persist(&app, &mgr);
+    MonitorManager::emit_info(ctx.emitter.as_ref(), &info);
+    MonitorManager::persist(&*ctx.env, &ctx.monitors);
     Ok(info)
 }
 
-#[tauri::command]
-pub fn monitor_remove(app: AppHandle, id: String) -> Result<()> {
-    let mgr = app.state::<MonitorManager>();
-    let handle = mgr.monitors.lock().unwrap().remove(&id);
-    MonitorManager::persist(&app, &mgr);
+pub fn monitor_remove(ctx: Ctx, id: String) -> Result<()> {
+    let handle = ctx.monitors.monitors.lock().unwrap().remove(&id);
+    MonitorManager::persist(&*ctx.env, &ctx.monitors);
     if let Some(h) = handle {
         // If it is recording, cancel the running capture first.
         let job = h.info.lock().unwrap().current_job.clone();
         if let Some(job_id) = job {
-            app.state::<JobManager>().mark_cancelled(&job_id);
-            app.state::<JobManager>().kill(&job_id);
+            ctx.jobs.mark_cancelled(&job_id);
+            ctx.jobs.kill(&job_id);
         }
         h.stop.store(true, Ordering::Relaxed);
         h.record_now.store(false, Ordering::Relaxed);
@@ -1568,20 +1690,22 @@ pub fn monitor_remove(app: AppHandle, id: String) -> Result<()> {
 }
 
 fn now_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// Resume persisted monitors at startup.
-pub fn resume_monitors(app: &AppHandle) {
-    let bin = match resolve(app) {
+pub fn resume_monitors(ctx: &Ctx) {
+    let bin = match resolve(&*ctx.env) {
         Some(b) => b,
         None => return, // yt-dlp missing: nothing to resume; UI shows install prompt
     };
-    let mgr = app.state::<MonitorManager>();
-    for info in MonitorManager::load(app) {
+    for info in MonitorManager::load(&*ctx.env) {
         let id = info.id.clone();
-        let handle = spawn_monitor(app.clone(), bin.clone(), info);
-        mgr.monitors.lock().unwrap().insert(id, handle);
+        let handle = spawn_monitor(ctx.clone(), bin.clone(), info);
+        ctx.monitors.monitors.lock().unwrap().insert(id, handle);
     }
 }
 
@@ -1599,8 +1723,14 @@ mod tests {
     #[test]
     fn douyin_referral_urls_are_rejected() {
         // Recommend-page shapes: no room id in the path.
-        assert!(validate_live_url("https://live.douyin.com/?anchor_id=80188783996&category_name=all").is_err());
-        assert!(validate_live_url("https://live.douyin.com/?activity_name=&anchor_id=1873170450364324").is_err());
+        assert!(validate_live_url(
+            "https://live.douyin.com/?anchor_id=80188783996&category_name=all"
+        )
+        .is_err());
+        assert!(validate_live_url(
+            "https://live.douyin.com/?activity_name=&anchor_id=1873170450364324"
+        )
+        .is_err());
         assert!(validate_live_url("https://live.douyin.com/").is_err());
         // Non-digit path segments are not room ids either.
         assert!(validate_live_url("https://live.douyin.com/enter").is_err());
@@ -1611,33 +1741,5 @@ mod tests {
         assert!(validate_live_url("https://live.bilibili.com/123").is_ok());
         assert!(validate_live_url("https://www.twitch.tv/x").is_ok());
         assert!(validate_live_url("https://www.douyin.com/video/123").is_ok());
-    }
-
-    #[test]
-    fn app_bound_decrypt_failure_gets_guidance() {
-        let raw = "ERROR: Failed to decrypt with DPAPI. See  https://github.com/yt-dlp/yt-dlp/issues/10927  for more info";
-        let mapped = map_browser_cookie_error(Some("chrome"), raw);
-        assert!(mapped.starts_with("浏览器 Cookies 无法解密"));
-        assert!(mapped.contains(raw));
-    }
-
-    #[test]
-    fn locked_cookie_database_gets_guidance() {
-        let raw = "ERROR: Could not copy Chrome cookie database. See  https://github.com/yt-dlp/yt-dlp/issues/7271  for more info";
-        let mapped = map_browser_cookie_error(Some("edge"), raw);
-        assert!(mapped.starts_with("无法读取浏览器 Cookies"));
-        assert!(mapped.contains(raw));
-    }
-
-    #[test]
-    fn unrelated_failures_pass_through() {
-        let raw = "ERROR: HTTP Error 403: Forbidden";
-        assert_eq!(map_browser_cookie_error(Some("chrome"), raw), raw);
-        // And the same error text without a browser choice is left alone —
-        // DPAPI failures can also come from a cookies file, where the
-        // browser guidance would be wrong.
-        let dpapi = "ERROR: Failed to decrypt with DPAPI";
-        assert_eq!(map_browser_cookie_error(None, dpapi), dpapi);
-        assert_eq!(map_browser_cookie_error(Some(""), dpapi), dpapi);
     }
 }

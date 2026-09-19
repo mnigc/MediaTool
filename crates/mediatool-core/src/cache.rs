@@ -7,9 +7,11 @@
 
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
+
+use crate::ctx::AppEnv;
 
 /// Every scratch file the app writes into the OS temp dir starts with this
 /// prefix (thumbnail frames, size estimates, …). Only that prefix is removed,
@@ -67,8 +69,8 @@ fn walk_size(path: &Path) -> (u64, u64) {
     (size, count)
 }
 
-fn managed_bin_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join("bin"))
+fn managed_bin_dir(env: &dyn AppEnv) -> Option<std::path::PathBuf> {
+    env.app_data_dir().map(|d| d.join("bin"))
 }
 
 /// App scratch entries in the OS temp dir.
@@ -97,8 +99,7 @@ fn partial_entries(bin_dir: &Path) -> Vec<std::path::PathBuf> {
         .collect()
 }
 
-#[tauri::command]
-pub fn cache_report(app: AppHandle) -> CacheReport {
+pub fn cache_report(env: &dyn AppEnv) -> CacheReport {
     let mut buckets = Vec::new();
 
     let mut temp_size = 0u64;
@@ -117,7 +118,7 @@ pub fn cache_report(app: AppHandle) -> CacheReport {
         removable: true,
     });
 
-    if let Some(bin_dir) = managed_bin_dir(&app) {
+    if let Some(bin_dir) = managed_bin_dir(env) {
         let mut part_size = 0u64;
         let mut part_count = 0u64;
         for p in partial_entries(&bin_dir) {
@@ -164,16 +165,23 @@ pub fn cache_report(app: AppHandle) -> CacheReport {
     }
 
     let total_bytes = buckets.iter().map(|b| b.size_bytes).sum();
-    let removable_bytes = buckets.iter().filter(|b| b.removable).map(|b| b.size_bytes).sum();
-    CacheReport { total_bytes, removable_bytes, buckets }
+    let removable_bytes = buckets
+        .iter()
+        .filter(|b| b.removable)
+        .map(|b| b.size_bytes)
+        .sum();
+    CacheReport {
+        total_bytes,
+        removable_bytes,
+        buckets,
+    }
 }
 
 /// Delete every removable entry. Runs off the main thread: the scan plus the
 /// recursive removals can mean thousands of filesystem calls.
-#[tauri::command]
-pub async fn cache_clean(app: AppHandle) -> CacheCleanResult {
-    let bin_dir = managed_bin_dir(&app);
-    let result = tauri::async_runtime::spawn_blocking(move || {
+pub async fn cache_clean(env: Arc<dyn AppEnv>) -> CacheCleanResult {
+    let bin_dir = managed_bin_dir(&*env);
+    let result = tokio::task::spawn_blocking(move || {
         let bin_dir = bin_dir;
         let mut targets: Vec<std::path::PathBuf> = temp_entries();
         if let Some(dir) = &bin_dir {
@@ -203,5 +211,9 @@ pub async fn cache_clean(app: AppHandle) -> CacheCleanResult {
     .unwrap_or((0, 0, 0));
 
     let (freed_bytes, removed, failed) = result;
-    CacheCleanResult { freed_bytes, removed, failed }
+    CacheCleanResult {
+        freed_bytes,
+        removed,
+        failed,
+    }
 }

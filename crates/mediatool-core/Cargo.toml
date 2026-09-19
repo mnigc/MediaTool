@@ -1,0 +1,16 @@
+[package]
+name = "mediatool-core"
+version = "0.1.7"
+edition = "2021"
+description = "Pure media-processing engine shared by the desktop app and the headless server"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = true, features = ["stream", "json", "socks"] }
+tokio = { version = "1", features = ["rt", "fs", "io-util", "time", "macros"] }
+bytes = "1"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+base64 = "0.22"
+sha2 = "0.10"
+rand = "0.8"

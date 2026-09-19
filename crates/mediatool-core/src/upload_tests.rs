@@ -93,6 +93,171 @@ fn target_config_validates_required_fields() {
     assert!(yt.validate().is_ok());
 }
 
+/* ── OAuth grant registry (web-mode callback) ─────────────── */
+
+fn flow() -> OauthFlow {
+    OauthFlow {
+        kind: "youtube".into(),
+        client_id: "id".into(),
+        client_secret: "secret".into(),
+        tenant: "common".into(),
+        scope: "https://www.googleapis.com/auth/youtube.upload",
+        redirect_uri: "http://nas:8787/oauth/callback".into(),
+        verifier: "v".into(),
+        proxy: None,
+    }
+}
+
+#[test]
+fn a_state_can_only_be_claimed_once() {
+    let m = OauthManager::default();
+    m.offer("st1", "req-1", flow());
+    assert!(m.claim_by_state("st1").is_some());
+    // A reload of the callback page, or a replayed URL, must not run a second
+    // exchange for the same code.
+    assert!(m.claim_by_state("st1").is_none());
+}
+
+#[test]
+fn claiming_by_request_withdraws_the_state_too() {
+    let m = OauthManager::default();
+    m.offer("st2", "req-2", flow());
+    // Cancel, or the timeout timer, wins the grant first…
+    assert!(m.claim_by_request("req-2").is_some());
+    // …so the browser arriving later finds nothing to report against.
+    assert!(m.claim_by_state("st2").is_none());
+    m.finish("req-2");
+    assert!(m.claim_by_request("req-2").is_none());
+}
+
+#[test]
+fn unknown_state_claims_nothing() {
+    let m = OauthManager::default();
+    m.offer("st3", "req-3", flow());
+    assert!(m.claim_by_state("guessed").is_none());
+    assert!(m.claim_by_request("other").is_none());
+    // Rejected lookups must not burn someone else's pending grant.
+    assert!(m.claim_by_state("st3").is_some());
+}
+
+/* ── Desktop loopback OAuth, end to end ───────────────────── */
+
+/// A shell with no browser and no directories: enough to drive `oauth_begin`,
+/// with every emitted event recorded for assertions.
+#[derive(Clone)]
+struct TestShell {
+    events: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
+}
+
+struct TestEnv;
+
+impl crate::ctx::AppEnv for TestEnv {
+    fn resource_dir(&self) -> Option<PathBuf> {
+        None
+    }
+    fn app_data_dir(&self) -> Option<PathBuf> {
+        None
+    }
+    fn open_url(&self, _url: &str) {}
+}
+
+impl crate::ctx::Emitter for TestShell {
+    fn emit(&self, event: &str, payload: serde_json::Value) {
+        self.events
+            .lock()
+            .unwrap()
+            .push((event.to_string(), payload));
+    }
+}
+
+fn test_ctx() -> (Ctx, TestShell) {
+    let shell = TestShell {
+        events: Arc::new(Mutex::new(Vec::new())),
+    };
+    let ctx = Ctx::new(
+        Arc::new(TestEnv),
+        Arc::new(shell.clone()),
+        Arc::new(crate::state::JobManager::new()),
+        Arc::new(crate::ytdlp::MonitorManager::default()),
+        Arc::default(),
+        Arc::default(),
+    );
+    (ctx, shell)
+}
+
+fn wait_for_oauth_result(shell: &TestShell, request_id: &str) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if let Some((_, payload)) = shell.events.lock().unwrap().iter().find(|(e, p)| {
+            e == "oauth-result" && p.get("requestId").and_then(|v| v.as_str()) == Some(request_id)
+        }) {
+            return payload.clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no oauth-result for {request_id}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The desktop path must keep working after the web callback was added: the
+/// loopback listener has to catch the redirect, answer it, and report.
+#[test]
+fn loopback_oauth_catches_the_redirect_and_reports_it() {
+    use std::io::{Read, Write};
+    let (ctx, shell) = test_ctx();
+    let begin = crate::block_on_owned(oauth_begin(
+        ctx,
+        OauthBeginRequest {
+            kind: "youtube".into(),
+            client_id: "test-client".into(),
+            client_secret: Some("secret".into()),
+            tenant: None,
+            proxy: None,
+        },
+    ))
+    .expect("oauth_begin");
+
+    assert!(
+        begin.redirect_uri.starts_with("http://127.0.0.1:"),
+        "desktop must still use a loopback redirect, got {}",
+        begin.redirect_uri
+    );
+    let state = begin
+        .auth_url
+        .split("state=")
+        .nth(1)
+        .and_then(|s| s.split('&').next())
+        .expect("auth url carries state");
+
+    let addr = begin.redirect_uri.trim_start_matches("http://");
+    let mut stream = std::net::TcpStream::connect(addr).expect("loopback listener is up");
+    stream
+        .write_all(
+            format!("GET /?code=dummy&state={state} HTTP/1.1\r\nHost: {addr}\r\n\r\n").as_bytes(),
+        )
+        .unwrap();
+    let mut reply = String::new();
+    let _ = stream.read_to_string(&mut reply);
+    assert!(
+        reply.starts_with("HTTP/1.1 200"),
+        "listener replied: {reply}"
+    );
+
+    let result = wait_for_oauth_result(&shell, &begin.request_id);
+    assert_eq!(result["ok"], serde_json::Value::Bool(false));
+    // The dummy code cannot survive the real token endpoint; what matters is
+    // that we got far enough to talk to it rather than bailing on the state.
+    assert!(
+        !result["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("State mismatch"),
+        "listener did not accept our state: {result}"
+    );
+}
+
 /* ── WebDAV end-to-end against a local fake server ────────── */
 
 /// Commands the scripted server handled, in order.
@@ -111,7 +276,9 @@ fn fake_webdav(script: Vec<(&'static str, u16)>) -> (std::net::SocketAddr, Recei
     let (tx, rx) = std::sync::mpsc::channel::<Req>();
     std::thread::spawn(move || {
         for (kind, status) in script {
-            let Ok((stream, _)) = listener.accept() else { break };
+            let Ok((stream, _)) = listener.accept() else {
+                break;
+            };
             let mut reader = std::io::BufReader::new(stream);
             use std::io::BufRead;
             let mut request_line = String::new();
@@ -129,7 +296,10 @@ fn fake_webdav(script: Vec<(&'static str, u16)>) -> (std::net::SocketAddr, Recei
                 if reader.read_line(&mut line).is_err() || line.trim().is_empty() {
                     break;
                 }
-                if line.to_ascii_lowercase().contains("transfer-encoding: chunked") {
+                if line
+                    .to_ascii_lowercase()
+                    .contains("transfer-encoding: chunked")
+                {
                     chunked = true;
                 }
             }
@@ -198,11 +368,8 @@ fn webdav_target(addr: std::net::SocketAddr) -> TargetConfig {
 }
 
 fn temp_file(name: &str, content: &[u8]) -> (std::path::PathBuf, std::path::PathBuf) {
-    let dir = std::env::temp_dir().join(format!(
-        "mediatool-upload-{}-{}",
-        name,
-        std::process::id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("mediatool-upload-{}-{}", name, std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join(name);
     std::fs::write(&file, content).unwrap();
@@ -218,7 +385,7 @@ fn webdav_upload_creates_parents_and_streams_body() {
     let (addr, rx) = fake_webdav(vec![("PUT", 409), ("MKCOL", 201), ("PUT", 201)]);
 
     let flag = Arc::new(AtomicBool::new(false));
-    let outcome = tauri::async_runtime::block_on(upload_webdav(
+    let outcome = crate::block_on_owned(upload_webdav(
         &noop_progress(),
         &webdav_target(addr),
         &file,
@@ -230,9 +397,7 @@ fn webdav_upload_creates_parents_and_streams_body() {
 
     assert_eq!(
         outcome.0.as_deref(),
-        Some(
-            format!("http://{addr}/media/%E5%86%92%E7%83%9F%E6%B5%8B%E8%AF%95.bin").as_str()
-        )
+        Some(format!("http://{addr}/media/%E5%86%92%E7%83%9F%E6%B5%8B%E8%AF%95.bin").as_str())
     );
 
     // Request order: PUT, MKCOL for the missing parent, retried PUT.
@@ -261,7 +426,7 @@ fn webdav_upload_aborts_when_cancelled() {
     // counting stream must abort the transfer instead of finishing it.
     let (addr, _rx) = fake_webdav(vec![("PUT", 201)]);
     let flag = Arc::new(AtomicBool::new(true));
-    let result = tauri::async_runtime::block_on(upload_webdav(
+    let result = crate::block_on_owned(upload_webdav(
         &noop_progress(),
         &webdav_target(addr),
         &file,

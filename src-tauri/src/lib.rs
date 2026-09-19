@@ -1,22 +1,9 @@
-mod cache;
 mod commands;
-mod error;
-mod ffmpeg;
-mod gpu;
-mod inspect;
-mod jobs;
-mod media;
-mod models;
-mod state;
-mod streamlink;
-mod thumbnail;
-mod upload;
-mod ytdlp;
+mod shell;
+
+pub use mediatool_core::{error, models};
 
 use tauri::Manager;
-
-use state::JobManager;
-use ytdlp::MonitorManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -25,13 +12,28 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .manage(JobManager::new())
-        .manage(MonitorManager::default())
-        .manage(upload::UploadManager::default())
-        .manage(upload::OauthManager::default())
+        .setup(|app| {
+            // Build the shell state (engine Ctx) before any command can run,
+            // then hand the engine the same managers the app manages.
+            let handle = app.handle().clone();
+            let shell = shell::build(&handle);
+            app.manage(shell.jobs.clone());
+            app.manage(shell.ctx.monitors.clone());
+            app.manage(shell.ctx.uploads.clone());
+            app.manage(shell.ctx.oauth.clone());
+            app.manage(shell);
+            // Unpack the bundled live-recording engine in the background, so
+            // it is ready without any user action.
+            let prep_ctx = handle.state::<shell::ShellState>().ctx.clone();
+            mediatool_core::streamlink::prepare(&prep_ctx);
+            // Restore persisted live monitors so they keep watching across
+            // restarts (skipped silently when yt-dlp is not installed yet).
+            mediatool_core::ytdlp::resume_monitors(&prep_ctx);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
-            cache::cache_report,
-            cache::cache_clean,
+            commands::cache_report,
+            commands::cache_clean,
             commands::probe_file,
             commands::start_job,
             commands::start_workflow,
@@ -40,35 +42,26 @@ pub fn run() {
             commands::open_output_folder,
             commands::detect_gpu,
             commands::inspect_media,
-            thumbnail::get_thumbnail,
-            upload::upload_start,
-            upload::cancel_upload,
-            upload::oauth_begin,
-            upload::oauth_cancel,
-            ytdlp::ytdlp_status,
-            ytdlp::ytdlp_install,
-            ytdlp::ytdlp_latest_version,
-            ytdlp::ytdlp_probe,
-            ytdlp::ytdlp_start_download,
-            ytdlp::dl_active_tasks,
-            streamlink::streamlink_status,
-            streamlink::streamlink_latest_release,
-            streamlink::streamlink_install,
-            ytdlp::monitor_add,
-            ytdlp::monitor_list,
-            ytdlp::monitor_remove,
-            ytdlp::monitor_record_now,
-            ytdlp::monitor_update
+            commands::get_thumbnail,
+            commands::upload_start,
+            commands::cancel_upload,
+            commands::oauth_begin,
+            commands::oauth_cancel,
+            commands::ytdlp_status,
+            commands::ytdlp_install,
+            commands::ytdlp_latest_version,
+            commands::ytdlp_probe,
+            commands::ytdlp_start_download,
+            commands::dl_active_tasks,
+            commands::streamlink_status,
+            commands::streamlink_latest_release,
+            commands::streamlink_install,
+            commands::monitor_add,
+            commands::monitor_list,
+            commands::monitor_remove,
+            commands::monitor_record_now,
+            commands::monitor_update
         ])
-        .setup(|app| {
-            // Unpack the bundled live-recording engine in the background, so it
-            // is ready without any user action.
-            streamlink::prepare(app.handle());
-            // Restore persisted live monitors so they keep watching across
-            // restarts (skipped silently when yt-dlp is not installed yet).
-            ytdlp::resume_monitors(app.handle());
-            Ok(())
-        })
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|app_handle, event| {
@@ -76,7 +69,9 @@ pub fn run() {
             // every live child so no zombie processes keep burning CPU and
             // writing partial output files after the app is gone.
             if let tauri::RunEvent::ExitRequested { .. } = event {
-                app_handle.state::<JobManager>().kill_all();
+                if let Some(s) = app_handle.try_state::<shell::ShellState>() {
+                    s.jobs.kill_all();
+                }
             }
         });
 }

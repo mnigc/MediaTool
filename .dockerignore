@@ -1,0 +1,25 @@
+# The build context is the repository root; everything here would otherwise
+# be uploaded on every `docker compose build`.
+
+# 16 GB of local Rust artifacts. The image compiles from source.
+target/
+src-tauri/target/
+
+# Bundled desktop sidecars (~360 MB of Windows executables). The container
+# installs ffmpeg/yt-dlp/streamlink from Debian instead.
+src-tauri/binaries/
+src-tauri/gen/
+
+node_modules/
+dist/
+
+.git/
+.github/
+.vscode/
+.codegraph/
+
+# Local scratch: test media, tokens, editor droppings.
+**/*.mp4
+**/*.opus
+**/*.mkv
+**/.env

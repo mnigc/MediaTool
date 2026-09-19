@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use serde_json::Value;
-use tauri::AppHandle;
 
+use crate::ctx::AppEnv;
 use crate::error::{AppError, Result};
 use crate::ffmpeg;
 use crate::models::{MediaReport, StreamReport};
@@ -33,8 +33,7 @@ fn parse_stream(raw: &Value) -> StreamReport {
         pix_fmt: s(raw, "pix_fmt"),
         width: raw.get("width").and_then(|w| w.as_u64()).map(|w| w as u32),
         height: raw.get("height").and_then(|h| h.as_u64()).map(|h| h as u32),
-        avg_frame_rate: s(raw, "avg_frame_rate")
-            .filter(|r| r != "0/0"),
+        avg_frame_rate: s(raw, "avg_frame_rate").filter(|r| r != "0/0"),
         sample_rate: n::<u64>(raw, "sample_rate"),
         channels: raw
             .get("channels")
@@ -47,7 +46,7 @@ fn parse_stream(raw: &Value) -> StreamReport {
     }
 }
 
-pub fn inspect_sync(app: &AppHandle, path: &str) -> Result<MediaReport> {
+pub fn inspect_sync(env: &dyn AppEnv, path: &str) -> Result<MediaReport> {
     if !Path::new(path).exists() {
         return Err(AppError("文件不存在".into()));
     }
@@ -63,7 +62,7 @@ pub fn inspect_sync(app: &AppHandle, path: &str) -> Result<MediaReport> {
         "-show_chapters".to_string(),
         path.to_string(),
     ];
-    let (child, stdout, _stderr_buf, _drain) = ffmpeg::spawn(app, "ffprobe", &args)?;
+    let (child, stdout, _stderr_buf, _drain) = ffmpeg::spawn(env, "ffprobe", &args)?;
     let out = crate::media::read_stdout_timeout(child, stdout, std::time::Duration::from_secs(30))?;
     let v: Value = serde_json::from_str(&out)?;
 
@@ -93,8 +92,8 @@ pub fn inspect_sync(app: &AppHandle, path: &str) -> Result<MediaReport> {
 }
 
 /// Async wrapper around the blocking inspection.
-pub async fn inspect(app: AppHandle, path: String) -> Result<MediaReport> {
-    let inner = tauri::async_runtime::spawn_blocking(move || inspect_sync(&app, &path))
+pub async fn inspect(env: std::sync::Arc<dyn AppEnv>, path: String) -> Result<MediaReport> {
+    let inner = tokio::task::spawn_blocking(move || inspect_sync(&*env, &path))
         .await
         .map_err(|e| AppError(e.to_string()))?;
     inner

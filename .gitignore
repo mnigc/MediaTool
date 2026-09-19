@@ -32,7 +32,10 @@ src-tauri/binaries/*
 # Verification artifacts
 scripts/verify.log
 
-# Test-run outputs dropped next to the app during manual verification
-src-tauri/clip_mediatool*.mp4
-src-tauri/movie_mediatool*.opus
+# Test-run outputs dropped next to the crate that produced them
+clip_mediatool*.mp4
+movie_mediatool*.opus
+hdr_test.mkv
 
+# Workspace build artifacts
+/target

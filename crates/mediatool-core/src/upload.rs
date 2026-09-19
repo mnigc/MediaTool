@@ -19,9 +19,9 @@ use futures_util::Stream;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
+use crate::ctx::{emit, Ctx, Emitter};
 use crate::error::{AppError, Result};
 
 /* ── Models ─────────────────────────────────────────────────────── */
@@ -64,10 +64,22 @@ impl TargetConfig {
                 }
             }
             "telegram" => {
-                if self.bot_token.as_deref().map(str::trim).unwrap_or("").is_empty() {
+                if self
+                    .bot_token
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or("")
+                    .is_empty()
+                {
                     return Err("Telegram bot token is required".into());
                 }
-                if self.chat_id.as_deref().map(str::trim).unwrap_or("").is_empty() {
+                if self
+                    .chat_id
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or("")
+                    .is_empty()
+                {
                     return Err("Telegram chat id is required".into());
                 }
             }
@@ -75,10 +87,22 @@ impl TargetConfig {
                 self.validate_google()?;
             }
             "onedrive" => {
-                if self.client_id.as_deref().map(str::trim).unwrap_or("").is_empty() {
+                if self
+                    .client_id
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or("")
+                    .is_empty()
+                {
                     return Err("Client id is required".into());
                 }
-                if self.refresh_token.as_deref().map(str::trim).unwrap_or("").is_empty() {
+                if self
+                    .refresh_token
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or("")
+                    .is_empty()
+                {
                     return Err("Account is not authorized yet".into());
                 }
             }
@@ -88,13 +112,31 @@ impl TargetConfig {
     }
 
     fn validate_google(&self) -> std::result::Result<(), String> {
-        if self.client_id.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        if self
+            .client_id
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .is_empty()
+        {
             return Err("Client id is required".into());
         }
-        if self.client_secret.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        if self
+            .client_secret
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .is_empty()
+        {
             return Err("Client secret is required".into());
         }
-        if self.refresh_token.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        if self
+            .refresh_token
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .is_empty()
+        {
             return Err("Account is not authorized yet".into());
         }
         Ok(())
@@ -156,9 +198,10 @@ pub struct OauthBeginRequest {
 pub struct OauthBeginResult {
     pub request_id: String,
     pub auth_url: String,
-    /// What the user has to register as an allowed redirect URI in the
-    /// provider console (Google: `http://127.0.0.1`, Microsoft:
-    /// `http://localhost` — the runtime port is allowed for both).
+    /// The exact redirect URI to register in the provider console. Desktop
+    /// uses a loopback address (Google allows any port on `127.0.0.1`,
+    /// Microsoft on `localhost`); the web server uses its own hosted
+    /// `<publicUrl>/oauth/callback`, which must be registered verbatim.
     pub redirect_uri: String,
 }
 
@@ -170,6 +213,42 @@ struct OauthResultEvent {
     ok: bool,
     error: Option<String>,
     refresh_token: Option<String>,
+}
+
+/// What a browser needs to know after the provider redirected back: whether
+/// the grant was stored, and why not. Rendering is the shell's business.
+#[derive(Debug, Clone)]
+pub struct OauthCallbackReply {
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
+impl OauthCallbackReply {
+    fn fail(error: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            error: Some(error.into()),
+        }
+    }
+}
+
+/// Everything the token endpoint needs beyond the one-time authorization code.
+#[derive(Clone)]
+struct OauthFlow {
+    kind: String,
+    client_id: String,
+    client_secret: String,
+    tenant: String,
+    scope: &'static str,
+    redirect_uri: String,
+    verifier: String,
+    proxy: Option<String>,
+}
+
+/// A parked flow plus the request id its UI is waiting on.
+struct Grant {
+    request_id: String,
+    flow: OauthFlow,
 }
 
 /* ── State ──────────────────────────────────────────────────────── */
@@ -189,10 +268,19 @@ impl UploadManager {
     }
 }
 
-/// Pending browser-OAuth loops; cancelling aborts the loopback listener.
+/// Pending browser-OAuth authorizations.
+///
+/// Two shapes, because the redirect has nowhere to go in a container: desktop
+/// only needs a cancellation flag for its loopback listener thread, while the
+/// web server keeps the full exchange state under the `state` parameter and
+/// waits for its own callback route to hand the code back.
 #[derive(Default)]
 pub struct OauthManager {
     cancelled: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    grants: Mutex<HashMap<String, Grant>>,
+    /// `state` per pending request id, so cancel and timeout can withdraw a
+    /// grant without a reverse index.
+    states: Mutex<HashMap<String, String>>,
 }
 
 impl OauthManager {
@@ -201,8 +289,40 @@ impl OauthManager {
     }
     pub fn finish(&self, id: &str) {
         self.cancelled.lock().unwrap().remove(id);
+        self.states.lock().unwrap().remove(id);
+    }
+
+    /// Park a grant for the hosted callback to pick up.
+    fn offer(&self, state: &str, request_id: &str, flow: OauthFlow) {
+        self.grants.lock().unwrap().insert(
+            state.to_string(),
+            Grant {
+                request_id: request_id.to_string(),
+                flow,
+            },
+        );
+        self.states
+            .lock()
+            .unwrap()
+            .insert(request_id.to_string(), state.to_string());
+    }
+
+    /// Claim a grant by `state`. Single use on purpose: whoever claims first
+    /// owns the outcome, so a replayed callback and the timeout timer cannot
+    /// both report a result for the same request.
+    fn claim_by_state(&self, state: &str) -> Option<Grant> {
+        self.grants.lock().unwrap().remove(state)
+    }
+
+    /// Claim a grant by request id, used by the timeout timer and by cancel.
+    fn claim_by_request(&self, request_id: &str) -> Option<Grant> {
+        let state = self.states.lock().unwrap().get(request_id).cloned()?;
+        self.grants.lock().unwrap().remove(&state)
     }
 }
+
+/// How long a browser OAuth flow may stay unfinished before it is dropped.
+const OAUTH_TIMEOUT: Duration = Duration::from_secs(300);
 
 fn uuid(prefix: &str) -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -216,12 +336,8 @@ fn uuid(prefix: &str) -> String {
 
 /* ── Commands ───────────────────────────────────────────────────── */
 
-#[tauri::command]
-pub async fn upload_start(app: AppHandle, request: UploadRequest) -> Result<UploadStartResult> {
-    request
-        .target
-        .validate()
-        .map_err(AppError)?;
+pub async fn upload_start(ctx: Ctx, request: UploadRequest) -> Result<UploadStartResult> {
+    request.target.validate().map_err(AppError)?;
     let path = PathBuf::from(&request.file_path);
     let meta = tokio::fs::metadata(&path)
         .await
@@ -232,50 +348,68 @@ pub async fn upload_start(app: AppHandle, request: UploadRequest) -> Result<Uplo
     let size = meta.len();
     let id = uuid("up");
     let flag = Arc::new(AtomicBool::new(false));
-    app.state::<UploadManager>().register(&id, flag.clone());
+    ctx.uploads.register(&id, flag.clone());
     let name = request
         .name
         .clone()
         .unwrap_or_else(|| file_name(&request.file_path));
     let spawn_id = id.clone();
-    tauri::async_runtime::spawn(async move {
-        run_upload(app, spawn_id, request.target, path, size, name, flag).await;
+    tokio::task::spawn(async move {
+        run_upload(ctx, spawn_id, request.target, path, size, name, flag).await;
     });
     Ok(UploadStartResult { id })
 }
 
-#[tauri::command]
-pub fn cancel_upload(app: AppHandle, id: String) {
-    if let Some(flag) = app.state::<UploadManager>().cancelled.lock().unwrap().get(&id) {
+pub fn cancel_upload(ctx: Ctx, id: String) {
+    if let Some(flag) = ctx.uploads.cancelled.lock().unwrap().get(&id) {
         flag.store(true, Ordering::Relaxed);
     }
 }
 
-#[tauri::command]
-pub async fn oauth_begin(app: AppHandle, request: OauthBeginRequest) -> Result<OauthBeginResult> {
+pub async fn oauth_begin(ctx: Ctx, request: OauthBeginRequest) -> Result<OauthBeginResult> {
     let kind = request.kind.clone();
     match kind.as_str() {
         "youtube" | "gdrive" | "onedrive" => {}
         other => return Err(AppError(format!("Unsupported OAuth kind: {other}"))),
     }
 
-    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
-        .map_err(|e| AppError(format!("Cannot bind loopback port: {e}")))?;
-    let port = listener
-        .local_addr()
-        .map_err(|e| AppError(e.to_string()))?
-        .port();
-    let redirect_uri = match kind.as_str() {
-        // Google registers the loopback host without a port (any runtime port
-        // is allowed); Microsoft registers `http://localhost` the same way.
-        "youtube" | "gdrive" => format!("http://127.0.0.1:{port}"),
-        _ => format!("http://localhost:{port}"),
+    // Where the provider sends the browser back to. A desktop app can open a
+    // loopback port the same browser can reach; a container cannot — its
+    // 127.0.0.1 is not the user's, so the redirect goes to a page the web
+    // server itself serves and matches back to this request via `state`.
+    let hosted_base = ctx
+        .env
+        .oauth_redirect_base()
+        .map(|b| b.trim_end_matches('/').to_string());
+    let loopback = match &hosted_base {
+        Some(_) => None,
+        None => {
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
+                .map_err(|e| AppError(format!("Cannot bind loopback port: {e}")))?;
+            let port = listener
+                .local_addr()
+                .map_err(|e| AppError(e.to_string()))?
+                .port();
+            // Google registers the loopback host without a port (any runtime
+            // port is allowed); Microsoft does the same for `localhost`.
+            Some(match kind.as_str() {
+                "youtube" | "gdrive" => (listener, format!("http://127.0.0.1:{port}")),
+                _ => (listener, format!("http://localhost:{port}")),
+            })
+        }
+    };
+    let redirect_uri = match (&hosted_base, &loopback) {
+        (Some(base), _) => format!("{base}/oauth/callback"),
+        (_, Some((_, uri))) => uri.clone(),
+        (None, None) => return Err(AppError("Shell has no OAuth redirect path".into())),
     };
 
     let verifier = random_token(64);
     let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .encode(Sha256::digest(verifier.as_bytes()));
-    let state = random_token(16);
+    // In web mode this is the only capability the callback route gets, so it
+    // carries the same entropy as the PKCE verifier rather than a short nonce.
+    let state = random_token(32);
 
     let scope = match kind.as_str() {
         "youtube" => "https://www.googleapis.com/auth/youtube.upload",
@@ -304,101 +438,61 @@ pub async fn oauth_begin(app: AppHandle, request: OauthBeginRequest) -> Result<O
         }
     };
 
+    let flow = OauthFlow {
+        kind: kind.clone(),
+        client_id: request.client_id.clone(),
+        client_secret: request.client_secret.clone().unwrap_or_default(),
+        tenant: request
+            .tenant
+            .clone()
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| "common".into()),
+        scope,
+        redirect_uri: redirect_uri.clone(),
+        verifier,
+        proxy: request.proxy.clone(),
+    };
+
     let request_id = uuid("oa");
     let flag = Arc::new(AtomicBool::new(false));
-    app.state::<OauthManager>().register(&request_id, flag.clone());
+    ctx.oauth.register(&request_id, flag.clone());
 
-    // Open the consent page in the user's browser; the loopback listener
-    // below catches the redirect.
-    {
-        use tauri_plugin_opener::OpenerExt;
-        let _ = app.opener().open_url(auth_url.clone(), None::<&str>);
-    }
+    // Open the consent page; in a headless shell `open_url` logs the URL and
+    // the web UI opens it itself.
+    ctx.env.open_url(&auth_url);
 
-    // The browser comes back to this loopback listener; exchange the code and
-    // report the refresh token via `oauth-result`. The listener dies after one
-    // code, a cancellation, or a 5-minute timeout.
-    let client_secret = request.client_secret.clone().unwrap_or_default();
-    let client_id = request.client_id.clone();
-    let tenant = request
-        .tenant
-        .clone()
-        .filter(|t| !t.is_empty())
-        .unwrap_or_else(|| "common".into());
-    let proxy = request.proxy.clone();
-    let handle = app.clone();
-    let ev_kind = kind.clone();
-    let ev_id = request_id.clone();
-    let cb_redirect_uri = redirect_uri.clone();
-    std::thread::spawn(move || {
-        let _ = listener.set_nonblocking(true);
-        let deadline = Instant::now() + Duration::from_secs(300);
-        let mut done = false;
-        while !done {
-            if flag.load(Ordering::Relaxed) || Instant::now() > deadline {
-                if !flag.load(Ordering::Relaxed) {
-                    let _ = handle.emit(
-                        "oauth-result",
-                        OauthResultEvent {
-                            request_id: ev_id.clone(),
-                            kind: ev_kind.clone(),
-                            ok: false,
-                            error: Some("Authorization timed out".into()),
-                            refresh_token: None,
-                        },
+    match loopback {
+        // The browser comes back to this loopback listener; the listener dies
+        // after one code, a cancellation, or a 5-minute timeout.
+        Some((listener, _)) => {
+            let ctx2 = ctx.clone();
+            let ev_id = request_id.clone();
+            let ev_state = state.clone();
+            let ev_flag = flag.clone();
+            std::thread::spawn(move || {
+                wait_on_loopback(ctx2, listener, &ev_state, ev_flag, ev_id, flow);
+            });
+        }
+        None => {
+            ctx.oauth.offer(&state, &request_id, flow.clone());
+            // Nobody may ever come back with the code: expire the request out
+            // loud, the way the loopback listener times out on its own.
+            let ctx2 = ctx.clone();
+            let ev_id = request_id.clone();
+            let ev_kind = kind.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(OAUTH_TIMEOUT).await;
+                if ctx2.oauth.claim_by_request(&ev_id).is_some() {
+                    report_oauth_result(
+                        &ctx2,
+                        &ev_id,
+                        &ev_kind,
+                        Err("Authorization timed out".into()),
                     );
                 }
-                handle.state::<OauthManager>().finish(&ev_id);
-                return;
-            }
-            match listener.accept() {
-                Ok((stream, _)) => {
-                    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-                    if let Some((code, got_state)) = read_oauth_callback(&stream) {
-                        let body = if got_state != state {
-                            Err("State mismatch — please retry from the app".to_string())
-                        } else {
-                            exchange_oauth_code(
-                                &ev_kind,
-                                &code,
-                                &client_id,
-                                &client_secret,
-                                &cb_redirect_uri,
-                                &verifier,
-                                &tenant,
-                                scope,
-                                proxy.as_deref(),
-                            )
-                        };
-                        let _ = write_oauth_reply(&stream, body.is_ok());
-                        let (ok, error, refresh_token) = match body {
-                            Ok(rt) => (true, None, Some(rt)),
-                            Err(e) => (false, Some(e), None),
-                        };
-                        let _ = handle.emit(
-                            "oauth-result",
-                            OauthResultEvent {
-                                request_id: ev_id.clone(),
-                                kind: ev_kind.clone(),
-                                ok,
-                                error,
-                                refresh_token,
-                            },
-                        );
-                        done = true;
-                    } else {
-                        // Favicon or random GET: acknowledge and keep waiting.
-                        let _ = write_simple_404(&stream);
-                    }
-                }
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-                Err(_) => std::thread::sleep(Duration::from_millis(100)),
-            }
+            });
         }
-        handle.state::<OauthManager>().finish(&ev_id);
-    });
+    }
 
     Ok(OauthBeginResult {
         request_id,
@@ -407,17 +501,75 @@ pub async fn oauth_begin(app: AppHandle, request: OauthBeginRequest) -> Result<O
     })
 }
 
-#[tauri::command]
-pub fn oauth_cancel(app: AppHandle, request_id: String) {
-    if let Some(flag) = app.state::<OauthManager>().cancelled.lock().unwrap().get(&request_id) {
+/// Handle a provider redirect that arrived at the shell's own callback route.
+/// `code` and `error` are the two shapes the providers send; `state` picks the
+/// pending request. Safe to call from a blocking context.
+pub fn oauth_complete(
+    ctx: &Ctx,
+    state: &str,
+    code: Option<&str>,
+    error: Option<&str>,
+) -> OauthCallbackReply {
+    let Some(grant) = ctx.oauth.claim_by_state(state) else {
+        // Unknown/expired state, or someone already used it. Nothing here can
+        // tell which, and the distinction only helps an attacker probing.
+        return OauthCallbackReply::fail("This authorization request is no longer pending");
+    };
+    let Grant { request_id, flow } = grant;
+    let outcome = match (code, error) {
+        (Some(code), _) => exchange_oauth_code(&flow, code),
+        (None, Some(error)) => Err(format!("The provider refused the request: {error}")),
+        (None, None) => Err("Callback carried no authorization code".to_string()),
+    };
+    let reply = OauthCallbackReply {
+        ok: outcome.is_ok(),
+        error: outcome.clone().err(),
+    };
+    // The app that started the flow is watching `oauth-result`, not this page.
+    report_oauth_result(ctx, &request_id, &flow.kind, outcome);
+    reply
+}
+
+/// Report one OAuth outcome and retire the request.
+fn report_oauth_result(
+    ctx: &Ctx,
+    request_id: &str,
+    kind: &str,
+    outcome: std::result::Result<String, String>,
+) {
+    let (ok, error, refresh_token) = match outcome {
+        Ok(rt) => (true, None, Some(rt)),
+        Err(e) => (false, Some(e), None),
+    };
+    emit(
+        ctx.emitter.as_ref(),
+        "oauth-result",
+        &OauthResultEvent {
+            request_id: request_id.to_string(),
+            kind: kind.to_string(),
+            ok,
+            error,
+            refresh_token,
+        },
+    );
+    ctx.oauth.finish(request_id);
+}
+
+pub fn oauth_cancel(ctx: Ctx, request_id: String) {
+    // Loopback: wake the listener thread. Hosted: drop the grant so a late
+    // callback finds nothing pending.
+    if let Some(flag) = ctx.oauth.cancelled.lock().unwrap().get(&request_id) {
         flag.store(true, Ordering::Relaxed);
+    }
+    if ctx.oauth.claim_by_request(&request_id).is_some() {
+        ctx.oauth.finish(&request_id);
     }
 }
 
 /* ── Dispatcher ─────────────────────────────────────────────────── */
 
-async fn run_upload<R: tauri::Runtime>(
-    app: AppHandle<R>,
+async fn run_upload(
+    ctx: Ctx,
     id: String,
     target: TargetConfig,
     path: PathBuf,
@@ -425,7 +577,7 @@ async fn run_upload<R: tauri::Runtime>(
     name: String,
     flag: Arc<AtomicBool>,
 ) {
-    let progress = make_progress(&app, &id);
+    let progress = make_progress(&ctx, &id);
     let outcome = upload_dispatch(&progress, &target, &path, size, &name, &flag).await;
     // The cancel flag is the source of truth: a wrapped stream error surfaces
     // as a generic transport error, but the flag tells us why it stopped.
@@ -443,13 +595,17 @@ async fn run_upload<R: tauri::Runtime>(
             id: id.clone(),
             ok: false,
             cancelled: was_cancelled,
-            error: Some(if was_cancelled { "Upload cancelled".into() } else { e.0 }),
+            error: Some(if was_cancelled {
+                "Upload cancelled".into()
+            } else {
+                e.0
+            }),
             url: None,
             new_refresh_token: None,
         },
     };
-    app.state::<UploadManager>().finish(&id);
-    let _ = app.emit("upload-done", event);
+    ctx.uploads.finish(&id);
+    emit(ctx.emitter.as_ref(), "upload-done", &event);
 }
 
 /// Shared result of a successful transfer: a link when the platform has one,
@@ -503,7 +659,9 @@ async fn upload_webdav(
     let base = target.url.as_deref().unwrap_or("").trim_end_matches('/');
     let client = build_client(target.proxy.as_deref())?;
     let mut auth = reqwest::header::HeaderMap::new();
-    if !target.username.as_deref().unwrap_or("").is_empty() || !target.password.as_deref().unwrap_or("").is_empty() {
+    if !target.username.as_deref().unwrap_or("").is_empty()
+        || !target.password.as_deref().unwrap_or("").is_empty()
+    {
         let cred = format!(
             "{}:{}",
             target.username.as_deref().unwrap_or(""),
@@ -644,12 +802,13 @@ async fn upload_telegram(
             tail(&text, 300)
         )));
     }
-    let v: serde_json::Value = serde_json::from_str(&text)
-        .unwrap_or(serde_json::Value::Null);
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
     if v.get("ok").and_then(|x| x.as_bool()) != Some(true) {
         return Err(AppError(format!(
             "Telegram error: {}",
-            v.get("description").and_then(|x| x.as_str()).unwrap_or("unknown")
+            v.get("description")
+                .and_then(|x| x.as_str())
+                .unwrap_or("unknown")
         )));
     }
     let link = v
@@ -779,9 +938,9 @@ async fn upload_gdrive(
         .and_then(|x| x.as_str())
         .map(str::to_string)
         .or_else(|| {
-            v.get("id").and_then(|x| x.as_str()).map(|fid| {
-                format!("https://drive.google.com/file/d/{fid}/view")
-            })
+            v.get("id")
+                .and_then(|x| x.as_str())
+                .map(|fid| format!("https://drive.google.com/file/d/{fid}/view"))
         });
     Ok((link, None))
 }
@@ -803,7 +962,8 @@ async fn upload_onedrive(
     let remote = remote_path(&target.directory, name);
     // /me/drive/root:{path}:/createUploadSession — `{path}` includes the
     // leading slash and the encoded file name.
-    let url = format!("https://graph.microsoft.com/v1.0/me/drive/root:{remote}:/createUploadSession");
+    let url =
+        format!("https://graph.microsoft.com/v1.0/me/drive/root:{remote}:/createUploadSession");
     let body = serde_json::json!({
         "item": {
             "@microsoft.graph.conflictBehavior": "rename",
@@ -818,7 +978,12 @@ async fn upload_onedrive(
         .await?;
     if resp.status().as_u16() == 401 {
         access = microsoft_access_token(client.clone(), target, &mut rotated).await?;
-        resp = client.post(&url).bearer_auth(&access).json(&body).send().await?;
+        resp = client
+            .post(&url)
+            .bearer_auth(&access)
+            .json(&body)
+            .send()
+            .await?;
     }
     let status = resp.status();
     if !status.is_success() {
@@ -918,8 +1083,14 @@ async fn google_access_token(client: reqwest::Client, target: &TargetConfig) -> 
         .post("https://oauth2.googleapis.com/token")
         .form(&[
             ("client_id", target.client_id.as_deref().unwrap_or("")),
-            ("client_secret", target.client_secret.as_deref().unwrap_or("")),
-            ("refresh_token", target.refresh_token.as_deref().unwrap_or("")),
+            (
+                "client_secret",
+                target.client_secret.as_deref().unwrap_or(""),
+            ),
+            (
+                "refresh_token",
+                target.refresh_token.as_deref().unwrap_or(""),
+            ),
             ("grant_type", "refresh_token"),
         ])
         .send()
@@ -945,17 +1116,22 @@ async fn microsoft_access_token(
     target: &TargetConfig,
     rotated: &mut Option<String>,
 ) -> Result<String> {
-    let tenant = target.tenant.as_deref().filter(|t| !t.trim().is_empty()).unwrap_or("common").trim();
+    let tenant = target
+        .tenant
+        .as_deref()
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or("common")
+        .trim();
     let endpoint = format!("https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token");
     let resp = client
         .post(&endpoint)
         .form(&[
             ("client_id", target.client_id.as_deref().unwrap_or("")),
-            ("refresh_token", target.refresh_token.as_deref().unwrap_or("")),
             (
-                "scope",
-                "files.readwrite offline_access",
+                "refresh_token",
+                target.refresh_token.as_deref().unwrap_or(""),
             ),
+            ("scope", "files.readwrite offline_access"),
             ("grant_type", "refresh_token"),
         ])
         .send()
@@ -1064,35 +1240,76 @@ fn parse_range_end(v: &str) -> Option<u64> {
 
 /* ── OAuth code exchange + loopback plumbing ────────────────────── */
 
-#[allow(clippy::too_many_arguments)]
-fn exchange_oauth_code(
-    kind: &str,
-    code: &str,
-    client_id: &str,
-    client_secret: &str,
-    redirect_uri: &str,
-    verifier: &str,
-    tenant: &str,
-    scope: &str,
-    proxy: Option<&str>,
-) -> std::result::Result<String, String> {
+/// Drive a desktop loopback listener until the browser returns with a code.
+/// Exits after one code, a cancellation, or [`OAUTH_TIMEOUT`].
+fn wait_on_loopback(
+    ctx: Ctx,
+    listener: std::net::TcpListener,
+    state: &str,
+    flag: Arc<AtomicBool>,
+    request_id: String,
+    flow: OauthFlow,
+) {
+    let _ = listener.set_nonblocking(true);
+    let deadline = Instant::now() + OAUTH_TIMEOUT;
+    loop {
+        if flag.load(Ordering::Relaxed) {
+            ctx.oauth.finish(&request_id);
+            return;
+        }
+        if Instant::now() > deadline {
+            report_oauth_result(
+                &ctx,
+                &request_id,
+                &flow.kind,
+                Err("Authorization timed out".into()),
+            );
+            return;
+        }
+        match listener.accept() {
+            Ok((stream, _)) => {
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                let Some((code, got_state)) = read_oauth_callback(&stream) else {
+                    // Favicon or random GET: acknowledge and keep waiting.
+                    let _ = write_simple_404(&stream);
+                    continue;
+                };
+                let outcome = if got_state != state {
+                    Err("State mismatch — please retry from the app".to_string())
+                } else {
+                    exchange_oauth_code(&flow, &code)
+                };
+                let _ = write_oauth_reply(&stream, outcome.is_ok());
+                report_oauth_result(&ctx, &request_id, &flow.kind, outcome);
+                return;
+            }
+            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+}
+
+fn exchange_oauth_code(flow: &OauthFlow, code: &str) -> std::result::Result<String, String> {
     let mut form: Vec<(&str, &str)> = vec![
         ("code", code),
-        ("client_id", client_id),
-        ("redirect_uri", redirect_uri),
+        ("client_id", &flow.client_id),
+        ("redirect_uri", &flow.redirect_uri),
         ("grant_type", "authorization_code"),
-        ("code_verifier", verifier),
+        ("code_verifier", &flow.verifier),
     ];
     let endpoint;
-    if kind == "onedrive" {
-        endpoint = format!("https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token");
-        form.push(("scope", scope));
+    if flow.kind == "onedrive" {
+        endpoint = format!(
+            "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
+            flow.tenant
+        );
+        form.push(("scope", flow.scope));
     } else {
         endpoint = "https://oauth2.googleapis.com/token".to_string();
-        form.push(("client_secret", client_secret));
+        form.push(("client_secret", &flow.client_secret));
     }
+    let proxy = flow.proxy.clone();
     let fut = async {
-        let client = build_client(proxy).map_err(|e| e.to_string())?;
+        let client = build_client(proxy.as_deref()).map_err(|e| e.to_string())?;
         let resp = client
             .post(&endpoint)
             .form(&form)
@@ -1103,13 +1320,12 @@ fn exchange_oauth_code(
         let text = resp.text().await.unwrap_or_default();
         let v: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
         if !status.is_success() {
-            return Err(
-                v.get("error_description")
-                    .or_else(|| v.get("error"))
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("token exchange failed")
-                    .to_string(),
-            );
+            return Err(v
+                .get("error_description")
+                .or_else(|| v.get("error"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("token exchange failed")
+                .to_string());
         }
         v.get("refresh_token")
             .and_then(|x| x.as_str())
@@ -1118,7 +1334,7 @@ fn exchange_oauth_code(
                 "No refresh token returned — make sure to pick the account on the consent screen (Google requires prompt=consent; re-run the login)".to_string()
             })
     };
-    tauri::async_runtime::block_on(fut)
+    crate::block_on_owned(fut)
 }
 
 /// Read one GET from the loopback connection and extract `code`/`state`.
@@ -1196,16 +1412,17 @@ fn build_client(proxy: Option<&str>) -> Result<reqwest::Client> {
 /// Production wires it to the `upload-progress` event; tests use a recorder.
 type ProgressFn = Arc<dyn Fn(f64, u64, u64) + Send + Sync>;
 
-fn make_progress<R: tauri::Runtime>(app: &AppHandle<R>, id: &str) -> ProgressFn {
+fn make_progress(ctx: &Ctx, id: &str) -> ProgressFn {
     let id = id.to_string();
-    let app = app.clone();
-    Arc::new(move |pct, uploaded, total| emit_progress(&app, &id, pct, uploaded, total))
+    let emitter = ctx.emitter.clone();
+    Arc::new(move |pct, uploaded, total| emit_progress(emitter.as_ref(), &id, pct, uploaded, total))
 }
 
-fn emit_progress<R: tauri::Runtime>(app: &AppHandle<R>, id: &str, percent: f64, uploaded: u64, total: u64) {
-    let _ = app.emit(
+fn emit_progress(emitter: &dyn Emitter, id: &str, percent: f64, uploaded: u64, total: u64) {
+    emit(
+        emitter,
         "upload-progress",
-        UploadProgressEvent {
+        &UploadProgressEvent {
             id: id.to_string(),
             percent,
             uploaded_bytes: uploaded,
@@ -1216,9 +1433,7 @@ fn emit_progress<R: tauri::Runtime>(app: &AppHandle<R>, id: &str, percent: f64, 
 
 /// Reads a file as fixed-size chunks and reports progress through
 /// `CountingStream`; aborted as soon as the cancel flag is set.
-fn file_stream(
-    file: tokio::fs::File,
-) -> impl Stream<Item = std::io::Result<bytes::Bytes>> {
+fn file_stream(file: tokio::fs::File) -> impl Stream<Item = std::io::Result<bytes::Bytes>> {
     const PIECE: usize = 256 * 1024;
     futures_util::stream::unfold((file, vec![0u8; PIECE]), |(mut f, mut buf)| async move {
         match f.read(&mut buf).await {
@@ -1275,7 +1490,9 @@ where
                     0.0
                 };
                 let now = Instant::now();
-                if now.duration_since(self.last_emit) > Duration::from_millis(200) || self.sent == self.total {
+                if now.duration_since(self.last_emit) > Duration::from_millis(200)
+                    || self.sent == self.total
+                {
                     self.last_emit = now;
                     (self.progress)(pct, self.sent, self.total);
                 }
@@ -1292,11 +1509,7 @@ async fn open_seeker(path: &Path) -> Result<tokio::fs::File> {
         .map_err(|e| AppError(format!("Cannot open file: {e}")))
 }
 
-async fn read_chunk(
-    file: &mut tokio::fs::File,
-    offset: u64,
-    len: usize,
-) -> Result<bytes::Bytes> {
+async fn read_chunk(file: &mut tokio::fs::File, offset: u64, len: usize) -> Result<bytes::Bytes> {
     file.seek(std::io::SeekFrom::Start(offset))
         .await
         .map_err(|e| AppError(format!("Seek failed: {e}")))?;
@@ -1310,7 +1523,11 @@ async fn read_chunk(
 /// Remote path joined as `/dir/subdir/name`, percent-encoded per segment.
 fn remote_path(directory: &Option<String>, name: &str) -> String {
     let mut out = String::new();
-    if let Some(dir) = directory.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+    if let Some(dir) = directory
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+    {
         for seg in dir.split('/') {
             if seg.is_empty() || seg == "." {
                 continue;
@@ -1392,7 +1609,12 @@ fn ascii_fallback_name(name: &str) -> String {
         return name.to_string();
     }
     match name.rsplit('.').next() {
-        Some(ext) if ext.is_ascii() && !ext.is_empty() && ext.len() <= 5 && ext.contains(|c: char| c.is_ascii_alphanumeric()) => {
+        Some(ext)
+            if ext.is_ascii()
+                && !ext.is_empty()
+                && ext.len() <= 5
+                && ext.contains(|c: char| c.is_ascii_alphanumeric()) =>
+        {
             format!("upload.{ext}")
         }
         _ => "upload.bin".to_string(),
@@ -1403,7 +1625,9 @@ fn ascii_fallback_name(name: &str) -> String {
 fn strip_extension(name: &str) -> &str {
     match name.rsplit_once('.') {
         Some((stem, ext))
-            if !stem.is_empty() && ext.len() <= 5 && ext.chars().all(|c| c.is_ascii_alphanumeric()) =>
+            if !stem.is_empty()
+                && ext.len() <= 5
+                && ext.chars().all(|c| c.is_ascii_alphanumeric()) =>
         {
             stem
         }

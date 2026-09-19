@@ -1,13 +1,12 @@
 use std::path::Path;
 
-use tauri::AppHandle;
-
+use crate::ctx::AppEnv;
 use crate::error::{AppError, Result};
 use crate::ffmpeg;
 use crate::models::{MediaInfo, MediaType};
 
 /// Probe a media file using ffprobe. Blocking; call within spawn_blocking.
-pub(crate) fn probe_sync(app: &AppHandle, path: &str) -> Result<MediaInfo> {
+pub fn probe_sync(env: &dyn AppEnv, path: &str) -> Result<MediaInfo> {
     let size_bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
 
     let args = vec![
@@ -19,7 +18,7 @@ pub(crate) fn probe_sync(app: &AppHandle, path: &str) -> Result<MediaInfo> {
         "-show_streams".into(),
         path.to_string(),
     ];
-    let (child, stdout, _stderr_buf, _drain) = ffmpeg::spawn(app, "ffprobe", &args)?;
+    let (child, stdout, _stderr_buf, _drain) = ffmpeg::spawn(env, "ffprobe", &args)?;
     let out = read_stdout_timeout(child, stdout, std::time::Duration::from_secs(30))?;
 
     let v: serde_json::Value = serde_json::from_str(&out)?;
@@ -51,21 +50,35 @@ pub(crate) fn probe_sync(app: &AppHandle, path: &str) -> Result<MediaInfo> {
             match kind {
                 "video" => {
                     has_video = true;
-                    video_codec = s.get("codec_name").and_then(|c| c.as_str()).map(String::from);
+                    video_codec = s
+                        .get("codec_name")
+                        .and_then(|c| c.as_str())
+                        .map(String::from);
                     width = s.get("width").and_then(|w| w.as_u64()).map(|w| w as u32);
                     height = s.get("height").and_then(|h| h.as_u64()).map(|h| h as u32);
                     // HDR10 (smpte2084) and HLG (arib-std-b67) transfers; DV
                     // sources expose the same transfer on their base layer.
-                    let transfer = s.get("color_transfer").and_then(|c| c.as_str()).unwrap_or("");
-                    let primaries =
-                        s.get("color_primaries").and_then(|c| c.as_str()).unwrap_or("");
-                    if transfer == "smpte2084" || transfer == "arib-std-b67" || primaries == "bt2020" {
+                    let transfer = s
+                        .get("color_transfer")
+                        .and_then(|c| c.as_str())
+                        .unwrap_or("");
+                    let primaries = s
+                        .get("color_primaries")
+                        .and_then(|c| c.as_str())
+                        .unwrap_or("");
+                    if transfer == "smpte2084"
+                        || transfer == "arib-std-b67"
+                        || primaries == "bt2020"
+                    {
                         hdr = true;
                     }
                 }
                 "audio" => {
                     has_audio = true;
-                    audio_codec = s.get("codec_name").and_then(|c| c.as_str()).map(String::from);
+                    audio_codec = s
+                        .get("codec_name")
+                        .and_then(|c| c.as_str())
+                        .map(String::from);
                 }
                 _ => {}
             }
@@ -135,10 +148,9 @@ pub(crate) fn read_stdout_timeout(
 }
 
 /// Async wrapper around the blocking probe.
-pub async fn probe(app: &AppHandle, path: &str) -> Result<MediaInfo> {
-    let app = app.clone();
+pub async fn probe(env: std::sync::Arc<dyn AppEnv>, path: &str) -> Result<MediaInfo> {
     let path = path.to_string();
-    let inner = tauri::async_runtime::spawn_blocking(move || probe_sync(&app, &path))
+    let inner = tokio::task::spawn_blocking(move || probe_sync(&*env, &path))
         .await
         .map_err(|e| AppError(e.to_string()))?;
     inner

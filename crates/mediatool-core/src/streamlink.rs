@@ -21,14 +21,13 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
 
+use crate::ctx::{emit, AppEnv, Ctx, Emitter};
 use crate::error::{AppError, Result};
 use crate::models::WorkflowStepInput;
-use crate::state::JobManager;
 use crate::ytdlp::{
-    self, DownloadProgressEvent, DownloadRequest, DownloadStartedEvent, InstallProgressEvent,
-    emit_dl_done, format_speed,
+    self, emit_dl_done, format_speed, DownloadProgressEvent, DownloadRequest, DownloadStartedEvent,
+    InstallProgressEvent,
 };
 
 const POLL: Duration = Duration::from_secs(2);
@@ -59,7 +58,7 @@ fn cli_in(root: &Path) -> PathBuf {
 /// to the executable, every `binaries/` folder up the tree (dev layout), the
 /// managed `<app_data>/bin` (an install we made beats a stale PATH entry), then
 /// the bundle resources.
-fn search_bases(app: &AppHandle) -> Vec<PathBuf> {
+fn search_bases(env: &dyn AppEnv) -> Vec<PathBuf> {
     let mut bases: Vec<PathBuf> = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
@@ -71,10 +70,10 @@ fn search_bases(app: &AppHandle) -> Vec<PathBuf> {
             }
         }
     }
-    if let Ok(dir) = ytdlp::managed_dir(app) {
+    if let Ok(dir) = ytdlp::managed_dir(env) {
         bases.push(dir);
     }
-    if let Ok(res) = app.path().resource_dir() {
+    if let Some(res) = env.resource_dir() {
         bases.extend([res.clone(), res.join("binaries")]);
     }
     bases
@@ -83,9 +82,9 @@ fn search_bases(app: &AppHandle) -> Vec<PathBuf> {
 /// Locate streamlink: see `search_bases`, then the system PATH. Each location is
 /// checked both as a loose exe and as an unpacked portable tree, since that is
 /// how the official bundle is shaped.
-pub fn resolve(app: &AppHandle) -> Option<PathBuf> {
+pub fn resolve(env: &dyn AppEnv) -> Option<PathBuf> {
     let name = binary_name();
-    search_bases(app)
+    search_bases(env)
         .iter()
         .flat_map(|b| [b.join(&name), cli_in(&b.join(PORTABLE_DIR))])
         .find(|p| p.exists())
@@ -94,22 +93,25 @@ pub fn resolve(app: &AppHandle) -> Option<PathBuf> {
 
 /// The portable archive shipped with this app, if any. Windows builds carry
 /// one as a bundle resource; elsewhere streamlink only comes from pip.
-fn bundled_archive(app: &AppHandle) -> Option<PathBuf> {
-    search_bases(app).into_iter().map(|b| b.join(ARCHIVE_NAME)).find(|p| p.exists())
+fn bundled_archive(env: &dyn AppEnv) -> Option<PathBuf> {
+    search_bases(env)
+        .into_iter()
+        .map(|b| b.join(ARCHIVE_NAME))
+        .find(|p| p.exists())
 }
 
 /// Managed dir + bundled archive + the stamp identifying that archive.
-fn bundle_stamp(app: &AppHandle) -> Option<(PathBuf, PathBuf, String)> {
-    let dir = ytdlp::managed_dir(app).ok()?;
-    let archive = bundled_archive(app)?;
+fn bundle_stamp(env: &dyn AppEnv) -> Option<(PathBuf, PathBuf, String)> {
+    let dir = ytdlp::managed_dir(env).ok()?;
+    let archive = bundled_archive(env)?;
     let stamp = format!("{}-{}", file_size(&archive), env!("CARGO_PKG_VERSION"));
     Some((dir, archive, stamp))
 }
 
 /// Record that the current bundle is already unpacked, so a manual "检查更新"
 /// install is not silently downgraded back to the bundled version at next start.
-fn mark_prepared(app: &AppHandle) {
-    if let Some((dir, _, stamp)) = bundle_stamp(app) {
+fn mark_prepared(env: &dyn AppEnv) {
+    if let Some((dir, _, stamp)) = bundle_stamp(env) {
         let _ = std::fs::write(dir.join(PORTABLE_DIR).join(MARKER), stamp);
     }
 }
@@ -121,17 +123,19 @@ fn mark_prepared(app: &AppHandle) {
 /// Runs on its own thread because extracting a full Python tree takes seconds,
 /// and reports through `streamlink-install-progress`, which the frontend already
 /// renders and refreshes on `done`.
-pub fn prepare(app: &AppHandle) {
+pub fn prepare(ctx: &Ctx) {
     static PREPARED: AtomicBool = AtomicBool::new(false);
     if PREPARED.swap(true, Ordering::SeqCst) {
         return;
     }
-    let app = app.clone();
-    std::thread::spawn(move || prepare_blocking(&app));
+    let ctx = ctx.clone();
+    std::thread::spawn(move || prepare_blocking(&ctx));
 }
 
-fn prepare_blocking(app: &AppHandle) {
-    let Some((dir, archive, stamp)) = bundle_stamp(app) else { return };
+fn prepare_blocking(ctx: &Ctx) {
+    let Some((dir, archive, stamp)) = bundle_stamp(&*ctx.env) else {
+        return;
+    };
     let root = dir.join(PORTABLE_DIR);
     let fresh = std::fs::read_to_string(root.join(MARKER))
         .map(|s| s == stamp && run_version(&cli_in(&root)).is_some())
@@ -139,9 +143,10 @@ fn prepare_blocking(app: &AppHandle) {
     if fresh {
         return;
     }
-    let _ = app.emit(
+    emit(
+        ctx.emitter.as_ref(),
         "streamlink-install-progress",
-        InstallProgressEvent {
+        &InstallProgressEvent {
             stage: "downloading".into(),
             message: "正在解压随包 streamlink 引擎…".into(),
         },
@@ -152,20 +157,22 @@ fn prepare_blocking(app: &AppHandle) {
     };
     match exe {
         Ok(exe) => {
-            mark_prepared(app);
+            mark_prepared(&*ctx.env);
             let version = run_version(&exe).unwrap_or_default();
-            let _ = app.emit(
+            emit(
+                ctx.emitter.as_ref(),
                 "streamlink-install-progress",
-                InstallProgressEvent {
+                &InstallProgressEvent {
                     stage: "done".into(),
                     message: format!("streamlink {version} 就绪"),
                 },
             );
         }
         Err(e) => {
-            let _ = app.emit(
+            emit(
+                ctx.emitter.as_ref(),
                 "streamlink-install-progress",
-                InstallProgressEvent {
+                &InstallProgressEvent {
                     stage: "error".into(),
                     message: format!("随包 streamlink 引擎不可用：{e}"),
                 },
@@ -183,7 +190,9 @@ fn unpack_lock() -> MutexGuard<'static, ()> {
 
 fn run_version(bin: &Path) -> Option<String> {
     let mut cmd = Command::new(bin);
-    cmd.arg("--version").stdout(Stdio::piped()).stderr(Stdio::null());
+    cmd.arg("--version")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -201,8 +210,8 @@ fn run_version(bin: &Path) -> Option<String> {
 
 /// A usable engine binary, or None. Checked once per recording so a broken
 /// install falls back to yt-dlp instead of failing the capture.
-pub fn available(app: &AppHandle) -> Option<PathBuf> {
-    resolve(app).filter(|p| run_version(p).is_some())
+pub fn available(env: &dyn AppEnv) -> Option<PathBuf> {
+    resolve(env).filter(|p| run_version(p).is_some())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -225,16 +234,15 @@ fn installable() -> bool {
 /// Probing runs streamlink's `--version`, an embedded-Python boot that blocks
 /// for a second or more; keep it on a worker thread (see `ytdlp_status` — a
 /// sync command would pin the main thread and freeze the window at startup).
-#[tauri::command]
-pub async fn streamlink_status(app: AppHandle) -> Result<StreamlinkStatus> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let path = available(&app);
+pub async fn streamlink_status(ctx: Ctx) -> Result<StreamlinkStatus> {
+    tokio::task::spawn_blocking(move || {
+        let path = available(&*ctx.env);
         let version = path.as_ref().and_then(|p| run_version(p));
         Ok(StreamlinkStatus {
             installed: path.is_some(),
             version,
             path: path.map(|p| p.to_string_lossy().to_string()),
-            ffmpeg_found: crate::ffmpeg::resolve(&app, "ffmpeg").is_some(),
+            ffmpeg_found: crate::ffmpeg::resolve(&*ctx.env, "ffmpeg").is_some(),
             installable: installable(),
         })
     })
@@ -253,9 +261,8 @@ const RELEASE_API: &str = "https://api.github.com/repos/streamlink/windows-build
 /// Latest release tag + the stable `/releases/latest/download/<asset>` URL for
 /// this platform, read from the GitHub API via system curl (no HTTP client
 /// compiled in, same as yt-dlp).
-#[tauri::command]
 pub async fn streamlink_latest_release() -> Result<serde_json::Value> {
-    tauri::async_runtime::spawn_blocking(|| {
+    tokio::task::spawn_blocking(|| {
         if !installable() {
             return Err(AppError(
                 "应用内安装仅支持 Windows x64，其他平台请用 pip/pipx/brew 更新 streamlink".into(),
@@ -321,8 +328,7 @@ fn fetch_release_json() -> Result<serde_json::Value> {
 }
 
 /// Download the portable archive and unpack it into the managed bin dir.
-#[tauri::command]
-pub async fn streamlink_install(app: AppHandle) -> Result<StreamlinkStatus> {
+pub async fn streamlink_install(ctx: Ctx) -> Result<StreamlinkStatus> {
     if !installable() {
         return Err(AppError(
             "此平台没有独立可执行程序，请用 pip/pipx/brew 安装 streamlink 后重启应用".into(),
@@ -330,16 +336,17 @@ pub async fn streamlink_install(app: AppHandle) -> Result<StreamlinkStatus> {
     }
     let release = streamlink_latest_release().await?;
     let url = release["url"].as_str().unwrap_or("").to_string();
-    let dir = ytdlp::managed_dir(&app)?;
+    let dir = ytdlp::managed_dir(&*ctx.env)?;
     // Both staging names are what the cache cleaner treats as junk, so an
     // install interrupted by a crash still leaves nothing behind.
     let archive = dir.join(format!("{PORTABLE_DIR}.stage.zip"));
     let stage = dir.join(format!("{PORTABLE_DIR}.stage"));
 
-    let progress = |app: &AppHandle, stage: &str, message: String| {
-        let _ = app.emit(
+    let progress = |emitter: &dyn Emitter, stage: &str, message: String| {
+        emit(
+            emitter,
             "streamlink-install-progress",
-            InstallProgressEvent {
+            &InstallProgressEvent {
                 stage: stage.into(),
                 message,
             },
@@ -347,13 +354,13 @@ pub async fn streamlink_install(app: AppHandle) -> Result<StreamlinkStatus> {
     };
 
     /* Download */
-    let app2 = app.clone();
+    let ctx2 = ctx.clone();
     let archive2 = archive.clone();
     let candidates: Vec<String> = ytdlp::MIRROR_PREFIXES
         .iter()
         .map(|p| format!("{p}{url}"))
         .collect();
-    let downloaded: Result<()> = tauri::async_runtime::spawn_blocking(move || {
+    let downloaded: Result<()> = tokio::task::spawn_blocking(move || {
         let archive = archive2;
         let _ = std::fs::remove_file(&archive);
         let mut last_err = String::from("未尝试任何下载源");
@@ -364,7 +371,7 @@ pub async fn streamlink_install(app: AppHandle) -> Result<StreamlinkStatus> {
                 full.split('/').nth(2).unwrap_or(full).to_string()
             };
             progress(
-                &app2,
+                ctx2.emitter.as_ref(),
                 "downloading",
                 if i == 0 {
                     "正在从 GitHub 下载 streamlink（约 80 MB）…".into()
@@ -373,11 +380,19 @@ pub async fn streamlink_install(app: AppHandle) -> Result<StreamlinkStatus> {
                 },
             );
             let mut cmd = Command::new("curl");
-            cmd.args(["-L", "--fail", "--connect-timeout", "20", "--max-time", "1800", "-o"])
-                .arg(&archive)
-                .arg(full)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null());
+            cmd.args([
+                "-L",
+                "--fail",
+                "--connect-timeout",
+                "20",
+                "--max-time",
+                "1800",
+                "-o",
+            ])
+            .arg(&archive)
+            .arg(full)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
             #[cfg(windows)]
             {
                 use std::os::windows::process::CommandExt;
@@ -398,9 +413,10 @@ pub async fn streamlink_install(app: AppHandle) -> Result<StreamlinkStatus> {
     .await
     .map_err(|e| AppError(e.to_string()))?;
     if let Err(e) = downloaded {
-        let _ = app.emit(
+        emit(
+            ctx.emitter.as_ref(),
             "streamlink-install-progress",
-            InstallProgressEvent {
+            &InstallProgressEvent {
                 stage: "error".into(),
                 message: e.0.clone(),
             },
@@ -409,7 +425,11 @@ pub async fn streamlink_install(app: AppHandle) -> Result<StreamlinkStatus> {
     }
 
     /* Unpack */
-    progress(&app, "downloading", "正在解压 streamlink…".into());
+    progress(
+        ctx.emitter.as_ref(),
+        "downloading",
+        "正在解压 streamlink…".into(),
+    );
     let result = {
         let _g = unpack_lock();
         unpack_portable(&archive, &stage, &dir)
@@ -418,7 +438,7 @@ pub async fn streamlink_install(app: AppHandle) -> Result<StreamlinkStatus> {
     let exe = match result {
         Ok(p) => p,
         Err(e) => {
-            progress(&app, "error", format!("安装失败：{}", e.0));
+            progress(ctx.emitter.as_ref(), "error", format!("安装失败：{}", e.0));
             return Err(e);
         }
     };
@@ -427,12 +447,16 @@ pub async fn streamlink_install(app: AppHandle) -> Result<StreamlinkStatus> {
     let version = run_version(&exe);
     if version.is_none() {
         let _ = std::fs::remove_dir_all(dir.join(PORTABLE_DIR));
-        progress(&app, "error", "解压完成但程序无法运行，已清理".into());
+        progress(
+            ctx.emitter.as_ref(),
+            "error",
+            "解压完成但程序无法运行，已清理".into(),
+        );
         return Err(AppError("解压完成但程序无法运行，已清理".into()));
     }
-    mark_prepared(&app);
+    mark_prepared(&*ctx.env);
     progress(
-        &app,
+        ctx.emitter.as_ref(),
         "done",
         format!("streamlink {} 就绪", version.clone().unwrap_or_default()),
     );
@@ -440,7 +464,7 @@ pub async fn streamlink_install(app: AppHandle) -> Result<StreamlinkStatus> {
         installed: true,
         version,
         path: Some(exe.to_string_lossy().to_string()),
-        ffmpeg_found: crate::ffmpeg::resolve(&app, "ffmpeg").is_some(),
+        ffmpeg_found: crate::ffmpeg::resolve(&*ctx.env, "ffmpeg").is_some(),
         installable: true,
     })
 }
@@ -496,7 +520,14 @@ fn extract_zip(archive: &Path, dest: &Path) -> Result<()> {
             }
         }
         let mut c = Command::new("powershell");
-        c.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"]).arg(format!(
+        c.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+        ])
+        .arg(format!(
             "Expand-Archive -LiteralPath '{}' -DestinationPath '{}' -Force",
             quote(&archive.to_string_lossy()),
             quote(&dest.to_string_lossy())
@@ -504,7 +535,9 @@ fn extract_zip(archive: &Path, dest: &Path) -> Result<()> {
         if run_hidden(&mut c)?.success() {
             return Ok(());
         }
-        Err(AppError("解压失败：系统 tar 与 PowerShell 均无法读取该压缩包".into()))
+        Err(AppError(
+            "解压失败：系统 tar 与 PowerShell 均无法读取该压缩包".into(),
+        ))
     }
     #[cfg(not(windows))]
     {
@@ -535,8 +568,13 @@ fn run_hidden(cmd: &mut Command) -> Result<std::process::ExitStatus> {
 /// capture here). `--json` resolves the plugin and lists the streams without
 /// downloading anything: an object with "streams" means live, an "error"
 /// object means otherwise. Returns `(live_status, title, author)`.
-pub fn probe_live(app: &AppHandle, url: &str, proxy: Option<&str>, cookies: Option<&str>) -> std::result::Result<(String, String, String), String> {
-    let bin = available(app).ok_or_else(|| "streamlink 未安装".to_string())?;
+pub fn probe_live(
+    env: &dyn AppEnv,
+    url: &str,
+    proxy: Option<&str>,
+    cookies: Option<&str>,
+) -> std::result::Result<(String, String, String), String> {
+    let bin = available(env).ok_or_else(|| "streamlink 未安装".to_string())?;
     let mut args: Vec<String> = vec!["--json".into()];
     if let Some(p) = proxy.filter(|p| !p.is_empty()) {
         args.push(format!("--http-proxy={p}"));
@@ -557,10 +595,16 @@ pub fn probe_live(app: &AppHandle, url: &str, proxy: Option<&str>, cookies: Opti
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000);
     }
-    let out = cmd.output().map_err(|e| format!("启动 streamlink 失败: {e}"))?;
+    let out = cmd
+        .output()
+        .map_err(|e| format!("启动 streamlink 失败: {e}"))?;
     let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    let json: serde_json::Value =
-        serde_json::from_str(&stdout).map_err(|_| format!("streamlink 探测输出无法解析（退出码 {}）", out.status.code().unwrap_or(-1)))?;
+    let json: serde_json::Value = serde_json::from_str(&stdout).map_err(|_| {
+        format!(
+            "streamlink 探测输出无法解析（退出码 {}）",
+            out.status.code().unwrap_or(-1)
+        )
+    })?;
     if let Some(err) = json["error"].as_str() {
         // The plugins report an offline channel as "no playable streams".
         if err.contains("No playable streams found") {
@@ -568,7 +612,11 @@ pub fn probe_live(app: &AppHandle, url: &str, proxy: Option<&str>, cookies: Opti
         }
         return Err(err.to_string());
     }
-    if json["streams"].as_object().map(|s| s.is_empty()).unwrap_or(true) {
+    if json["streams"]
+        .as_object()
+        .map(|s| s.is_empty())
+        .unwrap_or(true)
+    {
         return Ok(("not_live".into(), String::new(), String::new()));
     }
     let meta = &json["metadata"];
@@ -581,7 +629,11 @@ pub fn probe_live(app: &AppHandle, url: &str, proxy: Option<&str>, cookies: Opti
     };
     let title = {
         let t = field("title");
-        if t.is_empty() { field("author") } else { t }
+        if t.is_empty() {
+            field("author")
+        } else {
+            t
+        }
     };
     Ok(("is_live".into(), title, field("author")))
 }
@@ -609,7 +661,11 @@ fn stream_selection(quality: &str) -> (Vec<String>, String) {
     }
 }
 
-fn build_streamlink_args(req: &DownloadRequest, ffmpeg: &Path, cookies: Option<&str>) -> Vec<String> {
+fn build_streamlink_args(
+    req: &DownloadRequest,
+    ffmpeg: &Path,
+    cookies: Option<&str>,
+) -> Vec<String> {
     let (excludes, name) = stream_selection(&req.quality);
     let mut a = vec![
         "--stdout".into(),
@@ -707,7 +763,9 @@ impl Session {
         sl.env("PYTHONIOENCODING", "utf-8").env("PYTHONUTF8", "1");
 
         let mut ff = Command::new(ffmpeg);
-        ff.args(mux_args).stdout(Stdio::null()).stderr(Stdio::piped());
+        ff.args(mux_args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
 
         #[cfg(windows)]
         {
@@ -719,7 +777,7 @@ impl Session {
         let mut sl_child = sl.spawn().map_err(AppError::from)?;
         let writer_log = capture_stderr(sl_child.stderr.take());
         let Some(pipe) = sl_child.stdout.take() else {
-            let _ = sl_child.kill();
+            let _ = crate::state::kill_tree(&mut sl_child);
             return Err(AppError("无法建立 streamlink → ffmpeg 管道".into()));
         };
         ff.stdin(Stdio::from(pipe));
@@ -742,7 +800,10 @@ impl Session {
 
     fn kill_writer(&self) {
         if let Ok(mut c) = self.writer.lock() {
-            let _ = c.kill();
+            // streamlink is a PyInstaller one-file exe: killing only the
+            // bootloader orphans the real capture process, which keeps the
+            // pipe (and the recording) alive.
+            let _ = crate::state::kill_tree(&mut c);
         }
     }
 
@@ -783,7 +844,11 @@ impl Session {
         };
         let writer = read(&self.writer_log);
         let muxer = read(&self.muxer_log);
-        [writer, muxer].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n\n")
+        [writer, muxer]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n")
     }
 }
 
@@ -792,7 +857,7 @@ impl Session {
 /// calling thread and emits the same events as a yt-dlp capture, so the
 /// frontend and the post-processing pipeline never learn which engine ran.
 pub fn run_record_blocking(
-    app: &AppHandle,
+    ctx: &Ctx,
     bin: &Path,
     req: DownloadRequest,
     id: &str,
@@ -800,9 +865,21 @@ pub fn run_record_blocking(
     upload_to: Vec<String>,
 ) {
     let kind = "record".to_string();
-    let fail = |e: String| emit_dl_done(app, id, false, false, &kind, None, Some(e), false, &pipeline);
+    let fail = |e: String| {
+        emit_dl_done(
+            ctx,
+            id,
+            false,
+            false,
+            &kind,
+            None,
+            Some(e),
+            false,
+            &pipeline,
+        )
+    };
 
-    let ffmpeg = match crate::ffmpeg::resolve(app, "ffmpeg") {
+    let ffmpeg = match crate::ffmpeg::resolve(&*ctx.env, "ffmpeg") {
         Some(p) => p,
         None => return fail("找不到 ffmpeg：直播录制需要它来封装流".into()),
     };
@@ -811,12 +888,11 @@ pub fn run_record_blocking(
     }
     let out = unique_record_path(Path::new(&req.output_dir), &req);
 
-    // streamlink can't read a browser's cookie store, but a cookies.txt file
-    // (explicit path or materialised pasted text) works the same way.
+    // A cookies.txt file (explicit path or materialised pasted text) works
+    // the same way for streamlink as it does for yt-dlp.
     let cookies = crate::ytdlp::cookies_path(
-        app,
+        &*ctx.env,
         &crate::ytdlp::NetOptions {
-            cookies_browser: None,
             cookies_file: req.cookies_file.clone(),
             cookies_text: req.cookies_text.clone(),
             proxy: None,
@@ -833,7 +909,7 @@ pub fn run_record_blocking(
         Err(e) => return fail(format!("启动 streamlink 失败: {e}")),
     };
     let Session { writer, muxer, .. } = &session;
-    let manager = app.state::<JobManager>();
+    let manager = ctx.jobs.clone();
     manager.register(id, writer.clone());
     manager.attach(id, muxer.clone());
     // A cancel between spawn and register would have missed the child.
@@ -842,9 +918,10 @@ pub fn run_record_blocking(
     }
 
     let title = req.title.clone().unwrap_or_else(|| filename_of(&out));
-    let _ = app.emit(
+    emit(
+        ctx.emitter.as_ref(),
         "download-started",
-        DownloadStartedEvent {
+        &DownloadStartedEvent {
             id: id.to_string(),
             url: req.url.clone(),
             title,
@@ -872,9 +949,10 @@ pub fn run_record_blocking(
         prev_size = size;
         prev_at = Instant::now();
 
-        let _ = app.emit(
+        let _ = emit(
+            ctx.emitter.as_ref(),
             "download-progress",
-            DownloadProgressEvent {
+            &DownloadProgressEvent {
                 id: id.to_string(),
                 // A live stream has no total, so percent is only meaningful
                 // against a duration limit.
@@ -906,7 +984,7 @@ pub fn run_record_blocking(
             // Keep what was already captured: footage the user watched is more
             // useful than a tidy disk, and Matroska is written as it streams.
             return emit_dl_done(
-                app,
+                ctx,
                 id,
                 false,
                 true,
@@ -923,13 +1001,31 @@ pub fn run_record_blocking(
         if captured < 1024 && !muxed {
             let detail = session.error_detail();
             let _ = std::fs::remove_file(&out);
-            let msg = format!("streamlink 录制失败{}", if detail.is_empty() { String::new() } else { format!("\n\n{detail}") });
-            return emit_dl_done(app, id, false, false, &kind, None, Some(msg), false, &pipeline);
+            let msg = format!(
+                "streamlink 录制失败{}",
+                if detail.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n\n{detail}")
+                }
+            );
+            return emit_dl_done(
+                ctx,
+                id,
+                false,
+                false,
+                &kind,
+                None,
+                Some(msg),
+                false,
+                &pipeline,
+            );
         }
         let final_size = file_size(&out);
-        let _ = app.emit(
+        let _ = emit(
+            ctx.emitter.as_ref(),
             "download-progress",
-            DownloadProgressEvent {
+            &DownloadProgressEvent {
                 id: id.to_string(),
                 percent: 100.0,
                 phase: "done".into(),
@@ -941,7 +1037,7 @@ pub fn run_record_blocking(
             },
         );
         return emit_dl_done(
-            app,
+            ctx,
             id,
             true,
             false,
@@ -959,7 +1055,9 @@ fn file_size(path: &Path) -> u64 {
 }
 
 fn filename_of(path: &Path) -> String {
-    path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "直播".into())
+    path.file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "直播".into())
 }
 
 /// `标题 [YYYYMMDDHHMMSS].mkv`, mirroring the yt-dlp record naming.
@@ -970,14 +1068,20 @@ fn unique_record_path(dir: &Path, req: &DownloadRequest) -> PathBuf {
         .map(|t| {
             t.chars()
                 // Path separators and control chars would escape the output dir.
-                .filter(|c| !matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') && *c as u32 >= 0x20)
+                .filter(|c| {
+                    !matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+                        && *c as u32 >= 0x20
+                })
                 .collect::<String>()
         })
         .map(|t| t.trim().chars().take(120).collect::<String>())
         .filter(|t| !t.is_empty())
         .unwrap_or_else(|| "直播".into());
     let stamp = epoch_to_civil(
-        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0),
     );
     let mut out = dir.join(format!("{title} [{stamp}].mkv"));
     // Two monitors going live in the same second would otherwise collide.

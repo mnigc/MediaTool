@@ -1,25 +1,27 @@
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-use tauri::{AppHandle, Emitter, Manager};
+use crate::ctx::{emit, AppEnv, Ctx, Emitter};
 
 use crate::error::{AppError, Result};
 use crate::ffmpeg;
 use crate::media::probe;
 use crate::models::{
-    AudioMergeParams, AudioParams, AudioVolumeParams,
-    DoneEvent, EstimateRequest, EstimateResult, ExtractAudioParams,
-    JobRequest, MediaInfo, MediaType, MuteParams,
-    ProgressEvent, ScreenshotParams, SpeedParams,
-    StartJobResult, StartWorkflowResult, StripMetadataParams, SubtitleParams, TrimParams,
-    TrimSegment, VideoMergeParams, VideoParams, WatermarkParams,
-    ContactSheetParams, FrameSampleParams, VideoSilenceParams,
-    WorkflowRequest, WorkflowStepInput,
+    AudioMergeParams, AudioParams, AudioVolumeParams, ContactSheetParams, DoneEvent,
+    EstimateRequest, EstimateResult, ExtractAudioParams, FrameSampleParams, JobRequest, MediaInfo,
+    MediaType, MuteParams, ProgressEvent, ScreenshotParams, SpeedParams, StartJobResult,
+    StartWorkflowResult, StripMetadataParams, SubtitleParams, TrimParams, TrimSegment,
+    VideoMergeParams, VideoParams, VideoSilenceParams, WatermarkParams, WorkflowRequest,
+    WorkflowStepInput,
 };
-use crate::state::JobManager;
 
 /// Build the output path, placing the result next to the input (or in output_dir).
-fn output_path(input: &str, output_dir: &Option<String>, ext: &str, suffix: &str) -> Result<PathBuf> {
+fn output_path(
+    input: &str,
+    output_dir: &Option<String>,
+    ext: &str,
+    suffix: &str,
+) -> Result<PathBuf> {
     output_path_labeled(input, output_dir, ext, suffix, "")
 }
 
@@ -140,7 +142,10 @@ fn resolution_vf(res: &str) -> Option<String> {
             let parts: Vec<&str> = custom.split('x').collect();
             if parts.len() == 2 {
                 // Even-align both sides: yuv420p encoders reject odd dimensions.
-                match (parts[0].trim().parse::<i64>(), parts[1].trim().parse::<i64>()) {
+                match (
+                    parts[0].trim().parse::<i64>(),
+                    parts[1].trim().parse::<i64>(),
+                ) {
                     (Ok(w), Ok(h)) if w >= 2 && h >= 2 => {
                         Some(format!("scale={}:{}", even(w), even(h)))
                     }
@@ -185,16 +190,18 @@ fn gpu_plan(video_codec: &str, gpu: &Option<String>) -> (String, Option<String>)
     match (video_codec, gpu.as_deref()) {
         ("libx264", Some("nvenc")) => ("h264_nvenc".to_string(), Some("cuda".to_string())),
         ("libx264", Some("qsv")) => ("h264_qsv".to_string(), Some("qsv".to_string())),
-        ("libx264", Some("videotoolbox")) => {
-            ("h264_videotoolbox".to_string(), Some("videotoolbox".to_string()))
-        }
+        ("libx264", Some("videotoolbox")) => (
+            "h264_videotoolbox".to_string(),
+            Some("videotoolbox".to_string()),
+        ),
         ("libx264", Some("amf")) => ("h264_amf".to_string(), Some("d3d11va".to_string())),
         ("libx264", Some("vaapi")) => ("h264_vaapi".to_string(), None),
         ("libx265", Some("nvenc")) => ("hevc_nvenc".to_string(), Some("cuda".to_string())),
         ("libx265", Some("qsv")) => ("hevc_qsv".to_string(), Some("qsv".to_string())),
-        ("libx265", Some("videotoolbox")) => {
-            ("hevc_videotoolbox".to_string(), Some("videotoolbox".to_string()))
-        }
+        ("libx265", Some("videotoolbox")) => (
+            "hevc_videotoolbox".to_string(),
+            Some("videotoolbox".to_string()),
+        ),
         ("libx265", Some("amf")) => ("hevc_amf".to_string(), Some("d3d11va".to_string())),
         ("libx265", Some("vaapi")) => ("hevc_vaapi".to_string(), None),
         _ => (video_codec.to_string(), None),
@@ -566,7 +573,11 @@ fn build_remux_args(info: &MediaInfo, drop_audio: bool, out: &Path) -> Vec<Strin
 /// Strip metadata from any media type.
 /// A/V: lossless remux (`-map_metadata -1 -c copy`). Images: high-quality
 /// re-encode (image codecs cannot be remuxed).
-fn build_strip_metadata_args(info: &MediaInfo, _p: &StripMetadataParams, out: &Path) -> Vec<String> {
+fn build_strip_metadata_args(
+    info: &MediaInfo,
+    _p: &StripMetadataParams,
+    out: &Path,
+) -> Vec<String> {
     match info.media_type {
         MediaType::Video | MediaType::Audio => build_remux_args(info, false, out),
         MediaType::Image => {
@@ -693,14 +704,15 @@ pub(crate) fn atempo_chain(rate: f64) -> Vec<String> {
     if (rem - 1.0).abs() > 1e-9 {
         factors.push(rem);
     }
-    factors
-        .iter()
-        .map(|f| format!("{:.6}", f))
-        .collect()
+    factors.iter().map(|f| format!("{:.6}", f)).collect()
 }
 
 fn screenshot_ext(format: &str) -> &'static str {
-    if format == "jpeg" { "jpg" } else { "png" }
+    if format == "jpeg" {
+        "jpg"
+    } else {
+        "png"
+    }
 }
 
 /// Turn `<stem><suffix>.<ext>` into the `%03d` sequence pattern used by
@@ -746,7 +758,9 @@ fn is_sequence_file(name: &str, prefix: &str, ext: &str) -> bool {
     };
     match rest.rsplit_once('.') {
         Some((num, e)) => {
-            e.eq_ignore_ascii_case(ext) && !num.is_empty() && num.chars().all(|c| c.is_ascii_digit())
+            e.eq_ignore_ascii_case(ext)
+                && !num.is_empty()
+                && num.chars().all(|c| c.is_ascii_digit())
         }
         None => false,
     }
@@ -926,7 +940,12 @@ fn build_speed_args(info: &MediaInfo, p: &SpeedParams, out: &Path) -> Vec<String
 }
 
 /// Image watermark overlay onto video.
-fn build_watermark_args(info: &MediaInfo, p: &WatermarkParams, wm_path: &str, out: &Path) -> Vec<String> {
+fn build_watermark_args(
+    info: &MediaInfo,
+    p: &WatermarkParams,
+    wm_path: &str,
+    out: &Path,
+) -> Vec<String> {
     let vw = info.width.unwrap_or(1280) as f64;
     let vh = info.height.unwrap_or(720) as f64;
 
@@ -1225,7 +1244,10 @@ fn build_video_contact_args(info: &MediaInfo, p: &ContactSheetParams, out: &Path
     };
     let mut a: Vec<String> = vec!["-i".into(), info.path.clone()];
     a.push("-vf".into());
-    a.push(format!("fps={},scale={}:-2,tile={}x{}", fps_expr, thumb_w, cols, rows));
+    a.push(format!(
+        "fps={},scale={}:-2,tile={}x{}",
+        fps_expr, thumb_w, cols, rows
+    ));
     a.push("-frames:v".into());
     a.push("1".into());
     a.push("-progress".into());
@@ -1324,10 +1346,10 @@ fn extension_for(tool_id: &str, info: &MediaInfo, params: &serde_json::Value) ->
 /// Collapse encoder names into codec families for container validation.
 fn codec_family<'a>(codec: &'a str) -> &'a str {
     match codec {
-        "libx264" | "h264_nvenc" | "h264_qsv" | "h264_videotoolbox" | "h264_amf"
-        | "h264_vaapi" | "h264" => "h264",
-        "libx265" | "hevc_nvenc" | "hevc_qsv" | "hevc_videotoolbox" | "hevc_amf"
-        | "hevc_vaapi" | "h265" | "hevc" => "hevc",
+        "libx264" | "h264_nvenc" | "h264_qsv" | "h264_videotoolbox" | "h264_amf" | "h264_vaapi"
+        | "h264" => "h264",
+        "libx265" | "hevc_nvenc" | "hevc_qsv" | "hevc_videotoolbox" | "hevc_amf" | "hevc_vaapi"
+        | "h265" | "hevc" => "hevc",
         "libvpx-vp9" | "vp9" => "vp9",
         "libsvtav1" | "libaom-av1" | "av1" => "av1",
         "libvpx" | "vp8" => "vp8",
@@ -1367,11 +1389,10 @@ fn mp4_copy_fallback(p: &mut VideoParams, info: &MediaInfo) -> Option<String> {
     if p.format != "mp4" {
         return None;
     }
-    let incompatible =
-        |codec: Option<&str>, allowed: &[&str]| match codec {
-            Some(c) if !c.is_empty() => !allowed.contains(&codec_family(c)),
-            _ => false,
-        };
+    let incompatible = |codec: Option<&str>, allowed: &[&str]| match codec {
+        Some(c) if !c.is_empty() => !allowed.contains(&codec_family(c)),
+        _ => false,
+    };
     let v_bad =
         p.video_codec == "copy" && incompatible(info.video_codec.as_deref(), MP4_COPY_VIDEO);
     let a_bad =
@@ -1382,14 +1403,20 @@ fn mp4_copy_fallback(p: &mut VideoParams, info: &MediaInfo) -> Option<String> {
 
     let mut parts: Vec<String> = Vec::new();
     if v_bad {
-        parts.push(format!("视频编码 {}", info.video_codec.as_deref().unwrap_or("")));
+        parts.push(format!(
+            "视频编码 {}",
+            info.video_codec.as_deref().unwrap_or("")
+        ));
         p.video_codec = "libx264".into();
         p.quality_mode = "crf".into();
         p.crf = Some(23);
         p.preset = "medium".into();
     }
     if a_bad {
-        parts.push(format!("音频编码 {}", info.audio_codec.as_deref().unwrap_or("")));
+        parts.push(format!(
+            "音频编码 {}",
+            info.audio_codec.as_deref().unwrap_or("")
+        ));
         p.audio_codec = "aac".into();
         p.audio_bitrate_kbps = Some(192);
     }
@@ -1487,14 +1514,22 @@ enum PreparedJob {
         /// it as the "output" of this step.
         existing: Option<PathBuf>,
     },
-    Run { args: Vec<String>, out: PathBuf },
-    RunMany { runs: Vec<(Vec<String>, PathBuf, f64)> },
+    Run {
+        args: Vec<String>,
+        out: PathBuf,
+    },
+    RunMany {
+        runs: Vec<(Vec<String>, PathBuf, f64)>,
+    },
 }
 
 /// Create an empty placeholder file so concurrent jobs can't resolve to the
 /// same output name. ffmpeg later overwrites it with -y.
 fn reserve(path: &Path) {
-    let _ = std::fs::OpenOptions::new().write(true).create_new(true).open(path);
+    let _ = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path);
 }
 
 /// Resolve an output path applying the rename/skip/overwrite policy.
@@ -1564,9 +1599,21 @@ fn legacy_tool_request(req: &JobRequest) -> JobRequest {
     if req.tool_id != "video-sprite" {
         return req.clone();
     }
-    let count = req.params.get("count").and_then(|v| v.as_u64()).unwrap_or(100) as u32;
-    let cols = req.params.get("cols").and_then(|v| v.as_u64()).unwrap_or(10) as u32;
-    let thumb_w = req.params.get("thumbW").and_then(|v| v.as_u64()).unwrap_or(160) as u32;
+    let count = req
+        .params
+        .get("count")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(100) as u32;
+    let cols = req
+        .params
+        .get("cols")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(10) as u32;
+    let thumb_w = req
+        .params
+        .get("thumbW")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(160) as u32;
     let rows = count.div_ceil(cols.max(1));
     let params = serde_json::json!({
         "mode": "count",
@@ -1577,15 +1624,19 @@ fn legacy_tool_request(req: &JobRequest) -> JobRequest {
         "rows": rows,
         "thumbW": thumb_w,
     });
-    JobRequest { tool_id: "video-contact".into(), params, ..req.clone() }
+    JobRequest {
+        tool_id: "video-contact".into(),
+        params,
+        ..req.clone()
+    }
 }
 
 /// Build the args + output path for any tool id, or mark as skipped.
 /// Blocking (may probe merge inputs / encode a PDF source image); call within
-/// spawn_blocking. `app` is only needed by tools that probe extra inputs
+/// spawn_blocking. `env` is only needed by tools that probe extra inputs
 /// (video-merge); tests pass None.
 fn prepare_job(
-    app: Option<&AppHandle>,
+    env: Option<&dyn AppEnv>,
     info: &MediaInfo,
     req: &JobRequest,
     suffix: &str,
@@ -1598,7 +1649,11 @@ fn prepare_job(
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
             let out = match resolve_policy(out, policy) {
                 Ok(p) => p,
-                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
+                Err(existing) => {
+                    return Ok(PreparedJob::Skipped {
+                        existing: Some(existing),
+                    })
+                }
             };
             let args = match info.media_type {
                 MediaType::Video => {
@@ -1625,14 +1680,24 @@ fn prepare_job(
                 // does not apply (ffmpeg overwrites numbered files with -y).
                 let base = output_path(&info.path, &req.output_dir, ext, suffix)?;
                 let out = interval_pattern(base);
-                Ok(PreparedJob::Run { args: build_screenshot_interval(info, &p, &out), out })
+                Ok(PreparedJob::Run {
+                    args: build_screenshot_interval(info, &p, &out),
+                    out,
+                })
             } else {
                 let base = output_path(&info.path, &req.output_dir, ext, suffix)?;
                 let out = match resolve_policy(base, policy) {
                     Ok(p) => p,
-                    Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
+                    Err(existing) => {
+                        return Ok(PreparedJob::Skipped {
+                            existing: Some(existing),
+                        })
+                    }
                 };
-                Ok(PreparedJob::Run { args: build_screenshot_single(info, &p, &out), out })
+                Ok(PreparedJob::Run {
+                    args: build_screenshot_single(info, &p, &out),
+                    out,
+                })
             }
         }
         "speed" => {
@@ -1641,9 +1706,16 @@ fn prepare_job(
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
             let out = match resolve_policy(out, policy) {
                 Ok(p) => p,
-                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
+                Err(existing) => {
+                    return Ok(PreparedJob::Skipped {
+                        existing: Some(existing),
+                    })
+                }
             };
-            Ok(PreparedJob::Run { args: build_speed_args(info, &p, &out), out })
+            Ok(PreparedJob::Run {
+                args: build_speed_args(info, &p, &out),
+                out,
+            })
         }
         "watermark" => {
             let p: WatermarkParams = parse_params(&req.params)?;
@@ -1657,10 +1729,17 @@ fn prepare_job(
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
             let out = match resolve_policy(out, policy) {
                 Ok(p) => p,
-                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
+                Err(existing) => {
+                    return Ok(PreparedJob::Skipped {
+                        existing: Some(existing),
+                    })
+                }
             };
             let wm_path = p.image_path.clone();
-            Ok(PreparedJob::Run { args: build_watermark_args(info, &p, &wm_path, &out), out })
+            Ok(PreparedJob::Run {
+                args: build_watermark_args(info, &p, &wm_path, &out),
+                out,
+            })
         }
         "extract-audio" => {
             let p: ExtractAudioParams = parse_params(&req.params)?;
@@ -1671,10 +1750,20 @@ fn prepare_job(
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
             let out = match resolve_policy(out, policy) {
                 Ok(p) => p,
-                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
+                Err(existing) => {
+                    return Ok(PreparedJob::Skipped {
+                        existing: Some(existing),
+                    })
+                }
             };
-            let ap = AudioParams { format: p.format, bitrate_kbps: p.bitrate_kbps };
-            Ok(PreparedJob::Run { args: build_audio_args(info, &ap, &out), out })
+            let ap = AudioParams {
+                format: p.format,
+                bitrate_kbps: p.bitrate_kbps,
+            };
+            Ok(PreparedJob::Run {
+                args: build_audio_args(info, &ap, &out),
+                out,
+            })
         }
         "strip-metadata" => {
             parse_params::<StripMetadataParams>(&req.params)?;
@@ -1687,10 +1776,17 @@ fn prepare_job(
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
             let out = match resolve_policy(out, policy) {
                 Ok(p) => p,
-                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
+                Err(existing) => {
+                    return Ok(PreparedJob::Skipped {
+                        existing: Some(existing),
+                    })
+                }
             };
             let p: StripMetadataParams = parse_params(&req.params)?;
-            Ok(PreparedJob::Run { args: build_strip_metadata_args(info, &p, &out), out })
+            Ok(PreparedJob::Run {
+                args: build_strip_metadata_args(info, &p, &out),
+                out,
+            })
         }
         "trim" => {
             let p: TrimParams = parse_params(&req.params)?;
@@ -1700,7 +1796,10 @@ fn prepare_job(
                 input_ext(info, "mp4")
             };
             let segments: Vec<TrimSegment> = if p.segments.is_empty() {
-                vec![TrimSegment { start_time: p.start_time, duration: p.duration }]
+                vec![TrimSegment {
+                    start_time: p.start_time,
+                    duration: p.duration,
+                }]
             } else {
                 p.segments
             };
@@ -1708,14 +1807,25 @@ fn prepare_job(
             let multi = segments.len() > 1;
             let mut runs: Vec<(Vec<String>, PathBuf, f64)> = Vec::with_capacity(segments.len());
             for (i, seg) in segments.iter().enumerate() {
-                let label = if multi { format!("_{}", i + 1) } else { String::new() };
+                let label = if multi {
+                    format!("_{}", i + 1)
+                } else {
+                    String::new()
+                };
                 let out = output_path_labeled(&info.path, &req.output_dir, &ext, &suffix, &label)?;
                 let out = match resolve_policy(out, policy) {
                     Ok(p) => p,
-                    Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
+                    Err(existing) => {
+                        return Ok(PreparedJob::Skipped {
+                            existing: Some(existing),
+                        })
+                    }
                 };
-                let args = build_trim_segment_args(info, seg.start_time, seg.duration, &p.mode, &out);
-                let dur = seg.duration.unwrap_or_else(|| (total_dur - seg.start_time).max(0.0));
+                let args =
+                    build_trim_segment_args(info, seg.start_time, seg.duration, &p.mode, &out);
+                let dur = seg
+                    .duration
+                    .unwrap_or_else(|| (total_dur - seg.start_time).max(0.0));
                 runs.push((args, out, dur));
             }
             if multi {
@@ -1731,10 +1841,17 @@ fn prepare_job(
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
             let out = match resolve_policy(out, policy) {
                 Ok(p) => p,
-                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
+                Err(existing) => {
+                    return Ok(PreparedJob::Skipped {
+                        existing: Some(existing),
+                    })
+                }
             };
             let p: MuteParams = parse_params(&req.params)?;
-            Ok(PreparedJob::Run { args: build_mute_args(info, &p, &out), out })
+            Ok(PreparedJob::Run {
+                args: build_mute_args(info, &p, &out),
+                out,
+            })
         }
         /* ── New video tools ── */
         "video-subtitle" => {
@@ -1753,9 +1870,16 @@ fn prepare_job(
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
             let out = match resolve_policy(out, policy) {
                 Ok(p) => p,
-                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
+                Err(existing) => {
+                    return Ok(PreparedJob::Skipped {
+                        existing: Some(existing),
+                    })
+                }
             };
-            Ok(PreparedJob::Run { args: build_video_subtitle_args(info, &p, &out), out })
+            Ok(PreparedJob::Run {
+                args: build_video_subtitle_args(info, &p, &out),
+                out,
+            })
         }
         "video-merge" => {
             let _p: VideoMergeParams = parse_params(&req.params)?;
@@ -1767,9 +1891,9 @@ fn prepare_job(
             // fail ("matches no streams") or desync.
             let mut any_audio = false;
             let mut all_audio = true;
-            let app = app.ok_or_else(|| AppError("内部错误：缺少应用句柄".into()))?;
+            let env = env.ok_or_else(|| AppError("内部错误：缺少应用环境".into()))?;
             for input in &req.inputs {
-                let inf = crate::media::probe_sync(app, input)?;
+                let inf = crate::media::probe_sync(env, input)?;
                 if inf.audio_codec.is_some() {
                     any_audio = true;
                 } else {
@@ -1789,9 +1913,16 @@ fn prepare_job(
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
             let out = match resolve_policy(out, policy) {
                 Ok(p) => p,
-                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
+                Err(existing) => {
+                    return Ok(PreparedJob::Skipped {
+                        existing: Some(existing),
+                    })
+                }
             };
-            Ok(PreparedJob::Run { args: build_video_merge_args(&req.inputs, audio, &out), out })
+            Ok(PreparedJob::Run {
+                args: build_video_merge_args(&req.inputs, audio, &out),
+                out,
+            })
         }
         "video-frames" => {
             let p: FrameSampleParams = parse_params(&req.params)?;
@@ -1799,27 +1930,48 @@ fn prepare_job(
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
             let out = match resolve_policy(out, policy) {
                 Ok(p) => p,
-                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
+                Err(existing) => {
+                    return Ok(PreparedJob::Skipped {
+                        existing: Some(existing),
+                    })
+                }
             };
-            Ok(PreparedJob::Run { args: build_video_frames_args(info, &p, &out), out })
+            Ok(PreparedJob::Run {
+                args: build_video_frames_args(info, &p, &out),
+                out,
+            })
         }
         "video-contact" => {
             let p: ContactSheetParams = parse_params(&req.params)?;
             let out = output_path(&info.path, &req.output_dir, "png", suffix)?;
             let out = match resolve_policy(out, policy) {
                 Ok(p) => p,
-                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
+                Err(existing) => {
+                    return Ok(PreparedJob::Skipped {
+                        existing: Some(existing),
+                    })
+                }
             };
-            Ok(PreparedJob::Run { args: build_video_contact_args(info, &p, &out), out })
+            Ok(PreparedJob::Run {
+                args: build_video_contact_args(info, &p, &out),
+                out,
+            })
         }
         "video-silence" => {
             let p: VideoSilenceParams = parse_params(&req.params)?;
             let out = output_path(&info.path, &req.output_dir, "txt", suffix)?;
             let out = match resolve_policy(out, policy) {
                 Ok(p) => p,
-                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
+                Err(existing) => {
+                    return Ok(PreparedJob::Skipped {
+                        existing: Some(existing),
+                    })
+                }
             };
-            Ok(PreparedJob::Run { args: build_video_silence_args(info, &p, &out), out })
+            Ok(PreparedJob::Run {
+                args: build_video_silence_args(info, &p, &out),
+                out,
+            })
         }
         /* ── New audio tools ── */
         "audio-volume" => {
@@ -1828,9 +1980,16 @@ fn prepare_job(
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
             let out = match resolve_policy(out, policy) {
                 Ok(p) => p,
-                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
+                Err(existing) => {
+                    return Ok(PreparedJob::Skipped {
+                        existing: Some(existing),
+                    })
+                }
             };
-            Ok(PreparedJob::Run { args: build_audio_volume_args(info, &p, &out), out })
+            Ok(PreparedJob::Run {
+                args: build_audio_volume_args(info, &p, &out),
+                out,
+            })
         }
         "audio-merge" => {
             let _p: AudioMergeParams = parse_params(&req.params)?;
@@ -1841,9 +2000,16 @@ fn prepare_job(
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
             let out = match resolve_policy(out, policy) {
                 Ok(p) => p,
-                Err(existing) => return Ok(PreparedJob::Skipped { existing: Some(existing) }),
+                Err(existing) => {
+                    return Ok(PreparedJob::Skipped {
+                        existing: Some(existing),
+                    })
+                }
             };
-            Ok(PreparedJob::Run { args: build_audio_merge_args(&req.inputs, &out), out })
+            Ok(PreparedJob::Run {
+                args: build_audio_merge_args(&req.inputs, &out),
+                out,
+            })
         }
         other => Err(AppError(format!("未知工具: {}", other))),
     }
@@ -1863,7 +2029,13 @@ enum VideoOp {
 /// command. Terminal tools (screenshot / extract-audio) are excluded and
 /// fall back to per-step chaining.
 const MERGEABLE_TOOLS: [&str; 7] = [
-    "compress", "convert", "trim", "speed", "mute", "watermark", "strip-metadata",
+    "compress",
+    "convert",
+    "trim",
+    "speed",
+    "mute",
+    "watermark",
+    "strip-metadata",
 ];
 
 /// Precondition for merging. Rejects terminal tools and combinations that
@@ -2209,7 +2381,10 @@ fn build_overlay_filter_complex(
     }
     let main = if b.is_empty() { "[0:v]" } else { "[vm]" };
     let ov_label = if af.is_empty() { "[vout]" } else { "[ov]" };
-    fc.push_str(&format!("{}[wms]overlay=x={}:y={}{};", main, x, y, ov_label));
+    fc.push_str(&format!(
+        "{}[wms]overlay=x={}:y={}{};",
+        main, x, y, ov_label
+    ));
     if !af.is_empty() {
         fc.push_str(&format!("[ov]{}[vout];", af));
     }
@@ -2232,7 +2407,12 @@ fn build_overlay_filter_complex(
 }
 
 /// Build the full argument list for a merged single-command workflow.
-fn merged_args(info: &MediaInfo, chain: &MergedChain, out: &Path, gpu: &Option<String>) -> Vec<String> {
+fn merged_args(
+    info: &MediaInfo,
+    chain: &MergedChain,
+    out: &Path,
+    gpu: &Option<String>,
+) -> Vec<String> {
     let mut a: Vec<String> = vec!["-nostats".into()];
 
     // Input: optional seek (-ss) before -i, optional -t after -i.
@@ -2254,13 +2434,10 @@ fn merged_args(info: &MediaInfo, chain: &MergedChain, out: &Path, gpu: &Option<S
         a.push(info.path.clone());
     }
 
-    let overlay = chain
-        .ops
-        .iter()
-        .find_map(|o| match o {
-            VideoOp::Overlay(p) => Some(p),
-            _ => None,
-        });
+    let overlay = chain.ops.iter().find_map(|o| match o {
+        VideoOp::Overlay(p) => Some(p),
+        _ => None,
+    });
     if let Some(wm) = overlay {
         a.push("-i".into());
         a.push(wm.image_path.clone());
@@ -2374,24 +2551,26 @@ fn merged_args(info: &MediaInfo, chain: &MergedChain, out: &Path, gpu: &Option<S
 
 /// Decide the final output extension for a mergeable chain, or None when the
 /// chain cannot be merged into a single command.
-pub(crate) fn merged_output_ext(
-    info: &MediaInfo,
-    steps: &[WorkflowStepInput],
-) -> Option<String> {
+pub(crate) fn merged_output_ext(info: &MediaInfo, steps: &[WorkflowStepInput]) -> Option<String> {
     merged_chain(info, steps).map(|c| c.ext)
 }
 
 /// Start a workflow. When the steps are composable they are merged into a single
 /// FFmpeg command that emits progress/done on `id`; otherwise `merged: false` is
 /// returned so the frontend runs the steps one after another.
-pub async fn start_workflow(app: AppHandle, req: WorkflowRequest) -> Result<StartWorkflowResult> {
+pub async fn start_workflow(ctx: Ctx, req: WorkflowRequest) -> Result<StartWorkflowResult> {
     let id = uuid();
     let input = req.input.clone();
     // An empty chain cannot be merged; let the caller decide how to behave.
     if req.steps.is_empty() {
-        return Ok(StartWorkflowResult { id, merged: false, skipped: false, note: None });
+        return Ok(StartWorkflowResult {
+            id,
+            merged: false,
+            skipped: false,
+            note: None,
+        });
     }
-    let info = probe(&app, &input).await?;
+    let info = probe(ctx.env.clone(), &input).await?;
     let suffix = req
         .output_suffix
         .clone()
@@ -2401,7 +2580,14 @@ pub async fn start_workflow(app: AppHandle, req: WorkflowRequest) -> Result<Star
 
     let ext = match merged_output_ext(&info, &req.steps) {
         Some(ext) => ext,
-        None => return Ok(StartWorkflowResult { id, merged: false, skipped: false, note: None }),
+        None => {
+            return Ok(StartWorkflowResult {
+                id,
+                merged: false,
+                skipped: false,
+                note: None,
+            })
+        }
     };
     let out = output_path(&input, &req.output_dir, &ext, &suffix)?;
     let out = match resolve_policy(out, policy) {
@@ -2410,12 +2596,22 @@ pub async fn start_workflow(app: AppHandle, req: WorkflowRequest) -> Result<Star
             // Output already existed and policy = "skip": signal a no-op via the
             // `skipped` flag instead of emitting a synchronous done event (which
             // the frontend would race and miss). The caller finishes immediately.
-            return Ok(StartWorkflowResult { id, merged: true, skipped: true, note: None });
+            return Ok(StartWorkflowResult {
+                id,
+                merged: true,
+                skipped: true,
+                note: None,
+            });
         }
     };
 
     let Some(mut chain) = merged_chain(&info, &req.steps) else {
-        return Ok(StartWorkflowResult { id, merged: false, skipped: false, note: None });
+        return Ok(StartWorkflowResult {
+            id,
+            merged: false,
+            skipped: false,
+            note: None,
+        });
     };
 
     // Bound pipelines may auto-fallback: a stream-copy step whose source
@@ -2447,12 +2643,12 @@ pub async fn start_workflow(app: AppHandle, req: WorkflowRequest) -> Result<Star
     };
     let args = merged_args(&info, &chain, &out, &req.gpu);
 
-    let (child, stdout, stderr_buf, stderr_drain) = ffmpeg::spawn(&app, "ffmpeg", &args)?;
+    let (child, stdout, stderr_buf, stderr_drain) = ffmpeg::spawn(&*ctx.env, "ffmpeg", &args)?;
     let input_size = info.size_bytes;
     let task_id = id.clone();
 
     let child = std::sync::Arc::new(std::sync::Mutex::new(child));
-    let manager = app.state::<JobManager>();
+    let manager = ctx.jobs.clone();
     manager.register(&task_id, child.clone());
     // If cancel arrived between spawn and register the kill above missed the
     // child; kill it now so the cancel is honored immediately.
@@ -2461,8 +2657,9 @@ pub async fn start_workflow(app: AppHandle, req: WorkflowRequest) -> Result<Star
             let _ = c.kill();
         }
     }
-    emit_progress(&app, &task_id, 0.0, "running", None);
+    emit_progress(ctx.emitter.as_ref(), &task_id, 0.0, "running", None);
 
+    let ctx = ctx.clone();
     std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
         let mut last_percent = 0.0_f64;
@@ -2484,7 +2681,13 @@ pub async fn start_workflow(app: AppHandle, req: WorkflowRequest) -> Result<Star
                     };
                     if (pct - last_percent).abs() >= 0.5 {
                         last_percent = pct;
-                        emit_progress(&app, &task_id, pct, "running", last_speed.clone());
+                        emit_progress(
+                            ctx.emitter.as_ref(),
+                            &task_id,
+                            pct,
+                            "running",
+                            last_speed.clone(),
+                        );
                     }
                 }
             } else if line.starts_with("speed=") {
@@ -2492,7 +2695,7 @@ pub async fn start_workflow(app: AppHandle, req: WorkflowRequest) -> Result<Star
             }
         }
 
-        let manager = app.state::<JobManager>();
+        let manager = ctx.jobs.clone();
         let was_cancelled = manager.is_cancelled(&task_id);
         manager.finish(&task_id);
 
@@ -2524,12 +2727,28 @@ pub async fn start_workflow(app: AppHandle, req: WorkflowRequest) -> Result<Star
                 format!("FFmpeg 退出码 {}{}", code, detail)
             };
             let _ = std::fs::remove_file(&out);
-            emit_done(&app, &task_id, false, was_cancelled, false, None, Some(err), input_size, None);
+            emit_done(
+                ctx.emitter.as_ref(),
+                &task_id,
+                false,
+                was_cancelled,
+                false,
+                None,
+                Some(err),
+                input_size,
+                None,
+            );
         } else {
             let output_size = std::fs::metadata(&out).map(|m| m.len()).ok();
-            emit_progress(&app, &task_id, 100.0, "done", last_speed.clone());
+            emit_progress(
+                ctx.emitter.as_ref(),
+                &task_id,
+                100.0,
+                "done",
+                last_speed.clone(),
+            );
             emit_done(
-                &app,
+                ctx.emitter.as_ref(),
                 &task_id,
                 true,
                 false,
@@ -2542,18 +2761,23 @@ pub async fn start_workflow(app: AppHandle, req: WorkflowRequest) -> Result<Star
         }
     });
 
-    Ok(StartWorkflowResult { id, merged: true, skipped: false, note: copy_note })
+    Ok(StartWorkflowResult {
+        id,
+        merged: true,
+        skipped: false,
+        note: copy_note,
+    })
 }
 
 /// Start a conversion job. Spawns FFmpeg, streams progress, emits events.
-pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult> {
+pub async fn start_job(ctx: Ctx, req: JobRequest) -> Result<StartJobResult> {
     let id = uuid();
     let input = req
         .inputs
         .first()
         .cloned()
         .ok_or_else(|| AppError("缺少输入文件".into()))?;
-    let info = probe(&app, &input).await?;
+    let info = probe(ctx.env.clone(), &input).await?;
     let suffix = req
         .output_suffix
         .clone()
@@ -2582,14 +2806,14 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult
     // prepare_job may block (probing merge inputs, converting a PDF source
     // image) — keep it off the async runtime workers.
     let prepared = {
-        let app2 = app.clone();
+        let ctx2 = ctx.clone();
         let info2 = info.clone();
         let req2 = req.clone();
-        tauri::async_runtime::spawn_blocking(move || {
-            prepare_job(Some(&app2), &info2, &req2, &suffix, &policy)
+        tokio::task::spawn_blocking(move || {
+            prepare_job(Some(&*ctx2.env), &info2, &req2, &suffix, &policy)
         })
-            .await
-            .map_err(|e| AppError(e.to_string()))??
+        .await
+        .map_err(|e| AppError(e.to_string()))??
     };
 
     let runs: Vec<(Vec<String>, PathBuf, f64)> = match prepared {
@@ -2615,14 +2839,20 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult
     };
 
     if runs.is_empty() {
-        return Ok(StartJobResult { id, skipped: true, output: None, note: None });
+        return Ok(StartJobResult {
+            id,
+            skipped: true,
+            output: None,
+            note: None,
+        });
     }
     let input_size = info.size_bytes;
     let total_dur: f64 = runs.iter().map(|r| r.2.max(0.0)).sum();
     let task_id = id.clone();
 
-    emit_progress(&app, &task_id, 0.0, "running", None);
+    emit_progress(ctx.emitter.as_ref(), &task_id, 0.0, "running", None);
 
+    let ctx = ctx.clone();
     std::thread::spawn(move || {
         let mut accum = 0.0_f64;
         let mut last_percent = 0.0_f64;
@@ -2636,17 +2866,18 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult
         'runs: for (_idx, (rargs, out, dur)) in runs.iter().enumerate() {
             let mut args = rargs.clone();
             args.insert(0, "-nostats".into());
-            let (child, stdout, stderr_buf, stderr_drain) = match ffmpeg::spawn(&app, "ffmpeg", &args) {
-                Ok(v) => v,
-                Err(e) => {
-                    ok = false;
-                    err_msg = Some(e.to_string());
-                    break 'runs;
-                }
-            };
+            let (child, stdout, stderr_buf, stderr_drain) =
+                match ffmpeg::spawn(&*ctx.env, "ffmpeg", &args) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        ok = false;
+                        err_msg = Some(e.to_string());
+                        break 'runs;
+                    }
+                };
 
             let child = std::sync::Arc::new(std::sync::Mutex::new(child));
-            let manager = app.state::<JobManager>();
+            let manager = ctx.jobs.clone();
             manager.register(&task_id, child.clone());
             // Honor a cancel that arrived between spawn and register.
             if manager.is_cancelled(&task_id) {
@@ -2672,7 +2903,13 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult
                         };
                         if (pct - last_percent).abs() >= 0.5 {
                             last_percent = pct;
-                            emit_progress(&app, &task_id, pct, "running", last_speed.clone());
+                            emit_progress(
+                                ctx.emitter.as_ref(),
+                                &task_id,
+                                pct,
+                                "running",
+                                last_speed.clone(),
+                            );
                         }
                     }
                 } else if line.starts_with("speed=") {
@@ -2681,7 +2918,7 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult
             }
 
             // Process finished; collect exit status.
-            let manager = app.state::<JobManager>();
+            let manager = ctx.jobs.clone();
             let was_cancelled = manager.is_cancelled(&task_id);
             manager.finish(&task_id);
 
@@ -2743,9 +2980,15 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult
         }
 
         if ok && !runs.is_empty() {
-            emit_progress(&app, &task_id, 100.0, "done", last_speed.clone());
+            emit_progress(
+                ctx.emitter.as_ref(),
+                &task_id,
+                100.0,
+                "done",
+                last_speed.clone(),
+            );
             emit_done(
-                &app,
+                ctx.emitter.as_ref(),
                 &task_id,
                 true,
                 false,
@@ -2753,14 +2996,33 @@ pub async fn start_job(app: AppHandle, req: JobRequest) -> Result<StartJobResult
                 first_out.map(|p| p.to_string_lossy().to_string()),
                 None,
                 input_size,
-                if total_size > 0 { Some(total_size) } else { None },
+                if total_size > 0 {
+                    Some(total_size)
+                } else {
+                    None
+                },
             );
         } else {
-            emit_done(&app, &task_id, false, cancelled, false, None, err_msg, input_size, None);
+            emit_done(
+                ctx.emitter.as_ref(),
+                &task_id,
+                false,
+                cancelled,
+                false,
+                None,
+                err_msg,
+                input_size,
+                None,
+            );
         }
     });
 
-    Ok(StartJobResult { id, skipped: false, output: None, note: copy_note })
+    Ok(StartJobResult {
+        id,
+        skipped: false,
+        output: None,
+        note: copy_note,
+    })
 }
 
 /// Effective duration a single-output job will actually encode, used as the
@@ -2790,7 +3052,7 @@ fn effective_duration(req: &JobRequest, info: &MediaInfo) -> f64 {
 /// Reuses the exact same argument builders as `start_job`, but encodes only a
 /// few seconds to a temp file, then extrapolates the produced byte count over
 /// the total duration.
-pub async fn estimate_size(app: AppHandle, req: EstimateRequest) -> Result<EstimateResult> {
+pub async fn estimate_size(ctx: Ctx, req: EstimateRequest) -> Result<EstimateResult> {
     let sample_secs = req.sample_secs.unwrap_or(8.0).max(0.1);
     let info = req.info;
     let ext = extension_for("estimate", &info, &req.params);
@@ -2801,7 +3063,7 @@ pub async fn estimate_size(app: AppHandle, req: EstimateRequest) -> Result<Estim
     // Decide where to sample from: skip the first ~10% to avoid static
     // intros, but keep at least a sliver of headroom.
     let offset = match total {
-        Some(t) if t > 0.2 => ((t * 0.1)).min(t - 0.1).max(0.0),
+        Some(t) if t > 0.2 => (t * 0.1).min(t - 0.1).max(0.0),
         _ => 0.0,
     };
 
@@ -2814,9 +3076,7 @@ pub async fn estimate_size(app: AppHandle, req: EstimateRequest) -> Result<Estim
             let p: VideoParams = parse_params(&req.params)?;
             build_video_args(&info, &p, &tmp)
         }
-        MediaType::Image | MediaType::Unknown => {
-            return Err(AppError("不支持的媒体类型".into()))
-        }
+        MediaType::Image | MediaType::Unknown => return Err(AppError("不支持的媒体类型".into())),
         MediaType::Audio => {
             let p: AudioParams = parse_params(&req.params)?;
             build_audio_args(&info, &p, &tmp)
@@ -2838,10 +3098,10 @@ pub async fn estimate_size(app: AppHandle, req: EstimateRequest) -> Result<Estim
     final_args.push(format!("{:.3}", offset));
     final_args.extend(base_args);
 
-    let (child, _stdout, _stderr, _drain) = ffmpeg::spawn(&app, "ffmpeg", &final_args)?;
+    let (child, _stdout, _stderr, _drain) = ffmpeg::spawn(&*ctx.env, "ffmpeg", &final_args)?;
     // Sample-encoding a real clip blocks for seconds — keep it off the async
     // runtime workers.
-    let waited = tauri::async_runtime::spawn_blocking(move || {
+    let waited = tokio::task::spawn_blocking(move || {
         let mut child = child;
         let code = child.wait().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
         let sampled_bytes = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
@@ -2893,10 +3153,17 @@ fn tail_chars(s: &str, max_bytes: usize) -> String {
     s[start..].to_string()
 }
 
-fn emit_progress(app: &AppHandle, id: &str, percent: f64, phase: &str, speed: Option<String>) {
-    let _ = app.emit(
+fn emit_progress(
+    emitter: &dyn Emitter,
+    id: &str,
+    percent: f64,
+    phase: &str,
+    speed: Option<String>,
+) {
+    emit(
+        emitter,
         "job-progress",
-        ProgressEvent {
+        &ProgressEvent {
             id: id.to_string(),
             percent,
             phase: phase.to_string(),
@@ -2906,7 +3173,7 @@ fn emit_progress(app: &AppHandle, id: &str, percent: f64, phase: &str, speed: Op
 }
 
 fn emit_done(
-    app: &AppHandle,
+    emitter: &dyn Emitter,
     id: &str,
     ok: bool,
     cancelled: bool,
@@ -2916,9 +3183,10 @@ fn emit_done(
     input_size: u64,
     output_size: Option<u64>,
 ) {
-    let _ = app.emit(
+    emit(
+        emitter,
         "job-done",
-        DoneEvent {
+        &DoneEvent {
             id: id.to_string(),
             ok,
             cancelled,
@@ -2943,7 +3211,6 @@ fn uuid() -> String {
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("job-{:x}-{}-{}", nanos, std::process::id(), n)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -3028,7 +3295,10 @@ mod tests {
         let mut info = sample_info();
         info.media_type = MediaType::Audio;
         info.path = "song.mp3".into();
-        let p = AudioParams { format: "source".into(), bitrate_kbps: 192 };
+        let p = AudioParams {
+            format: "source".into(),
+            bitrate_kbps: 192,
+        };
         let args = build_audio_args(&info, &p, Path::new("o.mp3"));
         assert!(args.contains(&"libmp3lame".to_string()));
         assert!(args.contains(&"192k".to_string()));
@@ -3036,12 +3306,18 @@ mod tests {
         info.path = "song.flac".into();
         let args = build_audio_args(&info, &p, Path::new("o.flac"));
         assert!(args.contains(&"flac".to_string()));
-        assert!(!args.contains(&"-b:a".to_string()), "flac is lossless, no bitrate flag");
+        assert!(
+            !args.contains(&"-b:a".to_string()),
+            "flac is lossless, no bitrate flag"
+        );
     }
 
     #[test]
     fn audio_mp3_bitrate() {
-        let p = AudioParams { format: "mp3".into(), bitrate_kbps: 192 };
+        let p = AudioParams {
+            format: "mp3".into(),
+            bitrate_kbps: 192,
+        };
         let args = build_audio_args(&sample_info(), &p, Path::new("o.mp3"));
         assert!(args.contains(&"-vn".to_string()));
         assert!(args.contains(&"libmp3lame".to_string()));
@@ -3111,8 +3387,7 @@ mod tests {
         let mut info = sample_info();
         info.media_type = MediaType::Image;
         info.path = "photo.jpg".into();
-        let args =
-            build_strip_metadata_args(&info, &StripMetadataParams {}, Path::new("o.jpg"));
+        let args = build_strip_metadata_args(&info, &StripMetadataParams {}, Path::new("o.jpg"));
         assert!(args.contains(&"-q:v".to_string()));
         assert!(args.contains(&"2".to_string()));
         assert!(args.contains(&"-map_metadata".to_string()) == false || true); // image path uses re-encode, metadata dropped implicitly
@@ -3128,7 +3403,12 @@ mod tests {
     }
 
     fn trim_params(mode: &str) -> TrimParams {
-        TrimParams { start_time: 5.5, duration: Some(10.0), mode: mode.into(), segments: vec![] }
+        TrimParams {
+            start_time: 5.5,
+            duration: Some(10.0),
+            mode: mode.into(),
+            segments: vec![],
+        }
     }
 
     #[test]
@@ -3176,7 +3456,11 @@ mod tests {
         );
         // extract-audio maps format to the canonical audio ext
         assert_eq!(
-            extension_for("extract-audio", &info, &serde_json::json!({"format": "aac"})),
+            extension_for(
+                "extract-audio",
+                &info,
+                &serde_json::json!({"format": "aac"})
+            ),
             "m4a"
         );
     }
@@ -3212,7 +3496,10 @@ mod tests {
         match prepare_job(
             None,
             &info,
-            &req("extract-audio", serde_json::json!({"format":"opus","bitrateKbps":128})),
+            &req(
+                "extract-audio",
+                serde_json::json!({"format":"opus","bitrateKbps":128}),
+            ),
             "_mediatool",
             "rename",
         )
@@ -3231,7 +3518,15 @@ mod tests {
     fn prepare_strip_metadata_video_remux() {
         let mut info = sample_info();
         info.path = "clip.mp4".into();
-        match prepare_job(None, &info, &req("strip-metadata", serde_json::json!({})), "_mediatool", "rename").unwrap() {
+        match prepare_job(
+            None,
+            &info,
+            &req("strip-metadata", serde_json::json!({})),
+            "_mediatool",
+            "rename",
+        )
+        .unwrap()
+        {
             PreparedJob::Run { args, out } => {
                 assert!(out.to_string_lossy().ends_with(".mp4"), "got {:?}", out);
                 assert!(args.contains(&"copy".to_string()));
@@ -3307,14 +3602,23 @@ mod tests {
     fn atempo_chain_values() {
         assert_eq!(atempo_chain(1.0), Vec::<String>::new());
         assert_eq!(atempo_chain(1.5), vec!["1.500000".to_string()]);
-        assert_eq!(atempo_chain(4.0), vec!["2.000000".to_string(), "2.000000".to_string()]);
-        assert_eq!(atempo_chain(0.25), vec!["0.500000".to_string(), "0.500000".to_string()]);
+        assert_eq!(
+            atempo_chain(4.0),
+            vec!["2.000000".to_string(), "2.000000".to_string()]
+        );
+        assert_eq!(
+            atempo_chain(0.25),
+            vec!["0.500000".to_string(), "0.500000".to_string()]
+        );
         // 0.75 -> 0.75 stays single (>= 0.5)
         assert_eq!(atempo_chain(0.75), vec!["0.750000".to_string()]);
     }
 
     fn speed_params(rate: f64, mute: bool) -> SpeedParams {
-        SpeedParams { rate, mute_audio: Some(mute) }
+        SpeedParams {
+            rate,
+            mute_audio: Some(mute),
+        }
     }
 
     #[test]
@@ -3322,7 +3626,9 @@ mod tests {
         let p = speed_params(4.0, false);
         let args = build_speed_args(&sample_info(), &p, Path::new("o.mp4"));
         assert!(args.contains(&"setpts=PTS/4.000000".to_string()));
-        assert!(args.iter().any(|a| a.contains("atempo=2.000000,atempo=2.000000")));
+        assert!(args
+            .iter()
+            .any(|a| a.contains("atempo=2.000000,atempo=2.000000")));
         assert!(args.contains(&"-crf".to_string()));
         assert!(args.contains(&"192k".to_string()));
 
@@ -3530,7 +3836,10 @@ mod tests {
     /* ── multi-step workflow merging ─────────────────────────────── */
 
     fn step(tool: &str, params: serde_json::Value) -> WorkflowStepInput {
-        WorkflowStepInput { tool_id: tool.into(), params }
+        WorkflowStepInput {
+            tool_id: tool.into(),
+            params,
+        }
     }
 
     #[test]
@@ -3558,7 +3867,10 @@ mod tests {
     fn merge_compress_speed_single_command() {
         let steps = vec![
             step("video-compress", compress_params("720p")),
-            step("speed", serde_json::json!({"rate": 1.5, "muteAudio": false})),
+            step(
+                "speed",
+                serde_json::json!({"rate": 1.5, "muteAudio": false}),
+            ),
         ];
         let info = sample_info();
         let chain = merged_chain(&info, &steps).expect("chain must be mergeable");
@@ -3570,7 +3882,11 @@ mod tests {
         // Order follows step order: compress scale, then speed setpts.
         assert!(vf.contains("scale=-2:720"), "vf = {}", vf);
         assert!(vf.contains("setpts=PTS/1.500000"), "vf = {}", vf);
-        assert!(vf.contains("scale=-2:720,setpts=PTS/1.500000"), "vf = {}", vf);
+        assert!(
+            vf.contains("scale=-2:720,setpts=PTS/1.500000"),
+            "vf = {}",
+            vf
+        );
 
         let af_idx = args.iter().position(|a| a == "-af").unwrap();
         assert_eq!(args[af_idx + 1], "atempo=1.500000");
@@ -3604,15 +3920,24 @@ mod tests {
     #[test]
     fn merge_rejects_terminal_tools() {
         let info = sample_info();
-        let shot = vec![step("screenshot", serde_json::json!({"mode":"single","atSec":1.0,"format":"png"}))];
+        let shot = vec![step(
+            "screenshot",
+            serde_json::json!({"mode":"single","atSec":1.0,"format":"png"}),
+        )];
         assert!(merged_output_ext(&info, &shot).is_none());
     }
 
     #[test]
     fn merge_rejects_stream_copy_trim() {
         let steps = vec![
-            step("trim", serde_json::json!({"startTime": 1.0, "mode": "copy"})),
-            step("speed", serde_json::json!({"rate": 2.0, "muteAudio": false})),
+            step(
+                "trim",
+                serde_json::json!({"startTime": 1.0, "mode": "copy"}),
+            ),
+            step(
+                "speed",
+                serde_json::json!({"rate": 2.0, "muteAudio": false}),
+            ),
         ];
         assert!(!is_mergeable_chain(&steps));
         assert!(merged_output_ext(&sample_info(), &steps).is_none());
@@ -3629,7 +3954,10 @@ mod tests {
     #[test]
     fn trim_encode_merge_applies_seek_and_duration() {
         let steps = vec![
-            step("trim", serde_json::json!({"startTime": 5.5, "duration": 10.0, "mode": "encode"})),
+            step(
+                "trim",
+                serde_json::json!({"startTime": 5.5, "duration": 10.0, "mode": "encode"}),
+            ),
             step("speed", serde_json::json!({"rate": 2.0, "muteAudio": true})),
         ];
         let info = sample_info();
@@ -3640,7 +3968,10 @@ mod tests {
         assert_eq!(args[ss + 1], "5.500");
         let t = args.iter().position(|a| a == "-t").unwrap();
         assert_eq!(args[t + 1], "10.000");
-        assert!(args.contains(&"-an".to_string()), "speed muted audio keeps -an");
+        assert!(
+            args.contains(&"-an".to_string()),
+            "speed muted audio keeps -an"
+        );
         assert!(args.last().unwrap() == &"out.mp4".to_string());
     }
 
@@ -3671,11 +4002,31 @@ mod tests {
 
     #[test]
     fn sequence_file_matching_is_precise() {
-        assert!(is_sequence_file("clip_mediatool_001.png", "clip_mediatool_", "png"));
-        assert!(is_sequence_file("clip_mediatool_042.PNG", "clip_mediatool_", "png"));
-        assert!(!is_sequence_file("clip_mediatool_final.png", "clip_mediatool_", "png"));
-        assert!(!is_sequence_file("other_mediatool_001.png", "clip_mediatool_", "png"));
-        assert!(!is_sequence_file("clip_mediatool_jpg", "clip_mediatool_", "png"));
+        assert!(is_sequence_file(
+            "clip_mediatool_001.png",
+            "clip_mediatool_",
+            "png"
+        ));
+        assert!(is_sequence_file(
+            "clip_mediatool_042.PNG",
+            "clip_mediatool_",
+            "png"
+        ));
+        assert!(!is_sequence_file(
+            "clip_mediatool_final.png",
+            "clip_mediatool_",
+            "png"
+        ));
+        assert!(!is_sequence_file(
+            "other_mediatool_001.png",
+            "clip_mediatool_",
+            "png"
+        ));
+        assert!(!is_sequence_file(
+            "clip_mediatool_jpg",
+            "clip_mediatool_",
+            "png"
+        ));
     }
 
     #[test]
