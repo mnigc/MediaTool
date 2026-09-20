@@ -44,14 +44,14 @@ FROM debian:trixie-slim AS runtime
 LABEL org.opencontainers.image.title="MediaTool" \
       org.opencontainers.image.description="Local media toolbox, headless server for NAS deployment"
 
-# ffmpeg comes from Debian rather than the in-app installer, because that
-# reaches for GitHub and fails on networks that cannot see it. The engine
-# resolves it from PATH, so no configuration is needed to pick it up.
-# yt-dlp and streamlink are the exceptions: site extractors break within
-# weeks (Bilibili answers stale releases with HTTP 412), and Debian's
-# packages lag months, so both are baked from their canonical sources — the
-# image build runs on GitHub Actions where those are reachable, and each
-# image release then ships whatever is current.
+# All three engines are baked from canonical sources rather than Debian,
+# whose packages lag months to years: yt-dlp and streamlink break within
+# weeks on site-extractor changes (Bilibili answers stale releases with
+# HTTP 412), and the image should carry the same current ffmpeg/ffprobe the
+# desktop app ships. The image build runs on GitHub Actions where those
+# sources are reachable; each image release then ships whatever is current.
+# ffmpeg comes from BtbN's rolling master GPL builds — x264/x265/libvpx/
+# SVT-AV1/dav1d plus VAAPI and QSV, which the Intel stack below feeds.
 #
 # The Intel packages are the QSV/VA-API stack: iHD (intel-media-va-driver
 # -non-free) for Gen8+ and the older i965 driver for pre-Skylake, plus the
@@ -72,7 +72,7 @@ RUN apt-get update \
       ca-certificates \
       curl \
       tzdata \
-      ffmpeg \
+      xz-utils \
       python3 \
       python3-pip \
       intel-media-va-driver-non-free \
@@ -82,6 +82,16 @@ RUN apt-get update \
       libvpl-tools \
       fonts-liberation \
  && rm -rf /var/lib/apt/lists/*
+
+# Rolling-master GPL build, amd64-only, matching the platforms list in
+# .github/workflows/docker-publish.yml.
+RUN curl -fsSL --retry 3 \
+      https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz \
+      | tar -xJ --strip-components=1 -C /usr/local \
+          ffmpeg-master-latest-linux64-gpl/bin/ffmpeg \
+          ffmpeg-master-latest-linux64-gpl/bin/ffprobe \
+ && ffmpeg -hide_banner -version | head -1 \
+ && ffprobe -hide_banner -version | head -1
 
 # Standalone build bundles its own Python; amd64-only, matching the
 # platforms list in .github/workflows/docker-publish.yml.

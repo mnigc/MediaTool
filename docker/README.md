@@ -62,12 +62,14 @@ everything still works, just on the CPU.
 
 ## Engines
 
-ffmpeg comes from Debian and is resolved from `PATH`, so the in-app "install
-engine" button is not needed (and on networks that cannot reach GitHub it
-would fail anyway). yt-dlp and streamlink are baked into the image from their
-canonical sources (GitHub releases / PyPI) at build time, so each image ships
-a current version; site extractors change fast, and refreshed engines arrive
-with the next image update (`docker compose pull`).
+All engines are baked into the image from their canonical sources at build
+time — ffmpeg/ffprobe from BtbN's rolling master builds (with VAAPI/QSV and
+the usual codec libraries), yt-dlp from its GitHub releases, streamlink from
+PyPI — so each image ships a current version and is resolved from `PATH`
+with no configuration. Site extractors change fast; refreshed engines
+arrive with the next image update (`docker compose pull`). The in-app
+"install engine" buttons still work as a manual refresh when you can reach
+GitHub, and their copies take precedence over the image's.
 
 ## Updating
 
