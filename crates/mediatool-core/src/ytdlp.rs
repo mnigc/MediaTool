@@ -219,10 +219,22 @@ pub(crate) const MIRROR_PREFIXES: [&str; 3] = [
 pub struct InstallProgressEvent {
     pub stage: String, // downloading | done | error
     pub message: String,
+    /// Download percentage (0-100); absent when the server sent no
+    /// Content-Length or the stage is not a byte download.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub percent: Option<u8>,
 }
 
-/// Download (or update) yt-dlp into the managed dir using system curl,
-/// trying each mirror until one succeeds. Emits `ytdlp-install-progress`.
+pub(crate) fn install_message(source: &str, done: u64, total: Option<u64>) -> String {
+    const MB: f64 = 1_048_576.0;
+    match total {
+        Some(t) => format!("{source}：已下载 {:.1} / {:.1} MB", done as f64 / MB, t as f64 / MB),
+        None => format!("{source}：已下载 {:.1} MB", done as f64 / MB),
+    }
+}
+
+/// Download (or update) yt-dlp into the managed dir, trying each mirror
+/// until one succeeds. Emits `ytdlp-install-progress` with byte percentages.
 pub async fn ytdlp_install(ctx: Ctx) -> Result<YtdlpStatus> {
     let asset = platform_asset()?;
     let url = format!(
@@ -233,78 +245,46 @@ pub async fn ytdlp_install(ctx: Ctx) -> Result<YtdlpStatus> {
     let target = dir.join(binary_name());
     let tmp = dir.join(format!("{}.download", binary_name()));
 
+    let candidates: Vec<String> = MIRROR_PREFIXES
+        .iter()
+        .map(|p| format!("{p}{url}"))
+        .collect();
     let emitter = ctx.emitter.clone();
-    let tmp2 = tmp.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let tmp = tmp2;
-        let _ = std::fs::remove_file(&tmp);
-        let mut last_err = String::from("未尝试任何下载源");
-        for prefix in MIRROR_PREFIXES {
-            let full = format!("{}{}", prefix, url);
-            emit(
-                emitter.as_ref(),
-                "ytdlp-install-progress",
-                &InstallProgressEvent {
-                    stage: "downloading".into(),
-                    message: if prefix.is_empty() {
-                        "正在从 GitHub 下载 yt-dlp…".into()
-                    } else {
-                        format!("直连失败，正在尝试镜像 {} …", prefix)
-                    },
-                },
-            );
-            let mut cmd = Command::new("curl");
-            cmd.args([
-                "-L",
-                "--fail",
-                "--connect-timeout",
-                "20",
-                "--max-time",
-                "900",
-                "-o",
-            ])
-            .arg(&tmp)
-            .arg(&full)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                cmd.creation_flags(0x0800_0000);
-            }
-            match cmd.status() {
-                Ok(s)
-                    if s.success()
-                        && tmp.metadata().map(|m| m.len() > 1_000_000).unwrap_or(false) =>
-                {
-                    return Ok(());
-                }
-                Ok(s) => {
-                    last_err = format!(
-                        "下载源 {} 退出码 {}",
-                        if prefix.is_empty() { "GitHub" } else { prefix },
-                        s.code().unwrap_or(-1)
-                    );
-                }
-                Err(e) => {
-                    last_err = format!(
-                        "下载源 {} 启动 curl 失败: {}",
-                        if prefix.is_empty() { "GitHub" } else { prefix },
-                        e
-                    );
-                }
-            }
-            let _ = std::fs::remove_file(&tmp);
-        }
-        Err(AppError(format!(
+    let mut on_progress = |i: usize, done: u64, total: Option<u64>| {
+        let source = if i == 0 {
+            "GitHub".to_string()
+        } else {
+            format!("镜像 {}", candidates[i].split('/').nth(2).unwrap_or("GitHub"))
+        };
+        emit(
+            emitter.as_ref(),
+            "ytdlp-install-progress",
+            &InstallProgressEvent {
+                stage: "downloading".into(),
+                message: install_message(&source, done, total),
+                percent: total.map(|t| ((done * 100) / t.max(1)).min(100) as u8),
+            },
+        );
+    };
+    if let Err(e) = crate::download::fetch_with_progress(&candidates, &tmp, 1_000_000, &mut on_progress).await {
+        emit(
+            ctx.emitter.as_ref(),
+            "ytdlp-install-progress",
+            &InstallProgressEvent {
+                stage: "error".into(),
+                message: format!(
+                    "yt-dlp 下载失败：{}。请检查网络，或手动放置 yt-dlp 到 PATH。",
+                    e.0
+                ),
+                percent: None,
+            },
+        );
+        return Err(AppError(format!(
             "yt-dlp 下载失败：{}。请检查网络，或手动放置 yt-dlp 到 PATH。",
-            last_err
-        )))
-    })
-    .await
-    .map_err(|e| AppError(e.to_string()))?;
+            e.0
+        )));
+    }
 
-    result?;
     std::fs::rename(&tmp, &target)?;
     #[cfg(unix)]
     {
@@ -324,6 +304,7 @@ pub async fn ytdlp_install(ctx: Ctx) -> Result<YtdlpStatus> {
             } else {
                 "下载完成但二进制无法运行".into()
             },
+            percent: None,
         },
     );
     if !ok {

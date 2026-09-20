@@ -53,6 +53,7 @@ pub fn run() {
             commands::cancel_job,
             commands::open_output_folder,
             commands::detect_gpu,
+            commands::ffmpeg_status,
             commands::inspect_media,
             commands::get_thumbnail,
             commands::upload_start,

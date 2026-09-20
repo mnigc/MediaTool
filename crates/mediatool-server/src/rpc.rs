@@ -127,6 +127,13 @@ async fn dispatch(state: &Arc<AppState>, command: &str, raw: &Bytes) -> Result<s
                 .map_err(|e| AppError(e.to_string()))??;
             json!(info)
         }
+        "ffmpeg_status" => {
+            let env = ctx.env.clone();
+            let status = tokio::task::spawn_blocking(move || mediatool_core::ffmpeg::status(&*env))
+                .await
+                .map_err(|e| AppError(e.to_string()))?;
+            json!(status)
+        }
         "open_output_folder" => Err(AppError(
             "网页模式无法打开本地文件夹，请直接在文件管理器中访问该路径".into(),
         )),

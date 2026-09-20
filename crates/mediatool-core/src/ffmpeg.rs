@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
+use serde::Serialize;
+
 use crate::ctx::AppEnv;
 use crate::error::{AppError, Result};
 
@@ -159,4 +161,52 @@ pub fn spawn(
     };
 
     Ok((child, stdout, stderr_buf, drain))
+}
+
+/* ── version probing (About page's conversion-engine card) ─────────── */
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FfmpegStatus {
+    pub installed: bool,
+    pub ffmpeg_version: Option<String>,
+    pub ffprobe_version: Option<String>,
+    pub path: Option<String>,
+}
+
+/// First-line `-version` output looks like `ffmpeg version 7.1 Copyright ...`;
+/// take the token after the literal "version".
+fn run_version(path: &PathBuf, name: &str) -> Option<String> {
+    let mut cmd = Command::new(path);
+    cmd.arg("-version").stdout(Stdio::piped()).stderr(Stdio::null());
+    hide_console(&mut cmd);
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut tokens = text.lines().next()?.split_whitespace();
+    let head = tokens.next()?;
+    if !head.starts_with(name) {
+        return None;
+    }
+    if tokens.next()? != "version" {
+        return None;
+    }
+    Some(tokens.next()?.to_string())
+}
+
+/// Blocking: each `-version` spawns a child process, so call via
+/// spawn_blocking like the other status probes.
+pub fn status(env: &dyn AppEnv) -> FfmpegStatus {
+    let ffmpeg = resolve(env, "ffmpeg");
+    let ffprobe = resolve(env, "ffprobe");
+    let ffmpeg_version = ffmpeg.as_ref().and_then(|p| run_version(p, "ffmpeg"));
+    let ffprobe_version = ffprobe.as_ref().and_then(|p| run_version(p, "ffprobe"));
+    FfmpegStatus {
+        installed: ffmpeg_version.is_some(),
+        ffmpeg_version,
+        ffprobe_version,
+        path: ffmpeg.map(|p| p.to_string_lossy().to_string()),
+    }
 }

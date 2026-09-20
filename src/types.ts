@@ -375,6 +375,16 @@ export interface YtdlpStatus {
 export interface YtdlpInstallProgress {
   stage: string; // downloading | done | error
   message: string;
+  /** Download percentage 0-100; absent when the server sent no Content-Length. */
+  percent?: number | null;
+}
+
+/** FFmpeg/ffprobe: the format-conversion engine behind every media job. */
+export interface FfmpegStatus {
+  installed: boolean;
+  ffmpegVersion?: string | null;
+  ffprobeVersion?: string | null;
+  path?: string | null;
 }
 
 /** streamlink: the live-recording engine (VOD stays on yt-dlp). */

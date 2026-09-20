@@ -17,6 +17,7 @@ import type {
   DirListing,
   EstimateRequest,
   EstimateResult,
+  FfmpegStatus,
   GpuInfo,
   JobRequest,
   MediaInfo,
@@ -92,6 +93,11 @@ export async function getThumbnail(
 
 export async function detectGpu(): Promise<GpuInfo> {
   return invoke<GpuInfo>("detect_gpu");
+}
+
+/** ffmpeg/ffprobe versions behind the About page's conversion-engine card. */
+export function ffmpegStatus(): Promise<FfmpegStatus> {
+  return invoke<FfmpegStatus>("ffmpeg_status");
 }
 
 export function estimateSize(request: EstimateRequest): Promise<EstimateResult> {

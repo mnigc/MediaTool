@@ -1,8 +1,10 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { canSelfUpdate, openExternal } from "../lib/shell";
 import { useI18n } from "../i18n";
 import { DEV_UNAVAILABLE, useUpdater } from "../hooks/useUpdater";
 import { useDownloads } from "../contexts/DownloadCenter";
+import { ffmpegStatus } from "../lib/engine";
+import type { FfmpegStatus } from "../types";
 import {
   CheckCircleIcon,
   CheckIcon,
@@ -20,6 +22,27 @@ const FEATURES = [
   "about.features.privacy",
   "about.features.batch",
 ] as const;
+
+/** Live install progress: a real percentage bar when the server reported a
+ *  Content-Length, an indeterminate pulse otherwise. */
+function InstallBar({ percent, message }: { percent: number | null; message: string }) {
+  return (
+    <div className="mt-3">
+      <div className="h-2 overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
+        <div
+          className={`h-full rounded-full brand-gradient transition-all duration-300 ${
+            percent === null ? "w-1/3 animate-pulse" : ""
+          }`}
+          style={percent === null ? undefined : { width: `${percent}%` }}
+        />
+      </div>
+      <div className="mt-1.5 flex items-baseline justify-between gap-3 text-xs text-neutral-500 dark:text-neutral-400">
+        <span className="min-w-0 break-words">{message}</span>
+        {percent !== null && <span className="shrink-0 font-medium">{percent}%</span>}
+      </div>
+    </div>
+  );
+}
 
 /** yt-dlp engine status — rendered in the top half of the combined
  *  engine/update card, so both stay visible without two cards. */
@@ -110,7 +133,11 @@ function YtdlpSection() {
         </div>
       )}
 
-      {dl.ytdlpInstallMessage && (
+      {dl.ytdlpInstalling && (
+        <InstallBar percent={dl.ytdlpInstallPercent} message={dl.ytdlpInstallMessage} />
+      )}
+
+      {!dl.ytdlpInstalling && dl.ytdlpInstallMessage && (
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-neutral-500 dark:text-neutral-400">
           <span className="min-w-0 break-words">{dl.ytdlpInstallMessage}</span>
           {s?.installed && !dl.ytdlpInstalling && !dl.ytdlpChecking && !dl.ytdlpLatest && (
@@ -225,10 +252,76 @@ function StreamlinkSection() {
         </div>
       )}
 
-      {dl.streamlinkInstallMessage && (
+      {dl.streamlinkInstalling && (
+        <InstallBar percent={dl.streamlinkInstallPercent} message={dl.streamlinkInstallMessage} />
+      )}
+
+      {!dl.streamlinkInstalling && dl.streamlinkInstallMessage && (
         <div className="mt-3 text-xs text-neutral-500 dark:text-neutral-400">
           {dl.streamlinkInstallMessage}
         </div>
+      )}
+    </div>
+  );
+}
+
+/** FFmpeg conversion-engine status — read-only. Unlike yt-dlp/streamlink it
+ *  ships with the app (or comes from the system PATH), so there is nothing
+ *  to check or install here, just the ffmpeg/ffprobe versions to show. */
+function FfmpegSection() {
+  const { t } = useI18n();
+  const [s, setS] = useState<FfmpegStatus | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    ffmpegStatus()
+      .then((v) => alive && setS(v))
+      .catch(() => alive && setS({ installed: false }));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const badge = (label: string, version: string) => (
+    <span className="rounded-lg bg-success-50 px-2.5 py-1 text-xs font-medium text-success-600 dark:bg-success-950/40 dark:text-success-400">
+      {label} v{version}
+    </span>
+  );
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-4">
+        <h2 className="text-sm font-semibold text-neutral-800 dark:text-neutral-200">
+          {t("about.ffmpeg.title")}
+        </h2>
+        {s?.installed && (
+          <span className="flex shrink-0 items-center gap-1.5">
+            {s.ffmpegVersion && badge("ffmpeg", s.ffmpegVersion)}
+            {s.ffprobeVersion && badge("ffprobe", s.ffprobeVersion)}
+          </span>
+        )}
+      </div>
+      <p className="mt-1.5 text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
+        {t("about.ffmpeg.desc")}
+      </p>
+      {!s ? (
+        <div className="mt-3 flex items-center gap-2 text-sm text-neutral-500 dark:text-neutral-400">
+          <SpinnerIcon className="h-4 w-4 animate-spin" />
+          {t("about.ffmpeg.checking")}
+        </div>
+      ) : !s.installed ? (
+        <div className="mt-3 text-sm text-warning-700 dark:text-warning-400">
+          {t("dl.noFfmpeg")}
+        </div>
+      ) : (
+        s.path && (
+          <div
+            className="mt-1.5 truncate text-xs text-neutral-400 dark:text-neutral-500"
+            title={s.path}
+          >
+            {s.path}
+          </div>
+        )
       )}
     </div>
   );
@@ -328,6 +421,10 @@ export default function AboutPage({ currentVersion, updater, onToast }: AboutPag
 
         <div className="mt-5 border-t border-neutral-200 pt-5 dark:border-neutral-800">
           <StreamlinkSection />
+        </div>
+
+        <div className="mt-5 border-t border-neutral-200 pt-5 dark:border-neutral-800">
+          <FfmpegSection />
         </div>
 
         {canSelfUpdate && (

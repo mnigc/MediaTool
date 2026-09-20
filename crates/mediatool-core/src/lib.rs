@@ -7,6 +7,7 @@
 
 pub mod cache;
 pub mod ctx;
+pub mod download;
 pub mod error;
 pub mod ffmpeg;
 pub mod gpu;

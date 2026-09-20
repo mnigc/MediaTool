@@ -149,6 +149,7 @@ fn prepare_blocking(ctx: &Ctx) {
         &InstallProgressEvent {
             stage: "downloading".into(),
             message: "正在解压随包 streamlink 引擎…".into(),
+            percent: None,
         },
     );
     let exe = {
@@ -165,6 +166,7 @@ fn prepare_blocking(ctx: &Ctx) {
                 &InstallProgressEvent {
                     stage: "done".into(),
                     message: format!("streamlink {version} 就绪"),
+                    percent: None,
                 },
             );
         }
@@ -175,6 +177,7 @@ fn prepare_blocking(ctx: &Ctx) {
                 &InstallProgressEvent {
                     stage: "error".into(),
                     message: format!("随包 streamlink 引擎不可用：{e}"),
+                    percent: None,
                 },
             );
         }
@@ -342,86 +345,59 @@ pub async fn streamlink_install(ctx: Ctx) -> Result<StreamlinkStatus> {
     let archive = dir.join(format!("{PORTABLE_DIR}.stage.zip"));
     let stage = dir.join(format!("{PORTABLE_DIR}.stage"));
 
-    let progress = |emitter: &dyn Emitter, stage: &str, message: String| {
+    let progress = |emitter: &dyn Emitter, stage: &str, message: String, percent: Option<u8>| {
         emit(
             emitter,
             "streamlink-install-progress",
             &InstallProgressEvent {
                 stage: stage.into(),
                 message,
+                percent,
             },
         );
     };
 
     /* Download */
     let ctx2 = ctx.clone();
-    let archive2 = archive.clone();
     let candidates: Vec<String> = ytdlp::MIRROR_PREFIXES
         .iter()
         .map(|p| format!("{p}{url}"))
         .collect();
-    let downloaded: Result<()> = tokio::task::spawn_blocking(move || {
-        let archive = archive2;
-        let _ = std::fs::remove_file(&archive);
-        let mut last_err = String::from("未尝试任何下载源");
-        for (i, full) in candidates.iter().enumerate() {
-            let source = if i == 0 {
+    // Source labels for the progress message, computed up front so the
+    // callback does not have to borrow `candidates`.
+    let sources: Vec<String> = candidates
+        .iter()
+        .enumerate()
+        .map(|(i, full)| {
+            if i == 0 {
                 "GitHub".to_string()
             } else {
-                full.split('/').nth(2).unwrap_or(full).to_string()
-            };
-            progress(
-                ctx2.emitter.as_ref(),
-                "downloading",
-                if i == 0 {
-                    "正在从 GitHub 下载 streamlink（约 80 MB）…".into()
-                } else {
-                    format!("直连失败，正在尝试镜像 {source} …")
-                },
-            );
-            let mut cmd = Command::new("curl");
-            cmd.args([
-                "-L",
-                "--fail",
-                "--connect-timeout",
-                "20",
-                "--max-time",
-                "1800",
-                "-o",
-            ])
-            .arg(&archive)
-            .arg(full)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                cmd.creation_flags(0x0800_0000);
+                full.split('/').nth(2).unwrap_or("GitHub").to_string()
             }
-            match cmd.status() {
-                // The bundle is tens of MB; anything smaller is an error page.
-                Ok(s) if s.success() && file_size(&archive) > 20_000_000 => return Ok(()),
-                Ok(s) => last_err = format!("{source} 退出码 {}", s.code().unwrap_or(-1)),
-                Err(e) => last_err = format!("{source} 启动 curl 失败: {e}"),
-            }
-            let _ = std::fs::remove_file(&archive);
-        }
-        Err(AppError(format!(
-            "streamlink 下载失败：{last_err}。请检查网络，或手动安装 streamlink 到 PATH。"
-        )))
-    })
-    .await
-    .map_err(|e| AppError(e.to_string()))?;
-    if let Err(e) = downloaded {
-        emit(
-            ctx.emitter.as_ref(),
-            "streamlink-install-progress",
-            &InstallProgressEvent {
-                stage: "error".into(),
-                message: e.0.clone(),
-            },
+        })
+        .collect();
+    let mut on_progress = move |i: usize, done: u64, total: Option<u64>| {
+        progress(
+            ctx2.emitter.as_ref(),
+            "downloading",
+            ytdlp::install_message(&sources[i], done, total),
+            total.map(|t| ((done * 100) / t.max(1)).min(100) as u8),
         );
-        return Err(e);
+    };
+    if let Err(e) = crate::download::fetch_with_progress(
+        &candidates,
+        &archive,
+        20_000_000,
+        &mut on_progress,
+    )
+    .await
+    {
+        let msg = format!(
+            "streamlink 下载失败：{}。请检查网络，或手动安装 streamlink 到 PATH。",
+            e.0
+        );
+        progress(ctx.emitter.as_ref(), "error", msg.clone(), None);
+        return Err(AppError(msg));
     }
 
     /* Unpack */
@@ -429,6 +405,7 @@ pub async fn streamlink_install(ctx: Ctx) -> Result<StreamlinkStatus> {
         ctx.emitter.as_ref(),
         "downloading",
         "正在解压 streamlink…".into(),
+        None,
     );
     let result = {
         let _g = unpack_lock();
@@ -438,7 +415,7 @@ pub async fn streamlink_install(ctx: Ctx) -> Result<StreamlinkStatus> {
     let exe = match result {
         Ok(p) => p,
         Err(e) => {
-            progress(ctx.emitter.as_ref(), "error", format!("安装失败：{}", e.0));
+            progress(ctx.emitter.as_ref(), "error", format!("安装失败：{}", e.0), None);
             return Err(e);
         }
     };
@@ -451,6 +428,7 @@ pub async fn streamlink_install(ctx: Ctx) -> Result<StreamlinkStatus> {
             ctx.emitter.as_ref(),
             "error",
             "解压完成但程序无法运行，已清理".into(),
+            None,
         );
         return Err(AppError("解压完成但程序无法运行，已清理".into()));
     }
@@ -459,6 +437,7 @@ pub async fn streamlink_install(ctx: Ctx) -> Result<StreamlinkStatus> {
         ctx.emitter.as_ref(),
         "done",
         format!("streamlink {} 就绪", version.clone().unwrap_or_default()),
+        None,
     );
     Ok(StreamlinkStatus {
         installed: true,

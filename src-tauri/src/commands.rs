@@ -90,6 +90,14 @@ pub async fn detect_gpu(app: AppHandle) -> Result<gpu::GpuInfo> {
 }
 
 #[tauri::command]
+pub async fn ffmpeg_status(app: AppHandle) -> Result<mediatool_core::ffmpeg::FfmpegStatus> {
+    let env = ctx(&app).env.clone();
+    tokio::task::spawn_blocking(move || mediatool_core::ffmpeg::status(&*env))
+        .await
+        .map_err(|e| error::AppError(e.to_string()))
+}
+
+#[tauri::command]
 pub fn open_output_folder(app: AppHandle, path: String) -> Result<()> {
     use tauri_plugin_opener::OpenerExt;
     // Files open their parent folder; directories are opened as-is (the

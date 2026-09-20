@@ -161,6 +161,8 @@ interface DownloadCenterValue {
   ytdlp: YtdlpStatus | null;
   ytdlpInstalling: boolean;
   ytdlpInstallMessage: string;
+  /** Live download percentage while installing, or null when unknown. */
+  ytdlpInstallPercent: number | null;
   ytdlpChecking: boolean;
   /** Latest upstream release tag found by "检查更新", or null. */
   ytdlpLatest: string | null;
@@ -171,6 +173,7 @@ interface DownloadCenterValue {
   streamlink: StreamlinkStatus | null;
   streamlinkInstalling: boolean;
   streamlinkInstallMessage: string;
+  streamlinkInstallPercent: number | null;
   streamlinkChecking: boolean;
   streamlinkLatest: string | null;
   refreshStreamlink: () => void;
@@ -214,11 +217,13 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
   const { t } = useI18n();
   const [ytdlp, setYtdlp] = useState<YtdlpStatus | null>(null);  const [ytdlpInstalling, setYtdlpInstalling] = useState(false);
   const [ytdlpInstallMessage, setYtdlpInstallMessage] = useState("");
+  const [ytdlpInstallPercent, setYtdlpInstallPercent] = useState<number | null>(null);
   const [ytdlpChecking, setYtdlpChecking] = useState(false);
   const [ytdlpLatest, setYtdlpLatest] = useState<string | null>(null);
   const [streamlink, setStreamlink] = useState<StreamlinkStatus | null>(null);
   const [streamlinkInstalling, setStreamlinkInstalling] = useState(false);
   const [streamlinkInstallMessage, setStreamlinkInstallMessage] = useState("");
+  const [streamlinkInstallPercent, setStreamlinkInstallPercent] = useState<number | null>(null);
   const [streamlinkChecking, setStreamlinkChecking] = useState(false);
   const [streamlinkLatest, setStreamlinkLatest] = useState<string | null>(null);
   const [tasks, setTasks] = useState<DownloadTask[]>(loadTasks);
@@ -333,6 +338,7 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
     // A fresh install/upgrade supersedes any release found by a check.
     setYtdlpLatest(null);
     setYtdlpInstallMessage(t("dl.installing"));
+    setYtdlpInstallPercent(null);
     try {
       const s = await ytdlpInstall();
       setYtdlp(s);
@@ -365,6 +371,7 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
     let active = true;
     onYtdlpInstallProgress((e) => {
       setYtdlpInstallMessage(e.message);
+      setYtdlpInstallPercent(e.stage === "downloading" ? e.percent ?? null : null);
       if (e.stage === "done") refreshYtdlp();
     }).then((fn) => {
       if (!active) fn();
@@ -381,6 +388,7 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
     setStreamlinkInstalling(true);
     setStreamlinkLatest(null);
     setStreamlinkInstallMessage(t("dl.installing"));
+    setStreamlinkInstallPercent(null);
     try {
       const s = await streamlinkInstall();
       setStreamlink(s);
@@ -411,6 +419,7 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
     let active = true;
     onStreamlinkInstallProgress((e) => {
       setStreamlinkInstallMessage(e.message);
+      setStreamlinkInstallPercent(e.stage === "downloading" ? e.percent ?? null : null);
       if (e.stage === "done") refreshStreamlink();
     }).then((fn) => {
       if (!active) fn();
@@ -843,6 +852,7 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
       ytdlp,
       ytdlpInstalling,
       ytdlpInstallMessage,
+      ytdlpInstallPercent,
       ytdlpChecking,
       ytdlpLatest,
       refreshYtdlp,
@@ -851,6 +861,7 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
       streamlink,
       streamlinkInstalling,
       streamlinkInstallMessage,
+      streamlinkInstallPercent,
       streamlinkChecking,
       streamlinkLatest,
       refreshStreamlink,
@@ -872,6 +883,7 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
       ytdlp,
       ytdlpInstalling,
       ytdlpInstallMessage,
+      ytdlpInstallPercent,
       ytdlpChecking,
       ytdlpLatest,
       refreshYtdlp,
@@ -880,6 +892,7 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
       streamlink,
       streamlinkInstalling,
       streamlinkInstallMessage,
+      streamlinkInstallPercent,
       streamlinkChecking,
       streamlinkLatest,
       refreshStreamlink,
