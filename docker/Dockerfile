@@ -50,13 +50,17 @@ LABEL org.opencontainers.image.title="MediaTool" \
 # configuration is needed to pick these up.
 #
 # The Intel packages are the QSV/VA-API stack: iHD (intel-media-va-driver
-# -non-free) for Gen8+ and the older i965 driver for pre-Skylake, plus
-# both oneVPL runtimes. Installing both families is deliberate — the
-# right set depends on the iGPU generation, which is unknown at build
-# time, and an unused driver costs nothing at runtime.
+# -non-free) for Gen8+ and the older i965 driver for pre-Skylake, plus the
+# oneVPL dispatcher (libvpl2) and the GPU runtime it loads. Installing both
+# driver families is deliberate — the right set depends on the iGPU
+# generation, which is unknown at build time, and an unused driver costs
+# nothing at runtime.
 #
-# intel-media-va-driver-non-free and its libmfx-gen runtime live in the
-# non-free component, which the slim images do not enable by default.
+# Only intel-media-va-driver-non-free lives in the non-free component, which
+# the slim images do not enable by default. The package names are
+# trixie-specific: the GPU runtime soname dropped from libmfx-gen1.4
+# (bookworm) to libmfx-gen1.2, and the Media SDK dispatcher libmfx1 is gone
+# entirely, so these lines break the moment the base image moves.
 RUN sed -i 's/^Components: .*/Components: main non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources
 
 RUN apt-get update \
@@ -70,8 +74,7 @@ RUN apt-get update \
       python3 \
       intel-media-va-driver-non-free \
       i965-va-driver \
-      libmfx-gen1.4 \
-      libmfx1 \
+      libmfx-gen1.2 \
       libvpl2 \
       libvpl-tools \
       fonts-liberation \
