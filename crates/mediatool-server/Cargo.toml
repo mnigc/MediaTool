@@ -1,6 +1,6 @@
 [package]
 name = "mediatool-server"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 description = "Headless MediaTool engine exposed over HTTP + WebSocket, for 24/7 NAS deployment"
 
