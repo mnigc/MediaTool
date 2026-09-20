@@ -561,7 +561,10 @@ fn build_download_args(env: &dyn AppEnv, bin: &Path, req: &DownloadRequest) -> R
         a.push("--write-subs".into());
         a.push("--write-auto-subs".into());
         a.push("--sub-langs".into());
-        a.push("all,-live_chat".into());
+        // Bilibili serves danmaku comments as an XML "subtitle" track; ffmpeg
+        // cannot parse it, so `--convert-subs srt` fails the whole download
+        // (exit 1) after the video itself already succeeded.
+        a.push("all,-live_chat,-danmaku".into());
         a.push("--convert-subs".into());
         a.push("srt".into());
     }
