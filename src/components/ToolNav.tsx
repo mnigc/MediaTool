@@ -43,6 +43,10 @@ interface Props {
   onNavigate: (route: Route) => void;
 }
 
+/** App-level entries live at the bottom of the rail, separated from the
+ *  work modules above. */
+const FOOTER_MODULES: ModuleId[] = ["settings", "about"];
+
 export default function ToolNav({ route, onNavigate }: Props) {
   const { t } = useI18n();
   const tasks = useTasks();
@@ -63,55 +67,60 @@ export default function ToolNav({ route, onNavigate }: Props) {
   const taskProgress =
     taskTotal > 0 ? (taskTerminal + taskRunningPct) / taskTotal : 0;
 
+  const item = (id: ModuleId) => {
+    const isActive = activeModule === id;
+    const Icon = MODULE_ICONS[id];
+    return (
+      <button
+        key={id}
+        onClick={() => onNavigate({ kind: "module", id })}
+        className={`group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium transition-all duration-200 ${
+          isActive
+            ? "bg-brand-100/70 text-brand-700 dark:bg-brand-900/70 dark:text-brand-200"
+            : "text-neutral-600 hover:bg-neutral-100/80 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800/50 dark:hover:text-neutral-100"
+        }`}
+      >
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center">
+          <Icon
+            className={`h-4.5 w-4.5 transition-colors ${
+              isActive
+                ? "text-current"
+                : "text-neutral-400 group-hover:text-neutral-600 dark:group-hover:text-neutral-300"
+            }`}
+          />
+        </span>
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate">{t(MODULE_LABEL[id])}</span>
+          {id === "tasks" && taskTotal > 0 && (
+            <span className="mt-1 flex items-center gap-1.5">
+              <span className="h-1 min-w-8 flex-1 overflow-hidden rounded-full bg-neutral-200/80 dark:bg-neutral-700/60">
+                <span
+                  className={`block h-full rounded-full transition-all duration-300 ${
+                    taskProgress >= 1 ? "bg-success-500" : "bg-brand-500"
+                  }`}
+                  style={{ width: `${Math.round(taskProgress * 100)}%` }}
+                />
+              </span>
+              <span className="text-[9px] leading-none text-neutral-400 dark:text-neutral-500">
+                {taskTerminal}/{taskTotal}
+              </span>
+            </span>
+          )}
+        </span>
+      </button>
+    );
+  };
+
+  const primary = MODULES.filter((id) => !FOOTER_MODULES.includes(id));
+
   return (
     <nav
       data-od-id="tool-nav"
       className="flex w-52 shrink-0 flex-col overflow-y-auto bg-white dark:bg-neutral-950/50 border-r border-neutral-200/60 dark:border-neutral-800/60 px-2 py-3 scrollbar-thin"
     >
-      <div className="space-y-1">
-        {MODULES.map((id) => {
-          const isActive = activeModule === id;
-          const Icon = MODULE_ICONS[id];
-          return (
-            <button
-              key={id}
-              onClick={() => onNavigate({ kind: "module", id })}
-              className={`group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium transition-all duration-200 ${
-                isActive
-                  ? "bg-brand-100/70 text-brand-700 dark:bg-brand-900/70 dark:text-brand-200"
-                  : "text-neutral-600 hover:bg-neutral-100/80 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800/50 dark:hover:text-neutral-100"
-              }`}
-            >
-              <span className="flex h-5 w-5 shrink-0 items-center justify-center">
-                <Icon
-                  className={`h-4.5 w-4.5 transition-colors ${
-                    isActive
-                      ? "text-current"
-                      : "text-neutral-400 group-hover:text-neutral-600 dark:group-hover:text-neutral-300"
-                  }`}
-                />
-              </span>
-              <span className="flex min-w-0 flex-1 flex-col">
-                <span className="truncate">{t(MODULE_LABEL[id])}</span>
-                {id === "tasks" && taskTotal > 0 && (
-                  <span className="mt-1 flex items-center gap-1.5">
-                    <span className="h-1 min-w-8 flex-1 overflow-hidden rounded-full bg-neutral-200/80 dark:bg-neutral-700/60">
-                      <span
-                        className={`block h-full rounded-full transition-all duration-300 ${
-                          taskProgress >= 1 ? "bg-success-500" : "bg-brand-500"
-                        }`}
-                        style={{ width: `${Math.round(taskProgress * 100)}%` }}
-                      />
-                    </span>
-                    <span className="text-[9px] leading-none text-neutral-400 dark:text-neutral-500">
-                      {taskTerminal}/{taskTotal}
-                    </span>
-                  </span>
-                )}
-              </span>
-            </button>
-          );
-        })}
+      <div className="space-y-1">{primary.map(item)}</div>
+      <div className="mt-auto space-y-1 border-t border-neutral-200/60 pt-2 dark:border-neutral-800/60">
+        {FOOTER_MODULES.map(item)}
       </div>
     </nav>
   );
