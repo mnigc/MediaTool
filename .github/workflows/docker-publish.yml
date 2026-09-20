@@ -1,0 +1,61 @@
+name: Docker publish
+
+# Ships alongside release.yml on the same v* tag: desktop installers from
+# the Release workflow, the NAS image from this one.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/mediatool
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Docker Hub login
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # On a manual run there is no tag to derive the version from, so fall
+      # back to the version the manifests carry.
+      - name: Resolve image tags
+        id: tags
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            ver="${GITHUB_REF_NAME#v}"
+          else
+            ver="$(node -p "require('./package.json').version")"
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "tags=$IMAGE:$ver,$IMAGE:latest" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha,scope=docker
+          cache-to: type=gha,scope=docker,mode=max
+
+      - name: Record published tag for docker-compose.yml
+        run: |
+          echo "Published \`${{ env.IMAGE }}:${{ steps.tags.outputs.version }}\`." >> "$GITHUB_STEP_SUMMARY"
+          echo "Remember: npm run bump ${{ steps.tags.outputs.version }} keeps docker-compose.yml in sync." >> "$GITHUB_STEP_SUMMARY"

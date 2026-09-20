@@ -1,9 +1,12 @@
-# MediaTool on a NAS: 24/7 headless operation.
+# MediaTool on a NAS: 24/7 headless operation, pulled from Docker Hub.
 #
 #   1. copy .env.example to .env and set MEDIATOOL_TOKEN
 #   2. point MEDIA_LIBRARY / OUTPUT_DIR at your real share paths
-#   3. docker compose up -d --build
+#   3. docker compose up -d
 #   4. docker compose exec mediatool mediatool-doctor   # verify QSV works
+#
+# In 1Panel: 容器 → 编排 → create a project and paste this file, then add
+# the same variables through the project's .env editor.
 #
 # Paths inside the container are what the web UI shows and what jobs write
 # to, so choose them to be readable names rather than mirroring the host
@@ -11,10 +14,9 @@
 
 services:
   mediatool:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    image: mediatool:0.1.7
+    # Published by CI on every version tag. If you build locally instead,
+    # use docker-compose.build.yml and change this to mediatool:0.1.7.
+    image: gwakcho/mediatool:0.1.7
     container_name: mediatool
     restart: unless-stopped
 
@@ -46,8 +48,6 @@ services:
       - ${MEDIA_LIBRARY:?MEDIA_LIBRARY must be set in .env}:/media/library:ro
       # Outputs, writable. Keep this outside the read-only mount.
       - ${OUTPUT_DIR:?OUTPUT_DIR must be set in .env}:/media/output:rw
-      # Phase 3 drops the built web frontend here.
-      # - ./web:/srv/web:ro
 
     # Intel Quick Sync / VAAPI need the render node, and the container user
     # has to be in the host's render group to open it. Find the GID on the

@@ -1,6 +1,22 @@
 # syntax=docker/dockerfile:1
 
-# ── Build ─────────────────────────────────────────────────────────────
+# ── Web frontend ──────────────────────────────────────────────────────
+# The same Vite bundle the desktop app ships, built in the image so the
+# container is self-contained: mediatool-server serves it at MEDIATOOL_STATIC.
+# `tsc && vite build` needs no Tauri runtime — @tauri-apps/cli is only an
+# npm platform package here and is never invoked.
+FROM node:24-slim AS web
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY index.html tsconfig.json tsconfig.node.json vite.config.ts ./
+COPY src ./src
+RUN npm run build
+
+
+# ── Rust build ────────────────────────────────────────────────────────
 # Only mediatool-server is compiled: the workspace also holds the Tauri
 # desktop package, but building a single member never runs its build
 # script, so the image needs none of the GTK/webkit toolchain.
@@ -12,7 +28,14 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 COPY . .
-RUN cargo build --release -p mediatool-server
+# Cache mounts keep the registry index and the target tree between builds, so
+# a rebuild after a small change recompiles incrementally rather than from
+# zero — first build is still the slow one.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/src/target \
+    cargo build --release -p mediatool-server \
+ && cp /src/target/release/mediatool-server /usr/local/bin/mediatool-server
 
 
 # ── Runtime ───────────────────────────────────────────────────────────
@@ -53,15 +76,25 @@ RUN apt-get update \
 # what actually lets this user open /dev/dri/renderD128.
 RUN useradd --system --create-home --shell /usr/sbin/nologin --uid 10001 mediatool
 
-COPY --from=build /src/target/release/mediatool-server /usr/local/bin/mediatool-server
+# Copied out of the build stage's /usr/local/bin because the target/ cache
+# mount above hides the build tree from cross-stage COPY.
+COPY --from=build /usr/local/bin/mediatool-server /usr/local/bin/mediatool-server
+COPY --from=web /app/dist /srv/web
 COPY docker/doctor.sh /usr/local/bin/mediatool-doctor
-RUN chmod +x /usr/local/bin/mediatool-doctor
+# Workspace checkouts on Windows carry CRLF (core.autocrlf=true); a \r after
+# the shebang would make the script unrunnable inside the container.
+RUN sed -i 's/\r$//' /usr/local/bin/mediatool-doctor \
+ && chmod +x /usr/local/bin/mediatool-doctor
 
 ENV MEDIATOOL_LISTEN=0.0.0.0:8787 \
     MEDIATOOL_DATA=/data \
     MEDIATOOL_ROOTS=/media \
     MEDIATOOL_STATIC=/srv/web \
     RUST_LOG=info
+
+# A named volume is initialised from this directory, so its ownership has to
+# be set here or the first mount belongs to root and uid 10001 cannot write.
+RUN mkdir -p /data && chown mediatool:mediatool /data
 
 VOLUME ["/data"]
 EXPOSE 8787

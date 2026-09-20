@@ -1,0 +1,20 @@
+# Developer override: builds mediatool from this checkout instead of
+# pulling the published image.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
+# The build context is the repository root (see docker/Dockerfile), so
+# BuildKit cache mounts make rebuilds after small edits incremental.
+
+services:
+  mediatool:
+    image: mediatool:0.1.7
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+
+    volumes:
+      # Iterate on the UI without rebuilding: `npm run build` locally and
+      # refresh the browser — the container serves this instead of the
+      # bundle baked into the image.
+      - ../dist:/srv/web:ro

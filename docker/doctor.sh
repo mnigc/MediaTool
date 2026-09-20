@@ -77,6 +77,14 @@ else
     ok "one verbatim as the redirect URI in the Google/Microsoft console"
 fi
 
+section "web ui"
+web=${MEDIATOOL_STATIC:-/srv/web}
+if [ -f "$web/index.html" ]; then
+    ok "$web/index.html is present — the server will serve the UI at /"
+else
+    bad "$web/index.html is missing — rebuild the image (the frontend is baked in since 0.1.7)"
+fi
+
 section "writability"
 data=${MEDIATOOL_DATA:-/data}
 if touch "$data/.mediatool-doctor" 2>/dev/null; then
