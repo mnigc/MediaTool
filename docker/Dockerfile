@@ -54,6 +54,11 @@ LABEL org.opencontainers.image.title="MediaTool" \
 # both oneVPL runtimes. Installing both families is deliberate — the
 # right set depends on the iGPU generation, which is unknown at build
 # time, and an unused driver costs nothing at runtime.
+#
+# intel-media-va-driver-non-free and its libmfx-gen runtime live in the
+# non-free component, which the slim images do not enable by default.
+RUN sed -i 's/^Components: .*/Components: main non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources
+
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates \
