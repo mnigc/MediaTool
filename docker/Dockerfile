@@ -44,10 +44,14 @@ FROM debian:trixie-slim AS runtime
 LABEL org.opencontainers.image.title="MediaTool" \
       org.opencontainers.image.description="Local media toolbox, headless server for NAS deployment"
 
-# ffmpeg, yt-dlp and streamlink all come from Debian rather than the
-# in-app installers, because those reach for GitHub and fail on networks
-# that cannot see it. The engine resolves each of them from PATH, so no
-# configuration is needed to pick these up.
+# ffmpeg comes from Debian rather than the in-app installer, because that
+# reaches for GitHub and fails on networks that cannot see it. The engine
+# resolves it from PATH, so no configuration is needed to pick it up.
+# yt-dlp and streamlink are the exceptions: site extractors break within
+# weeks (Bilibili answers stale releases with HTTP 412), and Debian's
+# packages lag months, so both are baked from their canonical sources — the
+# image build runs on GitHub Actions where those are reachable, and each
+# image release then ships whatever is current.
 #
 # The Intel packages are the QSV/VA-API stack: iHD (intel-media-va-driver
 # -non-free) for Gen8+ and the older i965 driver for pre-Skylake, plus the
@@ -69,9 +73,8 @@ RUN apt-get update \
       curl \
       tzdata \
       ffmpeg \
-      yt-dlp \
-      streamlink \
       python3 \
+      python3-pip \
       intel-media-va-driver-non-free \
       i965-va-driver \
       libmfx-gen1.2 \
@@ -79,6 +82,20 @@ RUN apt-get update \
       libvpl-tools \
       fonts-liberation \
  && rm -rf /var/lib/apt/lists/*
+
+# Standalone build bundles its own Python; amd64-only, matching the
+# platforms list in .github/workflows/docker-publish.yml.
+RUN curl -fsSL --retry 3 \
+      https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+      -o /usr/local/bin/yt-dlp \
+ && chmod +x /usr/local/bin/yt-dlp \
+ && yt-dlp --version
+
+# PyPI is streamlink's canonical source (no standalone Linux binary exists);
+# the site plugins — including the former plugin collection — ship inside
+# the main package, so updating it refreshes them too.
+RUN pip3 install --no-cache-dir --break-system-packages -U streamlink \
+ && streamlink --version
 
 # The render group of the host, granted through compose's `group_add`, is
 # what actually lets this user open /dev/dri/renderD128.
