@@ -84,9 +84,10 @@ static CACHED: OnceLock<GpuInfo> = OnceLock::new();
 /// Run `ffmpeg -encoders` and return its output (stdout, falling back to
 /// stderr) — used only to skip backends the build does not even contain.
 fn encoder_listing(bin: &std::path::Path) -> String {
-    let output = Command::new(bin)
-        .args(["-hide_banner", "-encoders"])
-        .output();
+    let mut cmd = Command::new(bin);
+    cmd.args(["-hide_banner", "-encoders"]);
+    ffmpeg::hide_console(&mut cmd);
+    let output = cmd.output();
     match output {
         Ok(o) => {
             let mut s = String::from_utf8_lossy(&o.stdout).to_string();
@@ -114,9 +115,10 @@ fn backend_works(bin: &std::path::Path, backend: &Backend) -> bool {
     ];
     args.extend_from_slice(backend.tail);
     args.extend_from_slice(&["-f", "null", "-"]);
-    Command::new(bin)
-        .args(&args)
-        .output()
+    let mut cmd = Command::new(bin);
+    cmd.args(&args);
+    ffmpeg::hide_console(&mut cmd);
+    cmd.output()
         .map(|o| o.status.success())
         .unwrap_or(false)
 }

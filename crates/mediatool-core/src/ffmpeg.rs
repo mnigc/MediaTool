@@ -15,6 +15,17 @@ pub fn binary_name(base: &str) -> String {
     }
 }
 
+/// GUI-subsystem parents otherwise pop up a console window per child.
+pub(crate) fn hide_console(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    #[cfg(not(windows))]
+    let _ = cmd;
+}
+
 /// Locate a binary: next to the running executable, then walking up the
 /// directory tree looking for a `binaries/` folder (dev layout:
 /// `src-tauri/binaries`), then the shell's resource dir, then the system PATH
@@ -61,14 +72,13 @@ pub fn resolve(env: &dyn AppEnv, base: &str) -> Option<PathBuf> {
     // Last resort: let the OS resolve the bare name. (On Windows this search
     // also covers the current working directory — find_in_path above already
     // checked the real PATH dirs, so this only fires when nothing else worked.)
-    if Command::new(&name)
+    let mut probe = Command::new(&name);
+    probe
         .arg("-version")
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-    {
+        .stderr(Stdio::null());
+    hide_console(&mut probe);
+    if probe.status().map(|s| s.success()).unwrap_or(false) {
         return Some(PathBuf::from(&name));
     }
 
@@ -112,12 +122,7 @@ pub fn spawn(
 
     let mut cmd = Command::new(&bin);
     cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // GUI-subsystem parents otherwise pop up a console window per child.
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
+    hide_console(&mut cmd);
 
     let mut child = cmd.spawn().map_err(AppError::from)?;
     let stdout = child
