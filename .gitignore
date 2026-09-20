@@ -39,3 +39,6 @@ hdr_test.mkv
 
 # Workspace build artifacts
 /target
+
+# NAS deployment config: holds MEDIATOOL_TOKEN, never commit
+docker/.env

@@ -1,22 +1,9 @@
-# MediaTool on a NAS: 24/7 headless operation, pulled from Docker Hub.
-#
-#   1. copy .env.example to .env and set MEDIATOOL_TOKEN
-#   2. point MEDIA_LIBRARY / OUTPUT_DIR at your real share paths
-#   3. docker compose up -d
-#   4. docker compose exec mediatool mediatool-doctor   # verify QSV works
-#
-# In 1Panel: 容器 → 编排 → create a project and paste this file, then add
-# the same variables through the project's .env editor.
-#
-# Paths inside the container are what the web UI shows and what jobs write
-# to, so choose them to be readable names rather than mirroring the host
-# layout exactly.
+# MediaTool on a NAS: set .env, then `docker compose up -d`.
+# Details (GPU passthrough, OAuth, troubleshooting) are in README.md.
 
 services:
   mediatool:
-    # Published by CI on every version tag. If you build locally instead,
-    # use docker-compose.build.yml and change this to mediatool:0.1.7.
-    image: gwakcho/mediatool:0.1.7
+    image: gwakcho/mediatool:latest   # CI also publishes version tags for pinning
     container_name: mediatool
     restart: unless-stopped
 
@@ -24,50 +11,25 @@ services:
       - "${PORT:-8787}:8787"
 
     environment:
-      MEDIATOOL_LISTEN: 0.0.0.0:8787
-      # Required: the server refuses to start without it, since it exposes
-      # file browsing and job execution to the whole LAN.
       MEDIATOOL_TOKEN: ${MEDIATOOL_TOKEN:?MEDIATOOL_TOKEN must be set in .env}
-      MEDIATOOL_DATA: /data
-      # Comma-separated. The output directory is listed too so the UI can
-      # browse what it wrote.
-      MEDIATOOL_ROOTS: /media/library,/media/output
-      MEDIATOOL_STATIC: /srv/web
-      # Only YouTube/Drive/OneDrive authorization reads this: the provider
-      # sends the browser back to <this>/oauth/callback, so it has to be the
-      # address your browser uses, not the container's. Empty disables that
-      # one feature; everything else runs fine without it.
-      MEDIATOOL_PUBLIC_URL: ${PUBLIC_URL:-}
-      RUST_LOG: ${RUST_LOG:-info}
-      TZ: ${TZ:-Asia/Shanghai}
+      # Only for browser OAuth (YouTube/Drive/OneDrive): must be the exact
+      # URL you type in the browser, including the port.
+      # MEDIATOOL_PUBLIC_URL: ${PUBLIC_URL:-}
+      # TZ: Asia/Shanghai
 
     volumes:
-      # Managed binaries, cookies, monitor definitions.
       - mediatool-data:/data
-      # Inputs, read-only: a job must never be able to destroy its own source.
       - ${MEDIA_LIBRARY:?MEDIA_LIBRARY must be set in .env}:/media/library:ro
-      # Outputs, writable. Keep this outside the read-only mount.
       - ${OUTPUT_DIR:?OUTPUT_DIR must be set in .env}:/media/output:rw
 
-    # Intel Quick Sync / VAAPI need the render node, and the container user
-    # has to be in the host's render group to open it. Find the GID on the
-    # NAS with `stat -c %g /dev/dri/renderD128`, then uncomment:
-    #
+    # Intel QSV/VAAPI: uncomment, then set the GID from
+    # `stat -c %g /dev/dri/renderD128`. See README for details.
     # devices:
     #   - /dev/dri:/dev/dri
     # group_add:
     #   - "989"
-    #
-    # Without this the server still runs, but the GPU picker will correctly
-    # show no hardware backend and everything encodes on the CPU.
 
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8787/healthz"]
-      interval: 30s
-      timeout: 5s
-      start_period: 20s
-      retries: 3
-
+    # Keeps json-file logs from filling the disk.
     logging:
       driver: json-file
       options:
