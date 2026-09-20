@@ -9,7 +9,6 @@ import {
 } from "./registry";
 import {
   CameraIcon,
-  ConvertIcon,
   ExtractAudioIcon,
   MergeIcon,
   MuteIcon,
@@ -20,7 +19,6 @@ import {
   SubtitleIcon,
   VolumeIcon,
   WatermarkIcon,
-  WorkflowIcon,
   FrameStripIcon,
   GridIcon,
   WaveDetectIcon,
@@ -28,7 +26,6 @@ import {
 
 const TOOL_ICONS: Record<WorkbenchId, ComponentType<{ className?: string }>> = {
   "video-compress": SlidersIcon,
-  "video-convert": ConvertIcon,
   trim: ScissorsIcon,
   mute: MuteIcon,
   screenshot: CameraIcon,
@@ -40,12 +37,10 @@ const TOOL_ICONS: Record<WorkbenchId, ComponentType<{ className?: string }>> = {
   "video-contact": GridIcon,
   "video-silence": WaveDetectIcon,
   "audio-compress": SlidersIcon,
-  "audio-convert": ConvertIcon,
   "extract-audio": ExtractAudioIcon,
   "audio-volume": VolumeIcon,
   "audio-merge": MergeIcon,
   inspect: SearchIcon,
-  workflow: WorkflowIcon,
 };
 
 const MODULE_TITLE: Record<ModuleId, string> = {

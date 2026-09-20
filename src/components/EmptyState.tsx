@@ -11,7 +11,7 @@ export default function EmptyState({
   const text = message ?? t("empty.message");
   return (
     <div className="mt-16 flex flex-col items-center justify-center text-center">
-      <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-3xl bg-brand-50 dark:bg-brand-950/40">
+      <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br from-brand-50 via-brand-100 to-brand-200/70 shadow-inner dark:bg-brand-950/40">
         <svg viewBox="0 0 48 48" fill="none" className="h-10 w-10" aria-hidden>
           <rect x="6" y="10" width="24" height="28" rx="4" stroke="#4F6BBD" strokeWidth="2" />
           <rect x="18" y="16" width="24" height="28" rx="4" stroke="#8FA2EE" strokeWidth="2" />

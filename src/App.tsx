@@ -4,7 +4,7 @@ import ToolNav from "./components/ToolNav";
 import ToastContainer from "./components/ToastContainer";
 import WebGate from "./components/WebGate";
 import { FileBrowserProvider } from "./components/FileBrowser";
-import { appVersion } from "./lib/shell";
+import { appVersion, revealWindow } from "./lib/shell";
 import { useTheme, type ThemeMode } from "./hooks/useTheme";
 import { useToasts, type ToastItem } from "./hooks/useToasts";
 import { useUpdater } from "./hooks/useUpdater";
@@ -69,7 +69,7 @@ function AppShell({
       case "presets":
         return <PresetsPage onOpenTool={openTool} />;
       case "workflow":
-        return <WorkflowPage />;
+        return <WorkflowPage onOpenTasks={() => setRoute({ kind: "module", id: "tasks" })} />;
       case "download":
         return (
           <DownloadPage onOpenSettings={() => setRoute({ kind: "module", id: "settings" })} />
@@ -109,6 +109,13 @@ function AppShell({
 export default function App() {
   const { themeMode, setThemeMode } = useTheme();
   const { toasts, pushToast, dismissToast } = useToasts();
+
+  useEffect(() => {
+    // Reveal the hidden window once the first frame is painted (Rust has a
+    // 5s fallback timer in case this never runs).
+    const raf = requestAnimationFrame(() => revealWindow());
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
   return (
     <WebGate>

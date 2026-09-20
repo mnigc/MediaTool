@@ -4,7 +4,7 @@ import PresetsBar from "../components/PresetsBar";
 import { isBatchEditable } from "./kinds";
 
 /** Tool panels that expose a scenario/builtin preset bar on top of their own
- *  params editor (compress/convert tools use OptionsPanel which already renders
+ *  params editor (the transcode tools use OptionsPanel which already renders
  *  PresetsBar). */
 const SCENARIO_TOOLS = new Set<string>([
   "watermark",
@@ -35,7 +35,7 @@ import VideoContactPanel from "./panels/VideoContactPanel";
 import VideoSilencePanel from "./panels/VideoSilencePanel";
 
 /** Single editor that dispatches to the right params panel for any tool.
- *  Compress/convert tools use OptionsPanel; toolbox tools use their own
+ *  Transcode tools use OptionsPanel; toolbox tools use their own
  *  panel. Tools with no params render nothing. */
 export default function JobParamsEditor({
   toolId,

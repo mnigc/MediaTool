@@ -11,7 +11,7 @@ export default function Header() {
   const { t } = useI18n();
 
   return (
-    <header className="sticky top-0 z-10 border-b border-neutral-200 bg-white/80 dark:border-neutral-800 dark:bg-neutral-950/80 backdrop-blur-md">
+    <header className="sticky top-0 z-10 border-b border-neutral-200/70 bg-white/80 dark:border-neutral-800 dark:bg-neutral-950/80 backdrop-blur-md">
       <div className="flex w-full items-center gap-3 px-4 py-3">
         <div
           data-tauri-drag-region

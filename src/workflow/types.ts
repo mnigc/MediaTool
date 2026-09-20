@@ -19,7 +19,6 @@ export interface Workflow {
 /** Tools offered when adding a workflow step (video in → chain). */
 export const WORKFLOW_STEP_TOOLS: string[] = [
   "video-compress",
-  "video-convert",
   "trim",
   "speed",
   "mute",

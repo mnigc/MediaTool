@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import type { Job, JobParams } from "../types";
 import JobParamsEditor from "../tools/JobParamsEditor";
 import { getThumbnail } from "../lib/engine";
@@ -130,7 +130,7 @@ export default function JobCard({
   const isDone = job.phase === "done";
   const isRunning = job.phase === "running";
   const isQueued = job.phase === "queued";
-  // Compress/convert tools show a size estimate; all queued jobs are editable.
+  // Transcode tools show a size estimate; all queued jobs are editable.
   const isCore = isBatchEditable(job.toolId);
   const isEditable = job.toolId !== "inspect";
   const [over, setOver] = useState(false);
@@ -213,21 +213,26 @@ export default function JobCard({
         setOver(false);
         onReorderDrop?.(job.uiId);
       }}
-      className={`pop stagger-in ${staggerClass(startIndex)} rounded-2xl bg-white p-5 shadow-card ring-1 ring-neutral-200 transition-all duration-200 ${statusClass(job.phase)} ${
+      className={`pop stagger-in ${staggerClass(startIndex)} rounded-2xl bg-white p-4 shadow-card ring-1 ring-neutral-200 transition-all duration-200 ${statusClass(job.phase)} ${
         over ? "ring-2 ring-brand-400 shadow-md" : ""
       } ${
         draggable ? "cursor-grab active:cursor-grabbing" : ""
-      } hover:shadow-card-hover dark:bg-neutral-900 dark:ring-neutral-800`}
+      } ${isRunning ? "job-fill" : ""} hover:shadow-card-hover dark:bg-neutral-900 dark:ring-neutral-800`}
+      style={
+        isRunning
+          ? ({ "--job-fill": `${Math.min(Math.max(job.percent, 0), 100)}%` } as CSSProperties)
+          : undefined
+      }
     >
       <div className="flex items-start gap-4">
         {thumb ? (
           <img
             src={thumb}
             alt=""
-            className="h-16 w-28 shrink-0 rounded-xl object-cover ring-1 ring-neutral-200 dark:ring-neutral-700"
+            className="h-14 w-24 shrink-0 rounded-xl object-cover ring-1 ring-neutral-200 dark:ring-neutral-700"
           />
         ) : (
-          <div className={`flex h-16 w-28 shrink-0 items-center justify-center rounded-xl ${badge.cls}`}>
+          <div className={`flex h-14 w-24 shrink-0 items-center justify-center rounded-xl ${badge.cls}`}>
             <Icon className="h-6 w-6" />
           </div>
         )}
@@ -350,7 +355,7 @@ export default function JobCard({
       {isQueued && (
         <>
           {isEditable && onChangeParams && (
-            <div className="mt-4 border-t border-neutral-100 pt-4 dark:border-neutral-700/60">
+            <div className="mt-3 border-t border-neutral-100 pt-3 dark:border-neutral-700/60">
               <JobParamsEditor
                 toolId={job.toolId}
                 params={job.params}
@@ -358,7 +363,7 @@ export default function JobCard({
               />
             </div>
           )}
-          <div className="mt-4 flex items-center gap-2">
+          <div className="mt-3 flex items-center gap-2">
             <button
               onClick={() => onStart(job.uiId)}
               className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-brand-600 dark:bg-brand-600"
@@ -371,12 +376,15 @@ export default function JobCard({
       )}
 
       {isRunning && (
-        <div className="mt-4">
-          <div className="mb-1.5 flex items-center justify-between text-xs text-neutral-500 dark:text-neutral-400">
-            <span className="flex items-center gap-1.5 text-brand-600 dark:text-brand-400">
-              <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
-              {t("job.processing")}
-            </span>
+        <div
+          className="mt-2.5 flex items-center justify-between text-xs text-neutral-500 dark:text-neutral-400"
+          title={job.startedAt ? getProgressDetail(job, t) : undefined}
+        >
+          <span className="flex items-center gap-1.5 text-brand-600 dark:text-brand-400">
+            <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
+            {t("job.processing")}
+          </span>
+          <span className="flex items-center gap-3">
             <span className="font-medium text-neutral-700 dark:text-neutral-300">
               {job.percent.toFixed(1)}%
               {job.startedAt
@@ -387,38 +395,13 @@ export default function JobCard({
                   })()
                 : null}
             </span>
-          </div>
-          <div
-            className="relative w-full progress-tooltip-trigger"
-            title={job.startedAt ? getProgressDetail(job, t) : ""}
-          >
-            <div className="h-2 w-full overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
-              <div
-                className="relative h-full rounded-full brand-progress transition-all duration-300"
-                style={{ width: `${job.percent}%` }}
-              >
-                <div className="absolute inset-0 rounded-full brand-shimmer" />
-              </div>
-            </div>
-            {job.startedAt && (
-              <div className="absolute left-1/2 top-6 -translate-x-1/2 z-10 hidden rounded-lg bg-neutral-900 px-3 py-2 text-xs text-white shadow-lg whitespace-nowrap progress-tooltip dark:bg-neutral-700">
-                <div className="font-medium">{getProgressDetail(job, t)}</div>
-                <div className="mt-0.5 text-neutral-400">
-                  <span>{job.info.sizeBytes ? formatBytes(job.info.sizeBytes) : "—"}</span>
-                  {job.outputSize != null ? <span> → {formatBytes(job.outputSize)}</span> : ""}
-                </div>
-                <div className="absolute left-1/2 -top-1.5 -translate-x-1/2 h-2 w-2 rotate-45 bg-neutral-900 dark:bg-neutral-700" />
-              </div>
-            )}
-          </div>
-          <div className="mt-3 flex justify-end">
             <button
               onClick={() => onCancel(job.uiId)}
-              className="rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+              className="rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
             >
               {t("confirm.cancel")}
             </button>
-          </div>
+          </span>
         </div>
       )}
 
@@ -558,11 +541,11 @@ export default function JobCard({
       )}
 
       {job.phase === "cancelled" && (
-        <div className="mt-4 rounded-xl bg-neutral-50 px-4 py-2.5 text-sm text-neutral-400 ring-1 ring-neutral-200 dark:bg-neutral-800 dark:text-neutral-500 dark:ring-neutral-700">
+        <div className="mt-2.5 flex items-center justify-between rounded-xl bg-neutral-50 px-4 py-2 text-sm text-neutral-400 ring-1 ring-neutral-200 dark:bg-neutral-800 dark:text-neutral-500 dark:ring-neutral-700">
           {t("job.cancelled")}
           <button
             onClick={() => onRetry(job.uiId)}
-            className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl border border-brand-200 bg-brand-50 px-4 py-2 text-sm font-medium text-brand-700 transition hover:bg-brand-100 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-300 dark:hover:bg-brand-900"
+            className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700 transition hover:bg-brand-100 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-300 dark:hover:bg-brand-900"
           >
             {t("job.retry")}
           </button>

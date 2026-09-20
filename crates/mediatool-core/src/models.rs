@@ -119,11 +119,15 @@ pub struct ExtractAudioParams {
 #[serde(rename_all = "camelCase")]
 pub struct ScreenshotParams {
     /// "single" (one frame at at_sec) | "interval" (every_sec within range)
+    /// | "count" (N frames spread evenly across the whole file)
     pub mode: String,
     /// single mode: timestamp of the frame
     pub at_sec: Option<f64>,
     /// interval mode: capture one frame every N seconds
     pub every_sec: Option<f64>,
+    /// count mode: number of frames to export
+    #[serde(default)]
+    pub count: Option<u32>,
     /// interval mode: range start (default 0)
     pub start_sec: Option<f64>,
     /// interval mode: range end (None = to end of file)

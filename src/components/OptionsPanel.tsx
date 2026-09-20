@@ -21,25 +21,20 @@ export default function OptionsPanel({ toolId, params, onChange }: Props) {
     switch (toolId) {
       case "video-compress":
         return <VideoCompressOptions params={params} onChange={onChange} />;
-      case "video-convert":
-        return <VideoConvertOptions params={params as VideoParams} onChange={onChange} />;
       case "audio-compress":
         return <AudioCompressOptions params={params as AudioParams} onChange={onChange} />;
-      case "audio-convert":
-        return <AudioConvertOptions params={params as AudioParams} onChange={onChange} />;
       default:
         return null;
     }
   };
 
-  const showPresets = !toolId.endsWith("-convert");
   // While collapsed, the header line carries a one-line params summary so
   // multi-task lists stay scannable without expanding every card.
   const summary = expanded ? "" : presetSummary({ name: "", toolId, params, builtin: false }, t);
 
   return (
     <div className="flex flex-col gap-3">
-      {showPresets && <PresetsBar toolId={toolId} params={params} onChange={onChange} />}
+      <PresetsBar toolId={toolId} params={params} onChange={onChange} />
       <SettingsCollapsible
         expanded={expanded}
         onToggle={() => setExpanded(!expanded)}
@@ -89,7 +84,7 @@ function SettingsCollapsible({ expanded, onToggle, summary, children }: {
         }`}
       >
         <div className="overflow-hidden">
-          <div className="rounded-xl border border-neutral-100 bg-white p-4 pt-3 dark:border-neutral-700/60 dark:bg-neutral-800/30">
+          <div className="rounded-xl border border-neutral-100 bg-white p-3 dark:border-neutral-700/60 dark:bg-neutral-800/30">
             {children}
           </div>
         </div>
@@ -109,29 +104,13 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function FieldRow({ children }: { children: ReactNode }) {
-  return <div className="grid grid-cols-2 gap-3">{children}</div>;
-}
-
-function SectionDivider({ label }: { label: string }) {
-  return (
-    <div className="flex items-center justify-between py-1.5">
-      <span className="text-xs font-semibold text-neutral-600 dark:text-neutral-300">{label}</span>
-    </div>
-  );
+function FieldRow({ cols = 2, children }: { cols?: 2 | 3; children: ReactNode }) {
+  return <div className={`grid ${cols === 3 ? "grid-cols-3" : "grid-cols-2"} gap-3`}>{children}</div>;
 }
 
 const sel = `${inputClsSm} w-full`;
 
 const range = "mp-range flex-1";
-
-const sourceTag =
-  "w-full rounded-lg border border-dashed border-neutral-200 bg-neutral-50 px-2.5 py-1.5 text-xs text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800/60 dark:text-neutral-400";
-
-/** Fixed-format chip used by compress tools that keep the source container. */
-function SourceFormatChip({ label }: { label: string }) {
-  return <div className={sourceTag}>{label}</div>;
-}
 
 /* ── 视频压缩 ───────────────────────────────────── */
 
@@ -146,20 +125,26 @@ export function VideoCompressOptions({
   const tasks = useTasks();
   const v = params as VideoParams;
   const set = (patch: Partial<VideoParams>) => onChange({ ...params, ...patch } as JobParams);
+  const changeFormat = (format: string) => {
+    // WebM strictly requires VP9+Opus, so switching containers brings the
+    // codecs along; other containers keep the current codec choice.
+    if (format === "webm") set({ format, videoCodec: "libvpx-vp9", audioCodec: "opus" });
+    else set({ format });
+  };
   // The backend silently swaps libx264 for the GPU encoder when the sidebar
   // picked one — surface that here, since the codec select still says "H.264".
   const gpuName = tasks.settings.gpu ? t(`gpu.${tasks.settings.gpu}`) : "";
 
   return (
-    <div className="space-y-3">
-      <SectionDivider label={t("opt.videoOutput")} />
-
-      <FieldRow>
+    <div className="space-y-2">
+      <FieldRow cols={3}>
         <Field label={t("opt.format")}>
-          <Select className="w-full" value={v.format} onChange={(v) => set({ format: v })}>
+          <Select className="w-full" value={v.format} onChange={changeFormat}>
             <option value="source">{t("opt.format.source")}</option>
             <option value="mp4">MP4</option>
             <option value="mkv">MKV</option>
+            <option value="webm">WebM</option>
+            <option value="mov">MOV</option>
           </Select>
         </Field>
         <Field label={t("opt.codec")}>
@@ -171,62 +156,66 @@ export function VideoCompressOptions({
             <option value="copy">{t("opt.copy")}</option>
           </Select>
         </Field>
+        {/* Stream copy ignores every encode-quality knob, so hide them rather
+            than render a CRF slider stuck at its fallback value. */}
+        {v.videoCodec !== "copy" && (
+          <Field label={t("opt.qualityMode")}>
+            <Select className="w-full" value={v.qualityMode} onChange={(v) => set({ qualityMode: v })}>
+              <option value="crf">{t("opt.crf")}</option>
+              <option value="target_size">{t("opt.targetSize")}</option>
+              <option value="bitrate">{t("opt.fixedBitrate")}</option>
+            </Select>
+          </Field>
+        )}
       </FieldRow>
       {/* Kept outside the field rows: inside one it distorts the grid and
           shoves the select out of the card. */}
       {gpuName && (v.videoCodec === "libx264" || v.videoCodec === "libx265") && (
-        <p className="-mt-1.5 text-[10px] text-neutral-400 dark:text-neutral-500">
+        <p className="-mt-1 text-[10px] text-neutral-400 dark:text-neutral-500">
           {t("opt.gpuActive", { name: gpuName })}
         </p>
       )}
-      <FieldRow>
-        <Field label={t("opt.qualityMode")}>
-          <Select className="w-full" value={v.qualityMode} onChange={(v) => set({ qualityMode: v })}>
-            <option value="crf">{t("opt.crf")}</option>
-            <option value="target_size">{t("opt.targetSize")}</option>
-            <option value="bitrate">{t("opt.fixedBitrate")}</option>
-          </Select>
-        </Field>
-      </FieldRow>
 
-      <div className="space-y-2 rounded-xl bg-neutral-50/50 p-3 dark:bg-neutral-800/40">
-        {v.qualityMode === "crf" && (
+      <div className="space-y-2 rounded-xl bg-neutral-100/70 p-2.5 dark:bg-neutral-800/60">
+        {v.videoCodec !== "copy" && v.qualityMode === "crf" && (
           <div>
-            <div className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
-              {t("opt.crfQuality", { n: v.crf ?? 28 })}
+            <div className="flex items-center gap-3">
+              <span className="shrink-0 text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                {t("opt.crfQuality", { n: v.crf ?? 28 })}
+              </span>
+              <input
+                type="range"
+                min={18}
+                max={40}
+                value={v.crf ?? 28}
+                onChange={(e) => set({ crf: Number(e.target.value) })}
+                className={range}
+                // The job card is natively draggable for reordering, which
+                // hijacks scrubbing into a card drag — clicks still landed but
+                // the thumb never followed the pointer. Claiming draggable here
+                // makes the slider the drag source, and cancelling the drag
+                // hands mouse moves back to the range control.
+                draggable={true}
+                onDragStart={(e) => e.preventDefault()}
+              />
             </div>
-            <input
-              type="range"
-              min={18}
-              max={40}
-              value={v.crf ?? 28}
-              onChange={(e) => set({ crf: Number(e.target.value) })}
-              className={`${range} mt-2`}
-              // The job card is natively draggable for reordering, which
-              // hijacks scrubbing into a card drag — clicks still landed but
-              // the thumb never followed the pointer. Claiming draggable here
-              // makes the slider the drag source, and cancelling the drag
-              // hands mouse moves back to the range control.
-              draggable={true}
-              onDragStart={(e) => e.preventDefault()}
-            />
             <div className="mt-0.5 flex justify-between text-[10px] text-neutral-400 dark:text-neutral-500">
               <span>18 · {t("opt.crf.hint.low")}</span>
               <span>{t("opt.crf.hint.high")} · 40</span>
             </div>
           </div>
         )}
-        {v.qualityMode === "target_size" && (
+        {v.videoCodec !== "copy" && v.qualityMode === "target_size" && (
           <Field label={t("opt.targetSizeMb")}>
             <input type="number" className={sel} min={1} value={v.targetSizeMb ?? ""} onFocus={(e) => e.currentTarget.select()} onChange={(e) => set({ targetSizeMb: e.target.value === "" ? undefined : Number(e.target.value) })} />
           </Field>
         )}
-        {v.qualityMode === "bitrate" && (
+        {v.videoCodec !== "copy" && v.qualityMode === "bitrate" && (
           <Field label={t("opt.bitrate")}>
             <input type="number" className={sel} min={100} value={v.videoBitrateKbps ?? ""} onFocus={(e) => e.currentTarget.select()} onChange={(e) => set({ videoBitrateKbps: e.target.value === "" ? undefined : Number(e.target.value) })} />
           </Field>
         )}
-        <FieldRow>
+        <FieldRow cols={v.videoCodec === "copy" ? 2 : 3}>
           <Field label={t("opt.resolution")}>
             <Select className="w-full" value={v.resolution} onChange={(v) => set({ resolution: v })}>
               <option value="original">{t("opt.res.original")}</option>
@@ -237,19 +226,19 @@ export function VideoCompressOptions({
               <option value="480p">480p</option>
             </Select>
           </Field>
-          <Field label={t("opt.speed")}>
-            <Select className="w-full" value={v.preset} onChange={(v) => set({ preset: v })}>
-              <option value="veryfast">{t("opt.speed.veryfast")}</option>
-              <option value="faster">{t("opt.speed.faster")}</option>
-              <option value="fast">{t("opt.speed.fast")}</option>
-              <option value="medium">{t("opt.speed.medium")}</option>
-              <option value="slow">{t("opt.speed.slow")}</option>
-              <option value="slower">{t("opt.speed.slower")}</option>
-              <option value="veryslow">{t("opt.speed.veryslow")}</option>
-            </Select>
-          </Field>
-        </FieldRow>
-        <FieldRow>
+          {v.videoCodec !== "copy" && (
+            <Field label={t("opt.speed")}>
+              <Select className="w-full" value={v.preset} onChange={(v) => set({ preset: v })}>
+                <option value="veryfast">{t("opt.speed.veryfast")}</option>
+                <option value="faster">{t("opt.speed.faster")}</option>
+                <option value="fast">{t("opt.speed.fast")}</option>
+                <option value="medium">{t("opt.speed.medium")}</option>
+                <option value="slow">{t("opt.speed.slow")}</option>
+                <option value="slower">{t("opt.speed.slower")}</option>
+                <option value="veryslow">{t("opt.speed.veryslow")}</option>
+              </Select>
+            </Field>
+          )}
           <Field label={t("opt.fps")}>
             <Select className="w-full" value={v.fps ? String(v.fps) : ""} onChange={(v) => set({ fps: v ? Number(v) : undefined })}>
               <option value="">{t("opt.fps.original")}</option>
@@ -263,7 +252,6 @@ export function VideoCompressOptions({
         </FieldRow>
       </div>
 
-      <SectionDivider label={t("opt.audio")} />
       <FieldRow>
         <Field label={t("opt.audioCodec")}>
           <Select className="w-full" value={v.audioCodec} onChange={(v) => set({ audioCodec: v })}>
@@ -283,131 +271,7 @@ export function VideoCompressOptions({
   );
 }
 
-/* ── 质量档次（转换工具共用）────────────────────── */
-
-type QualityTier = "high" | "balanced" | "compact";
-
-const TIER_ORDER: QualityTier[] = ["high", "balanced", "compact"];
-
-const TIER_KEY: Record<QualityTier, string> = {
-  high: "opt.tier.high",
-  balanced: "opt.tier.balanced",
-  compact: "opt.tier.compact",
-};
-
-function TierPicker({ value, onChange }: {
-  value: QualityTier;
-  onChange: (t: QualityTier) => void;
-}) {
-  const { t } = useI18n();
-  return (
-    <div className="flex flex-wrap items-center justify-end gap-1.5">
-      {TIER_ORDER.map((tier) => (
-        <button
-          key={tier}
-          type="button"
-          onClick={() => onChange(tier)}
-          className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${
-            value === tier
-              ? "bg-brand-500 text-white dark:bg-brand-600"
-              : "border border-neutral-200 bg-white text-neutral-600 hover:border-brand-200 hover:bg-brand-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:border-brand-800 dark:hover:bg-brand-950/40"
-          }`}
-        >
-          {t(TIER_KEY[tier])}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-/* ── 视频转换（极简：格式 + 质量档，其余全自动）──── */
-
-/** Container → codec set + per-tier CRF. WebM strictly requires VP9+Opus. */
-const CONVERT_PRESETS: Record<string, {
-  codec: string;
-  audio: string;
-  crf: Record<QualityTier, number>;
-}> = {
-  mp4: { codec: "libx264", audio: "aac", crf: { high: 18, balanced: 22, compact: 27 } },
-  webm: { codec: "libvpx-vp9", audio: "opus", crf: { high: 26, balanced: 31, compact: 35 } },
-  mkv: { codec: "libx264", audio: "aac", crf: { high: 18, balanced: 22, compact: 27 } },
-  mov: { codec: "libx264", audio: "aac", crf: { high: 18, balanced: 22, compact: 27 } },
-};
-
-const TIER_AUDIO_KBPS: Record<QualityTier, number> = { high: 256, balanced: 192, compact: 128 };
-
-function tierOfVideo(v: VideoParams): QualityTier {
-  const d = CONVERT_PRESETS[v.format];
-  if (!d) return "balanced";
-  if (v.crf === d.crf.high) return "high";
-  if (v.crf === d.crf.compact) return "compact";
-  return "balanced";
-}
-
-export function VideoConvertOptions({
-  params,
-  onChange,
-}: {
-  params: VideoParams;
-  onChange: (p: JobParams) => void;
-}) {
-  const { t } = useI18n();
-  const v = params;
-
-  const changeFormat = (format: string) => {
-    const d = CONVERT_PRESETS[format] ?? CONVERT_PRESETS.mp4;
-    onChange({
-      ...v,
-      videoCodec: d.codec,
-      qualityMode: "crf",
-      crf: d.crf.balanced,
-      targetSizeMb: undefined,
-      videoBitrateKbps: undefined,
-      resolution: "original",
-      audioCodec: d.audio,
-      audioBitrateKbps: TIER_AUDIO_KBPS.balanced,
-      format,
-      preset: "medium",
-      fps: undefined,
-    });
-  };
-
-  const changeTier = (tier: QualityTier) => {
-    const d = CONVERT_PRESETS[v.format] ?? CONVERT_PRESETS.mp4;
-    onChange({
-      ...v,
-      videoCodec: d.codec,
-      qualityMode: "crf",
-      crf: d.crf[tier],
-      audioCodec: d.audio,
-      audioBitrateKbps: TIER_AUDIO_KBPS[tier],
-      preset: "medium",
-    });
-  };
-
-  return (
-    <div className="space-y-3">
-      <FieldRow>
-        <Field label={t("opt.format")}>
-          <Select className="w-full" value={v.format} onChange={(v) => changeFormat(v)}>
-            <option value="mp4">MP4</option>
-            <option value="webm">WebM</option>
-            <option value="mkv">MKV</option>
-            <option value="mov">MOV</option>
-          </Select>
-        </Field>
-        <Field label={t("opt.tier")}>
-          <TierPicker value={tierOfVideo(v)} onChange={changeTier} />
-        </Field>
-      </FieldRow>
-      <p className="text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
-        {t("opt.convert.autoHint")}
-      </p>
-    </div>
-  );
-}
-
-/* ── 音频压缩（保持格式降码率）────────────────── */
+/* ── 音频转码（压缩/换格式共用）────────────────── */
 
 export function AudioCompressOptions({ params, onChange }: {
   params: AudioParams;
@@ -415,38 +279,14 @@ export function AudioCompressOptions({ params, onChange }: {
 }) {
   const { t } = useI18n();
   const set = (patch: Partial<AudioParams>) => onChange({ ...params, ...patch });
+  // FLAC is lossless — a bitrate target would be meaningless.
+  const showBitrate = params.format !== "flac";
 
   return (
-    <div className="space-y-3">
-      <FieldRow>
-        <Field label={t("opt.format")}>
-          <SourceFormatChip label={t("opt.format.sourceKeep")} />
-        </Field>
-        <Field label={t("opt.bitrate")}>
-          <input type="number" className={sel} min={32} value={params.bitrateKbps ?? 128} onFocus={(e) => e.currentTarget.select()} onChange={(e) => set({ bitrateKbps: Number(e.target.value) })} />
-        </Field>
-      </FieldRow>
-    </div>
-  );
-}
-
-/* ── 音频转换（极简：仅选格式，码率自动）────────── */
-
-const AUDIO_CONVERT_KBPS: Record<string, number> = { mp3: 192, aac: 128, m4a: 128, opus: 128 };
-
-export function AudioConvertOptions({ params, onChange }: {
-  params: AudioParams;
-  onChange: (p: AudioParams) => void;
-}) {
-  const { t } = useI18n();
-
-  const changeFormat = (format: string) =>
-    onChange({ ...params, format, bitrateKbps: AUDIO_CONVERT_KBPS[format] ?? params.bitrateKbps });
-
-  return (
-    <div className="space-y-3">
+    <FieldRow>
       <Field label={t("opt.format")}>
-        <Select className="w-full" value={params.format} onChange={(v) => changeFormat(v)}>
+        <Select className="w-full" value={params.format} onChange={(f) => set({ format: f })}>
+          <option value="source">{t("opt.format.source")}</option>
           <option value="mp3">MP3</option>
           <option value="aac">AAC</option>
           <option value="m4a">M4A</option>
@@ -454,9 +294,11 @@ export function AudioConvertOptions({ params, onChange }: {
           <option value="flac">FLAC</option>
         </Select>
       </Field>
-      <p className="text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
-        {t("opt.audio.autoBitrate")}
-      </p>
-    </div>
+      {showBitrate && (
+        <Field label={t("opt.bitrate")}>
+          <input type="number" className={sel} min={32} value={params.bitrateKbps ?? 128} onFocus={(e) => e.currentTarget.select()} onChange={(e) => set({ bitrateKbps: Number(e.target.value) })} />
+        </Field>
+      )}
+    </FieldRow>
   );
 }

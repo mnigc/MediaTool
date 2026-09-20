@@ -531,10 +531,11 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
         setTasks((prev) => {
           if (!prev.some((x) => x.id === e.id)) return prev;
           return prev.map((x) =>
-            x.id === e.id
+            // Same as the encode cards: a cancelled task's lingering engine
+            // events must not flip the card back to "running".
+            x.id === e.id && x.phase === "running"
               ? {
                   ...x,
-                  phase: e.phase === "done" ? x.phase : "running",
                   percent: e.percent,
                   speed: e.speed ?? x.speed,
                   eta: e.eta ?? null,

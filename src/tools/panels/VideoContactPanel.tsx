@@ -23,7 +23,7 @@ export default function VideoContactPanel({
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-1.5">
-        {(["interval", "count"] as const).map((m) => (
+        {(["count", "interval"] as const).map((m) => (
           <button
             key={m}
             type="button"

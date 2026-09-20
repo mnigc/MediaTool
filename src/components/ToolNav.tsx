@@ -66,7 +66,7 @@ export default function ToolNav({ route, onNavigate }: Props) {
   return (
     <nav
       data-od-id="tool-nav"
-      className="flex w-52 shrink-0 flex-col overflow-y-auto bg-neutral-50/50 dark:bg-neutral-950/50 border-r border-neutral-200/60 dark:border-neutral-800/60 px-2 py-3 scrollbar-thin glass"
+      className="flex w-52 shrink-0 flex-col overflow-y-auto bg-white dark:bg-neutral-950/50 border-r border-neutral-200/60 dark:border-neutral-800/60 px-2 py-3 scrollbar-thin"
     >
       <div className="space-y-1">
         {MODULES.map((id) => {

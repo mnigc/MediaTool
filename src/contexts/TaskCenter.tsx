@@ -258,7 +258,10 @@ export function TaskCenterProvider({
     const progressUn = onProgress((e) => {
       setJobs((prev) =>
         prev.map((j) =>
-          j.rustId === e.id
+          // Only queued/running cards follow progress: a cancelled job's
+          // engine lingers a few seconds and its stray events must not
+          // resurrect the card into "running".
+          j.rustId === e.id && (j.phase === "queued" || j.phase === "running")
             ? { ...j, percent: e.percent, phase: "running", speed: e.speed ?? null }
             : j
         )

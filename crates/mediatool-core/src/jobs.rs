@@ -870,6 +870,23 @@ fn build_screenshot_interval(info: &MediaInfo, p: &ScreenshotParams, out: &Path)
     a
 }
 
+/// count mode: derive the interval from the duration so N frames land at the
+/// midpoints of N equal segments spread evenly across the whole file.
+fn build_screenshot_count(info: &MediaInfo, p: &ScreenshotParams, out: &Path) -> Vec<String> {
+    let total = info.duration_secs.unwrap_or(0.0);
+    let n = p.count.unwrap_or(1).max(1) as f64;
+    let every = if total > 0.0 {
+        (total / n).clamp(0.1, 3600.0)
+    } else {
+        p.every_sec.unwrap_or(5.0).clamp(0.1, 3600.0)
+    };
+    let mut cp = p.clone();
+    cp.every_sec = Some(every);
+    cp.start_sec = Some(every / 2.0);
+    cp.end_sec = None;
+    build_screenshot_interval(info, &cp, out)
+}
+
 /// Playback speed change: setpts for video, chained atempo for audio.
 /// Re-encodes explicitly (ffmpeg's default encoder would be mpeg4).
 fn build_speed_args(info: &MediaInfo, p: &SpeedParams, out: &Path) -> Vec<String> {
@@ -1675,15 +1692,17 @@ fn prepare_job(
         "screenshot" => {
             let p: ScreenshotParams = parse_params(&req.params)?;
             let ext = screenshot_ext(&p.format);
-            if p.mode == "interval" {
+            if p.mode == "interval" || p.mode == "count" {
                 // Sequence outputs use a %03d pattern; the overwrite policy
                 // does not apply (ffmpeg overwrites numbered files with -y).
                 let base = output_path(&info.path, &req.output_dir, ext, suffix)?;
                 let out = interval_pattern(base);
-                Ok(PreparedJob::Run {
-                    args: build_screenshot_interval(info, &p, &out),
-                    out,
-                })
+                let args = if p.mode == "count" {
+                    build_screenshot_count(info, &p, &out)
+                } else {
+                    build_screenshot_interval(info, &p, &out)
+                };
+                Ok(PreparedJob::Run { args, out })
             } else {
                 let base = output_path(&info.path, &req.output_dir, ext, suffix)?;
                 let out = match resolve_policy(base, policy) {
@@ -3564,6 +3583,7 @@ mod tests {
             mode: mode.into(),
             at_sec: Some(3.5),
             every_sec: Some(5.0),
+            count: Some(4),
             start_sec: Some(2.0),
             end_sec: Some(30.0),
             format: "png".into(),
@@ -3586,6 +3606,17 @@ mod tests {
         let t = args.iter().position(|a| a == "-t").unwrap();
         assert_eq!(args[t + 1], "28.000");
         assert_eq!(args.last().unwrap(), "o_%03d.png");
+    }
+
+    #[test]
+    fn screenshot_count_spreads_frames_evenly() {
+        // 10s video, 4 frames → every 2.5s, first frame at the 1.25s midpoint
+        let cp = shot_params("count");
+        let args = build_screenshot_count(&sample_info(), &cp, Path::new("o_%03d.png"));
+        assert!(args.iter().any(|a| a.contains("fps=1/2.500")));
+        let ss = args.iter().position(|a| a == "-ss").unwrap();
+        assert_eq!(args[ss + 1], "1.250");
+        assert!(!args.iter().any(|a| a == "-t"));
     }
 
     #[test]

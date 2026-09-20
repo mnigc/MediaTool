@@ -5,6 +5,7 @@ import {
   presetDisplayName,
   presetParamsEqual,
   presetSummary,
+  recordPresetUsage,
   removePreset,
   usePresets,
 } from "../lib/presets";
@@ -16,7 +17,7 @@ import type { JobParams } from "../types";
 const DEFAULT_PRESET = "__default__";
 /** Chips shown inline (besides 默认); the rest collapse into a dropdown so the
  *  bar stays one row as custom presets pile up. */
-const MAX_VISIBLE_CHIPS = 5;
+const MAX_VISIBLE_CHIPS = 4;
 
 /** Per-tool preset bar: builtin scenario presets are surfaced as quick chips,
  *  custom presets can be saved / deleted here. Applying a preset replaces the
@@ -46,7 +47,13 @@ export default function PresetsBar({
   const overflowNames = new Set(overflowPresets.map((p) => p.name));
 
   const defaultsParams = materializePresetParams(toolId, {});
-  const defaultActive = presetParamsEqual(toolId, params, defaultsParams);
+  // When a preset carries exactly the tool defaults (e.g. 均衡通用), it IS the
+  // default chip, so the standalone one would be a duplicate; hide it and let
+  // the preset itself take the highlight.
+  const defaultDup = myPresets.some((p) =>
+    presetParamsEqual(toolId, p.params, defaultsParams)
+  );
+  const defaultActive = !defaultDup && presetParamsEqual(toolId, params, defaultsParams);
   const matched = defaultActive
     ? undefined
     : myPresets.find((p) => presetParamsEqual(toolId, params, p.params));
@@ -58,7 +65,10 @@ export default function PresetsBar({
       return;
     }
     const p = myPresets.find((x) => x.name === name);
-    if (p) onChange(applyPresetParams(toolId, params, p.params));
+    if (p) {
+      onChange(applyPresetParams(toolId, params, p.params));
+      recordPresetUsage(toolId, name);
+    }
   };
 
   const save = async () => {
@@ -72,13 +82,13 @@ export default function PresetsBar({
 
   return (
     <div
-      className="rounded-xl border border-neutral-200/70 bg-neutral-50/40 p-3 dark:border-neutral-700/70 dark:bg-neutral-800/40"
+      className="flex flex-wrap items-center gap-1.5 rounded-xl border border-neutral-200/70 bg-neutral-50/40 px-3 py-2 dark:border-neutral-700/70 dark:bg-neutral-800/40"
       data-od-id="presets-panel"
     >
-      <p className="text-xs font-semibold text-neutral-600 dark:text-neutral-300">
+      <p className="shrink-0 text-xs font-semibold text-neutral-600 dark:text-neutral-300">
         {t("opt.presets")}
       </p>
-      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      {!defaultDup && (
         <button
           type="button"
           onClick={() => apply(DEFAULT_PRESET)}
@@ -91,6 +101,7 @@ export default function PresetsBar({
         >
           {t("opt.defaultPreset")}
         </button>
+      )}
         {myPresets.length > 0 &&
           visiblePresets.map((p) => (
             <button
@@ -115,7 +126,13 @@ export default function PresetsBar({
               apply(v);
             }}
             className="max-w-44"
-            triggerClassName="text-[10px] py-1.5"
+            // Same active-preset highlight as the inline chips; the trigger's
+            // base bg/border/text utilities need the important suffix to lose.
+            triggerClassName={`text-[10px] py-1.5 ${
+              matched && overflowNames.has(matched.name)
+                ? "border-transparent! bg-brand-500! text-white! dark:bg-brand-600!"
+                : ""
+            }`}
           >
             <option value="">{t("opt.morePresets", { n: overflowPresets.length })}</option>
             {overflowPresets.map((p) => (
@@ -141,7 +158,6 @@ export default function PresetsBar({
             {t("opt.delete")}
           </button>
         )}
-      </div>
       {dialog}
     </div>
   );

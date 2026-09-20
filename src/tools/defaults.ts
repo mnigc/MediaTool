@@ -23,6 +23,7 @@ export function blankToolParams(tool: WorkbenchId): ToolParams | null {
         mode: "single",
         atSec: 0,
         everySec: 5,
+        count: 4,
         startSec: 0,
         endSec: undefined,
         format: "png",

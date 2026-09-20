@@ -21,12 +21,19 @@ export interface Preset {
   /** True when a builtin preset has been edited by the user, i.e. its params
    *  shadow the factory defaults until it is restored. */
   modified?: boolean;
+  /** ms epoch of the last apply; drives the most-recently-used ordering. */
+  lastUsed?: number;
+  /** Builtin preset the user can neither edit nor delete (e.g. the preset
+   *  that mirrors the tool defaults). */
+  locked?: boolean;
 }
 
 const KEY = "mediatool.presets";
 /** Builtin-preset edits live separate from custom presets so a modified
  *  default can be reverted to its factory values with one click. */
 const OVERRIDE_KEY = "mediatool.presetOverrides";
+/** toolId::name -> last-applied timestamp (ms epoch). */
+const USAGE_KEY = "mediatool.presetUsage";
 
 const keyOf = (p: { toolId: string; name: string }) => `${p.toolId}::${p.name}`;
 
@@ -42,14 +49,15 @@ const CODEC_LABEL: Record<string, string> = {
  *  keys, so builtin preset labels follow the active UI language. Custom
  *  presets keep the name the user typed. */
 const BUILTIN_NAME_KEYS: Record<string, string> = {
+  "均衡通用": "preset.p_balanced",
   "高压缩 (H.264)": "preset.p_high_h264",
   "视觉无损": "preset.p_vlossless",
   "社交平台 720p": "preset.p_social_720",
   "高压缩 (AV1)": "preset.p_high_av1",
-  "目标大小 10MB": "preset.p_size_10mb",
   "高质量 1080p": "preset.p_hq_1080",
   "降码率 128k": "preset.p_bitrate_128",
   "极限 96k": "preset.p_bitrate_96",
+  "转 MP3 192k": "preset.p_to_mp3_192",
   "MP3 192k": "preset.p_mp3_192",
   "AAC 128k": "preset.p_aac_128",
   "FLAC 无损": "preset.p_flac",
@@ -198,15 +206,6 @@ export function presetSummary(
       else if (q.audioCodec) parts.push(`${String(q.audioCodec).toUpperCase()} ${kbps(q.audioBitrateKbps)}`.trim());
       break;
     }
-    case "video-convert": {
-      if (q.format) parts.push(String(q.format).toUpperCase());
-      if (q.qualityMode === "crf") parts.push(`CRF ${q.crf ?? ""}`);
-      break;
-    }
-    case "audio-convert": {
-      if (q.format) parts.push(String(q.format).toUpperCase());
-      break;
-    }
     case "audio-compress": {
       parts.push(
         q.format === "source"
@@ -254,6 +253,21 @@ type BuiltinPreset = Omit<Preset, "params"> & { params: SparseToolParams };
 export const BUILTIN_PRESETS: BuiltinPreset[] = [
   // ── 视频压缩 ──────────────────────────────
   {
+    name: "均衡通用",
+    toolId: "video-compress",
+    builtin: true,
+    locked: true,
+    // Same values as the tool defaults (CRF 23 = x264's own default, the
+    // quality/size sweet spot); kept as an explicit preset so it shows up
+    // in the preset list and can be applied like any other, but locked:
+    // editing it would break its equivalence with the defaults.
+    params: {
+      qualityMode: "crf",
+      crf: CRF.balanced,
+      audioBitrateKbps: 128,
+    },
+  },
+  {
     name: "高压缩 (H.264)",
     toolId: "video-compress",
     builtin: true,
@@ -269,6 +283,18 @@ export const BUILTIN_PRESETS: BuiltinPreset[] = [
     toolId: "video-compress",
     builtin: true,
     params: { ...VLOSSLESS_VIDEO_PARAMS },
+  },
+  {
+    name: "高质量 1080p",
+    toolId: "video-compress",
+    builtin: true,
+    params: {
+      qualityMode: "crf",
+      crf: CRF.high,
+      resolution: "1080p",
+      audioBitrateKbps: 192,
+      format: "mp4",
+    },
   },
   {
     name: "社交平台 720p",
@@ -296,28 +322,6 @@ export const BUILTIN_PRESETS: BuiltinPreset[] = [
       audioCodec: "opus",
       audioBitrateKbps: 128,
       format: "mkv",
-    },
-  },
-  {
-    name: "目标大小 10MB",
-    toolId: "video-compress",
-    builtin: true,
-    params: {
-      qualityMode: "target_size",
-      targetSizeMb: 10,
-      audioBitrateKbps: 128,
-    },
-  },
-  {
-    name: "高质量 1080p",
-    toolId: "video-compress",
-    builtin: true,
-    params: {
-      qualityMode: "crf",
-      crf: CRF.high,
-      resolution: "1080p",
-      audioBitrateKbps: 192,
-      format: "mp4",
     },
   },
   // ── 视频压缩 · 平台场景 ────────────────────────
@@ -359,6 +363,12 @@ export const BUILTIN_PRESETS: BuiltinPreset[] = [
     toolId: "audio-compress",
     builtin: true,
     params: { format: "source", bitrateKbps: 96 },
+  },
+  {
+    name: "转 MP3 192k",
+    toolId: "audio-compress",
+    builtin: true,
+    params: { format: "mp3", bitrateKbps: 192 },
   },
   // ── 视频水印 · 布局场景 ────────────────────────
   {
@@ -439,6 +449,29 @@ function saveOverrides(overrides: Preset[]): void {
   writeStorage(OVERRIDE_KEY, JSON.stringify(overrides));
 }
 
+function loadUsage(): Record<string, number> {
+  try {
+    const raw = readStorage(USAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, number>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function stampUsage(key: string): void {
+  const usage = loadUsage();
+  usage[key] = Date.now();
+  writeStorage(USAGE_KEY, JSON.stringify(usage));
+}
+
+/** Mark a preset as just applied so it sorts ahead of unused ones. */
+export function recordPresetUsage(toolId: string, name: string): void {
+  stampUsage(keyOf({ toolId, name }));
+  refresh();
+}
+
 export function loadPresets(): Preset[] {
   const byKey = new Map<string, Preset>();
   for (const p of BUILTIN_PRESETS) {
@@ -451,7 +484,17 @@ export function loadPresets(): Preset[] {
     }
   }
   for (const p of loadCustoms()) byKey.set(keyOf(p), { ...p, builtin: false, modified: false });
-  return [...byKey.values()];
+  const list = [...byKey.values()];
+  const usage = loadUsage();
+  for (const p of list) p.lastUsed = usage[keyOf(p)];
+  // Custom presets are what users actually re-apply, so they lead the bars
+  // (most recently used first); builtins keep their authored order.
+  list.sort((a, b) => {
+    if (a.builtin !== b.builtin) return a.builtin ? 1 : -1;
+    if (!a.builtin) return (b.lastUsed ?? 0) - (a.lastUsed ?? 0);
+    return 0;
+  });
+  return list;
 }
 
 /* ── Global preset store ─────────────────────────────────────────
@@ -486,6 +529,8 @@ export function usePresets(): Preset[] {
 /** Persist edited params for a builtin preset (keeping its builtin identity)
  *  so it shows up as a modified default and can be restored later. */
 export function saveBuiltinOverride(toolId: string, name: string, params: JobParams): Preset[] {
+  const base = BUILTIN_PRESETS.find((b) => b.toolId === toolId && b.name === name);
+  if (base?.locked) return refresh();
   const overrides = loadOverrides().filter(
     (o) => !(o.toolId === toolId && o.name === name)
   );
@@ -506,6 +551,35 @@ export function addPreset(preset: Preset): Preset[] {
   );
   customs.push({ ...preset, builtin: false });
   saveCustoms(customs);
+  stampUsage(keyOf(preset));
+  return refresh();
+}
+
+export function hasCustomPreset(toolId: string, name: string): boolean {
+  return loadCustoms().some((p) => p.toolId === toolId && p.name === name);
+}
+
+/** Update a custom preset in place, optionally renaming it. The usage stamp
+ *  travels with the preset so a rename keeps its most-recently-used slot. */
+export function saveCustomPreset(
+  toolId: string,
+  origName: string,
+  next: { name: string; params: JobParams }
+): Preset[] {
+  const customs = loadCustoms().filter(
+    (p) => !(p.toolId === toolId && (p.name === origName || p.name === next.name))
+  );
+  customs.push({ toolId, name: next.name, params: next.params, builtin: false });
+  saveCustoms(customs);
+  const origKey = keyOf({ toolId, name: origName });
+  if (origName !== next.name) {
+    const usage = loadUsage();
+    if (usage[origKey] !== undefined) {
+      delete usage[origKey];
+      usage[keyOf({ toolId, name: next.name })] = Date.now();
+      writeStorage(USAGE_KEY, JSON.stringify(usage));
+    }
+  }
   return refresh();
 }
 

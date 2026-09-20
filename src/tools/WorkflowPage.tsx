@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { canRevealInFolder, pickPaths } from "../lib/shell";
+import { pickPaths } from "../lib/shell";
 import { useI18n } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
 import { usePipelineRuns } from "../contexts/PipelineCenter";
@@ -12,17 +12,11 @@ import {
 } from "../workflow/pipelines";
 import type { Pipeline } from "../workflow/pipelines";
 import { VIDEO_EXTS } from "./registry";
-import { openOutputFolder } from "../lib/engine";
-import { friendlyError } from "../lib/errors";
 import { defaultParamsFor } from "../lib/defaults";
 import { useConfirm } from "../components/ConfirmDialog";
 import UploadTargetChips from "../components/UploadTargetChips";
 import JobParamsEditor from "./JobParamsEditor";
-import {
-  CheckIcon,
-  SpinnerIcon,
-  XIcon,
-} from "../components/icons";
+import { XIcon } from "../components/icons";
 import { TERMINAL_STEP_TOOLS, WORKFLOW_STEP_TOOLS, type WorkflowStep } from "../workflow/types";
 import type { JobParams, ToolId } from "../types";
 
@@ -44,7 +38,7 @@ type NameModal =
   | { mode: "rename"; id: string; name: string }
   | null;
 
-export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
+export default function WorkflowPage({ onOpenTasks }: { onOpenTasks?: () => void }) {
   const { t } = useI18n();
   const tasks = useTasks();
   const runs = usePipelineRuns();
@@ -61,11 +55,9 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
    *  the run; editing the chain afterwards keeps the stale label, which is
    *  fine for a display snapshot. */
   const [linkedPipeline, setLinkedPipeline] = useState<Pipeline | null>(null);
-  const [lastRunId, setLastRunId] = useState<string | null>(null);
+  const [started, setStarted] = useState(false);
   const addRef = useRef<HTMLDivElement>(null);
   const loadRef = useRef<HTMLDivElement>(null);
-
-  const lastRun = runs.runs.find((r) => r.id === lastRunId) ?? null;
 
   useEffect(() => {
     tasks.registerDropHandler((paths) => {
@@ -166,22 +158,18 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
     linkedPipeline?.name ??
     steps.map((s) => t(`tool.${s.toolId}.name`)).join(" + ");
 
-  const canRun = files.length > 0 && steps.length > 0 && lastRun?.phase !== "running";
+  const canRun = files.length > 0 && steps.length > 0;
 
   const start = () => {
     if (!canRun) return;
-    setLastRunId(
-      runs.startRun({
-        name: runName,
-        steps: steps.map((s) => ({ id: s.id, toolId: s.toolId, params: s.params })),
-        files,
-        uploadTo,
-      })
-    );
+    runs.startRun({
+      name: runName,
+      steps: steps.map((s) => ({ id: s.id, toolId: s.toolId, params: s.params })),
+      files,
+      uploadTo,
+    });
+    setStarted(true);
   };
-
-  const doneCount = lastRun?.files.filter((f) => f.status === "done" || f.status === "skipped").length ?? 0;
-  const runningFile = lastRun?.files.find((f) => f.status === "running");
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -194,18 +182,18 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
             {t("tool.workflow.desc")}
           </p>
         </div>
-        {onBack && (
+        {onOpenTasks && (
           <button
             type="button"
-            onClick={onBack}
-            className="flex items-center gap-1 rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+            onClick={onOpenTasks}
+            className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
           >
             <span className="h-3 w-3" aria-hidden>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="m15 18-6-6 6-6" />
               </svg>
             </span>
-            {t("module.back")}
+            {t("workflow.openTasks")}
           </button>
         )}
       </div>
@@ -216,7 +204,6 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
           <button
             type="button"
             onClick={() => void browse()}
-            disabled={lastRun?.phase === "running"}
             className="shrink-0 rounded-lg border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs font-medium text-brand-700 transition hover:bg-brand-100 disabled:opacity-40 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-300 dark:hover:bg-brand-900"
           >
             {t("workflow.addFiles")}
@@ -229,7 +216,6 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
               <button
                 type="button"
                 onClick={() => setFiles([])}
-                disabled={lastRun?.phase === "running"}
                 className="ml-auto rounded-lg px-2 py-1 text-xs text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-600 disabled:opacity-40 dark:hover:bg-neutral-800"
               >
                 {t("workflow.clearFiles")}
@@ -246,16 +232,14 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
                 title={f}
               >
                 <span className="max-w-[220px] truncate">{basename(f)}</span>
-                {lastRun?.phase !== "running" && (
-                  <button
-                    type="button"
-                    onClick={() => setFiles((prev) => prev.filter((x) => x !== f))}
-                    className="text-neutral-300 transition hover:text-error-500 dark:text-neutral-500"
-                    aria-label={t("job.remove")}
-                  >
-                    <XIcon className="h-3 w-3" />
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => setFiles((prev) => prev.filter((x) => x !== f))}
+                  className="text-neutral-300 transition hover:text-error-500 dark:text-neutral-500"
+                  aria-label={t("job.remove")}
+                >
+                  <XIcon className="h-3 w-3" />
+                </button>
               </span>
             ))}
           </div>
@@ -272,8 +256,7 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
           <button
             type="button"
             onClick={() => setLoadOpen((v) => !v)}
-            disabled={lastRun?.phase === "running"}
-            className="rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 disabled:opacity-40 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+            className="shrink-0 whitespace-nowrap rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 disabled:opacity-40 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
           >
             {t("workflow.pipeline.load")}
           </button>
@@ -328,7 +311,7 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
           type="button"
           onClick={() => setNameModal({ mode: "save", name: linkedPipeline?.name ?? "" })}
           disabled={steps.length === 0}
-          className="rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 disabled:opacity-40 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+          className="shrink-0 whitespace-nowrap rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 disabled:opacity-40 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
         >
           {t("workflow.pipeline.save")}
         </button>
@@ -357,7 +340,6 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
             <button
               type="button"
               onClick={() => setAddOpen((v) => !v)}
-              disabled={lastRun?.phase === "running"}
               className="rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 disabled:opacity-40 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
             >
               {t("workflow.addStep")}
@@ -392,211 +374,85 @@ export default function WorkflowPage({ onBack }: { onBack?: () => void }) {
           </p>
         ) : (
           <div className="space-y-2">
-            {steps.map((st, i) => {
-              const locked = lastRun?.phase === "running";
-              return (
-                <div
-                  key={st.id}
-                  className="rounded-xl bg-white p-3 ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-800"
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-50 text-[10px] font-semibold text-brand-600 dark:bg-brand-950/40 dark:text-brand-400">
-                      {i + 1}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-neutral-800 dark:text-neutral-100">
-                      {t(`tool.${st.toolId}.name`)}
-                    </span>
-                    {!locked && (
-                      <>
-                        <button
-                          type="button"
-                          disabled={i === 0 || TERMINAL_STEP_TOOLS.includes(st.toolId)}
-                          onClick={() => moveStep(i, -1)}
-                          className="rounded p-1 text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-600 disabled:opacity-30 dark:hover:bg-neutral-800"
-                          aria-label={t("workflow.moveUp")}
-                        >
-                          ↑
-                        </button>
-                        <button
-                          type="button"
-                          disabled={
-                            i === steps.length - 1 ||
-                            (i + 1 < steps.length && TERMINAL_STEP_TOOLS.includes(steps[i + 1].toolId))
-                          }
-                          onClick={() => moveStep(i, 1)}
-                          className="rounded p-1 text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-600 disabled:opacity-30 dark:hover:bg-neutral-800"
-                          aria-label={t("workflow.moveDown")}
-                        >
-                          ↓
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => removeStep(st.id)}
-                          className="rounded p-1 text-neutral-400 transition hover:bg-error-50 hover:text-error-500 dark:hover:bg-error-950/30 dark:hover:text-error-400"
-                          aria-label={t("job.remove")}
-                        >
-                          ✕
-                        </button>
-                      </>
-                    )}
-                  </div>
-
-                  {!locked && (
-                    <div className="mt-3 border-t border-neutral-100 pt-3 dark:border-neutral-700/60">
-                      <JobParamsEditor
-                        toolId={st.toolId}
-                        params={st.params}
-                        onChange={(p) => changeParams(st.id, p)}
-                      />
-                    </div>
-                  )}
+            {steps.map((st, i) => (
+              <div
+                key={st.id}
+                className="rounded-xl bg-white p-3 ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-800"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-50 text-[10px] font-semibold text-brand-600 dark:bg-brand-950/40 dark:text-brand-400">
+                    {i + 1}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-neutral-800 dark:text-neutral-100">
+                    {t(`tool.${st.toolId}.name`)}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={i === 0 || TERMINAL_STEP_TOOLS.includes(st.toolId)}
+                    onClick={() => moveStep(i, -1)}
+                    className="rounded p-1 text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-600 disabled:opacity-30 dark:hover:bg-neutral-800"
+                    aria-label={t("workflow.moveUp")}
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    disabled={
+                      i === steps.length - 1 ||
+                      (i + 1 < steps.length && TERMINAL_STEP_TOOLS.includes(steps[i + 1].toolId))
+                    }
+                    onClick={() => moveStep(i, 1)}
+                    className="rounded p-1 text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-600 disabled:opacity-30 dark:hover:bg-neutral-800"
+                    aria-label={t("workflow.moveDown")}
+                  >
+                    ↓
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removeStep(st.id)}
+                    className="rounded p-1 text-neutral-400 transition hover:bg-error-50 hover:text-error-500 dark:hover:bg-error-950/30 dark:hover:text-error-400"
+                    aria-label={t("job.remove")}
+                  >
+                    ✕
+                  </button>
                 </div>
-              );
-            })}
+
+                <div className="mt-3 border-t border-neutral-100 pt-3 dark:border-neutral-700/60">
+                  <JobParamsEditor
+                    toolId={st.toolId}
+                    params={st.params}
+                    onChange={(p) => changeParams(st.id, p)}
+                  />
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
 
       {/* Run */}
       <div className="mt-4 flex items-center gap-2">
-        {lastRun?.phase === "running" ? (
-          <button
-            type="button"
-            onClick={() => runs.cancelRun(lastRun.id)}
-            className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-error-200 bg-error-50 px-4 py-2.5 text-sm font-medium text-error-600 transition hover:bg-error-100 dark:border-error-800 dark:bg-error-950/30 dark:text-error-400"
-          >
-            {t("confirm.cancel")}
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={start}
-            disabled={!canRun}
-            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-brand-600 dark:hover:bg-brand-700"
-          >
-            {t("workflow.run.start")}
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={start}
+          disabled={!canRun}
+          className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-brand-600 dark:hover:bg-brand-700"
+        >
+          {t("workflow.run.start")}
+        </button>
       </div>
 
-      {/* Run progress */}
-      {lastRun && (
-        <div className="mt-4 rounded-xl bg-white p-4 ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-800">
-          <div className="flex items-center gap-2">
-            <span className="min-w-0 flex-1 truncate text-sm font-semibold text-neutral-800 dark:text-neutral-100">
-              {lastRun.name}
-            </span>
-            <span className="shrink-0 text-xs text-neutral-400 dark:text-neutral-500">
-              {t("workflow.run.fileOf", { i: Math.min(doneCount + (runningFile ? 1 : 0), lastRun.files.length), n: lastRun.files.length })}
-            </span>
-          </div>
-
-          {lastRun.phase === "running" && (
-            <>
-              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
-                <div
-                  className="h-full rounded-full bg-brand-500 transition-all duration-300"
-                  style={{ width: `${Math.max(Math.round(runningFile?.percent ?? 0), 2)}%` }}
-                />
-              </div>
-              <p className="mt-1 flex items-center gap-1.5 text-[11px] text-neutral-400 dark:text-neutral-500">
-                <SpinnerIcon className="h-3 w-3 animate-spin text-brand-500" />
-                {t("workflow.run.step", {
-                  name: t(
-                    `tool.${lastRun.steps[runningFile?.stepIndex ?? 0]?.toolId ?? lastRun.steps[0]?.toolId ?? ""}.name`
-                  ),
-                })}
-              </p>
-            </>
-          )}
-
-          {(lastRun.phase === "done" || lastRun.phase === "error") && (
-            <p
-              className={`mt-2 flex items-center gap-1.5 text-xs font-medium ${
-                lastRun.phase === "done"
-                  ? "text-success-600 dark:text-success-400"
-                  : "text-error-600 dark:text-error-400"
-              }`}
-            >
-              {lastRun.phase === "done" ? (
-                <>
-                  <CheckIcon className="h-3.5 w-3.5" />
-                  {t("workflow.run.done")}
-                </>
-              ) : (
-                t("workflow.run.failed")
-              )}
-            </p>
-          )}
-          {lastRun.phase === "cancelled" && (
-            <p className="mt-2 text-xs text-neutral-400 dark:text-neutral-500">
-              {t("workflow.run.cancelled")}
-            </p>
-          )}
-
-          <div className="mt-3 space-y-1.5 border-t border-neutral-100 pt-3 dark:border-neutral-700/60">
-            {lastRun.files.map((f, i) => {
-              const ok = f.status === "done" || f.status === "skipped";
-              return (
-                <div key={`${f.input}-${i}`} className="flex items-center gap-2 text-xs">
-                  <span className="w-4 shrink-0 text-center">
-                    {ok ? (
-                      <CheckIcon className="h-3 w-3 text-success-500" />
-                    ) : f.status === "running" ? (
-                      <SpinnerIcon className="h-3 w-3 animate-spin text-brand-500" />
-                    ) : f.status === "error" ? (
-                      <span className="text-error-500">✕</span>
-                    ) : f.status === "cancelled" ? (
-                      <span className="text-neutral-300 dark:text-neutral-600">—</span>
-                    ) : (
-                      <span className="text-neutral-300 dark:text-neutral-600">·</span>
-                    )}
-                  </span>
-                  <span
-                    className={`min-w-0 flex-1 truncate ${
-                      f.status === "pending"
-                        ? "text-neutral-400 dark:text-neutral-500"
-                        : "text-neutral-700 dark:text-neutral-200"
-                    }`}
-                    title={f.input}
-                  >
-                    {basename(f.input)}
-                  </span>
-                  {f.status === "error" && f.error && (
-                    <span
-                      className="max-w-[45%] truncate text-[11px] text-error-500 dark:text-error-400"
-                      title={friendlyError(f.error, t)}
-                    >
-                      {friendlyError(f.error, t)}
-                    </span>
-                  )}
-                  {ok && f.output && canRevealInFolder && (
-                    <button
-                      type="button"
-                      onClick={() => void openOutputFolder(f.output!)}
-                      className="shrink-0 text-[11px] font-medium text-brand-600 transition hover:text-brand-700 dark:text-brand-400"
-                      title={f.output}
-                    >
-                      {t("job.open")}
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-
-          {(lastRun.phase === "error" || lastRun.phase === "cancelled") && (
-            <div className="mt-3 flex justify-end">
-              <button
-                type="button"
-                onClick={() => runs.retryRun(lastRun.id)}
-                className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs font-medium text-brand-700 transition hover:bg-brand-100 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-300 dark:hover:bg-brand-900"
-              >
-                {t("workflow.run.retry")}
-              </button>
-            </div>
-          )}
-        </div>
+      {started && onOpenTasks && (
+        <p className="mt-2 text-center text-xs text-neutral-400 dark:text-neutral-500">
+          {t("workflow.run.started")}{" "}
+          <button
+            type="button"
+            onClick={onOpenTasks}
+            className="font-medium text-brand-600 transition hover:text-brand-700 dark:text-brand-400"
+          >
+            {t("workflow.run.viewTasks")}
+          </button>
+        </p>
       )}
 
       {confirmDialog}

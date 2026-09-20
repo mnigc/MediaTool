@@ -24,6 +24,7 @@ export default function ScreenshotPanel({
           >
             <option value="single">{t("tool.shot.single")}</option>
             <option value="interval">{t("tool.shot.interval")}</option>
+            <option value="count">{t("tool.shot.count")}</option>
           </Select>
         </Field>
         <Field label={t("opt.format")}>
@@ -41,6 +42,10 @@ export default function ScreenshotPanel({
       {params.mode === "single" ? (
         <Field label={t("tool.shot.at")}>
           <NumInput value={params.atSec} min={0} step={0.1} onChange={(v) => set({ atSec: v })} />
+        </Field>
+      ) : params.mode === "count" ? (
+        <Field label={t("tool.shot.countNum")}>
+          <NumInput value={params.count} min={1} step={1} onChange={(v) => set({ count: Math.max(1, Math.round(v ?? 1)) })} />
         </Field>
       ) : (
         <>

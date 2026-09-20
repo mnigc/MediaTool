@@ -333,17 +333,6 @@ export function StripMetadataIcon({ className }: IconProps) {
   );
 }
 
-export function ConvertIcon({ className }: IconProps) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
-      <path d="m17 3 4 4-4 4" />
-      <path d="M21 7H7a4 4 0 0 0-4 4" />
-      <path d="m7 21-4-4 4-4" />
-      <path d="M3 17h14a4 4 0 0 0 4-4" />
-    </svg>
-  );
-}
-
 export function WorkflowIcon({ className }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>

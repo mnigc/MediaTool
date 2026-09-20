@@ -1,16 +1,17 @@
 import { useState } from "react";
 import type { JobParams, ToolId } from "../types";
 import {
-  addPreset,
+  hasCustomPreset,
   presetDisplayName,
   removePreset,
   restoreBuiltin,
   saveBuiltinOverride,
+  saveCustomPreset,
   usePresets,
   type Preset,
 } from "../lib/presets";
 import { defaultParamsFor } from "../lib/defaults";
-import PresetParamsEditor from "./PresetParamsEditor";
+import PresetDiffEditor from "./PresetDiffEditor";
 import { useConfirm } from "./ConfirmDialog";
 import Select from "./Select";
 import { XIcon } from "./icons";
@@ -36,23 +37,34 @@ export default function PresetManager({ open, onClose }: PresetManagerProps) {
   const { confirm, dialog: confirmDialog } = useConfirm();
   const [editing, setEditing] = useState<Preset | null>(null);
   const [isNew, setIsNew] = useState(false);
+  /** Name the edited preset was stored under — set when a rename should move
+   *  (instead of collide with) the existing entry. */
+  const [origName, setOrigName] = useState<string | null>(null);
+  /** The preset's stored params when editing began — the diff editor's
+   *  per-field 恢复 baseline. */
+  const [origParams, setOrigParams] = useState<JobParams>({});
 
   if (!open) return null;
 
   const startNew = () => {
     const toolId = PRESET_TOOLS[0];
+    const params = defaultParamsFor(toolId);
     setEditing({
       name: "",
       toolId,
-      params: defaultParamsFor(toolId),
+      params,
       builtin: false,
     });
     setIsNew(true);
+    setOrigName(null);
+    setOrigParams(params);
   };
 
   const startEdit = (p: Preset) => {
     setEditing({ ...p });
     setIsNew(false);
+    setOrigName(p.name);
+    setOrigParams(p.params);
   };
 
   const handleDelete = async (p: Preset) => {
@@ -67,13 +79,25 @@ export default function PresetManager({ open, onClose }: PresetManagerProps) {
     if (ok) removePreset(p.toolId, p.name);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!editing) return;
     const name = editing.name.trim();
     if (!name) return;
-    editing.builtin
-      ? saveBuiltinOverride(editing.toolId, name, editing.params)
-      : addPreset({ ...editing, name, builtin: false });
+    if (editing.builtin) {
+      saveBuiltinOverride(editing.toolId, name, editing.params);
+    } else {
+      if (hasCustomPreset(editing.toolId, name) && name !== origName) {
+        const ok = await confirm({
+          title: t("pm.conflictTitle"),
+          message: t("pm.conflictMsg", { name }),
+          confirmLabel: t("pm.save"),
+          cancelLabel: t("confirm.cancel"),
+          danger: true,
+        });
+        if (!ok) return;
+      }
+      saveCustomPreset(editing.toolId, origName ?? name, { name, params: editing.params });
+    }
     setEditing(null);
   };
 
@@ -83,7 +107,9 @@ export default function PresetManager({ open, onClose }: PresetManagerProps) {
 
   const handleToolChange = (toolId: ToolId) => {
     if (!editing) return;
-    setEditing({ ...editing, toolId, params: defaultParamsFor(toolId) });
+    const params = defaultParamsFor(toolId);
+    setEditing({ ...editing, toolId, params });
+    setOrigParams(params);
   };
 
   const handleParamsChange = (p: JobParams) => {
@@ -114,6 +140,7 @@ export default function PresetManager({ open, onClose }: PresetManagerProps) {
           {editing ? (
             <PresetEditor
               preset={editing}
+              original={origParams}
               isNew={isNew}
               onNameChange={(name) => setEditing({ ...editing, name })}
               onToolChange={handleToolChange}
@@ -163,12 +190,14 @@ export default function PresetManager({ open, onClose }: PresetManagerProps) {
                              </div>
                           </div>
                           <div className="flex shrink-0 items-center gap-1.5">
-                            <button
-                              onClick={() => startEdit(p)}
-                              className="rounded-md border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
-                            >
-                               {t("pm.edit")}
-                             </button>
+                            {!p.locked && (
+                              <button
+                                onClick={() => startEdit(p)}
+                                className="rounded-md border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+                              >
+                                 {t("pm.edit")}
+                               </button>
+                            )}
                              {p.builtin && p.modified && (
                                <button
                                  onClick={() => handleRestore(p)}
@@ -203,6 +232,7 @@ export default function PresetManager({ open, onClose }: PresetManagerProps) {
 
 interface PresetEditorProps {
   preset: Preset;
+  original: JobParams;
   isNew: boolean;
   onNameChange: (name: string) => void;
   onToolChange: (toolId: ToolId) => void;
@@ -213,6 +243,7 @@ interface PresetEditorProps {
 
 function PresetEditor({
   preset,
+  original,
   isNew,
   onNameChange,
   onToolChange,
@@ -229,10 +260,10 @@ function PresetEditor({
             {t("pm.name")}
           </span>
           <input
-            value={preset.name}
+            value={preset.builtin ? presetDisplayName(preset, t) : preset.name}
             onChange={(e) => onNameChange(e.target.value)}
             placeholder={t("pm.presetName")}
-            disabled={!isNew}
+            disabled={preset.builtin}
             className="rounded-lg border border-neutral-300 bg-white px-2 py-1 text-sm text-neutral-700 shadow-sm focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-100 disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
           />
         </label>
@@ -257,9 +288,10 @@ function PresetEditor({
       </div>
 
       <div className="rounded-xl border border-neutral-100 bg-neutral-50/40 p-3 dark:border-neutral-700/60 dark:bg-neutral-800/30">
-        <PresetParamsEditor
+        <PresetDiffEditor
           toolId={preset.toolId}
           params={preset.params}
+          original={original}
           onChange={onParamsChange}
         />
       </div>

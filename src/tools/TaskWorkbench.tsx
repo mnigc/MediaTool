@@ -90,7 +90,7 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
   useEffect(() => {
     if (!showFilterTabs && filter !== "all") setFilter("all");
   }, [showFilterTabs, filter]);
-  // Sync-params only makes sense for batch tools (compress/convert) where you
+  // Sync-params only makes sense for batch tools (transcode) where you
   // import several files intending uniform settings, and only when there are
   // multiple queued jobs to copy across.
   const queuedCount = jobs.filter((j) => j.phase === "queued").length;

@@ -20,7 +20,7 @@ export type ModuleId =
 /** Pseudo-tool rendered as a panel but never queued as a job.
  *  "strip-metadata" is also no longer a workbench: it is triggered from the
  *  inspect page as a plain job. */
-export type WorkbenchId = Exclude<ToolId, "strip-metadata"> | "inspect" | "workflow";
+export type WorkbenchId = Exclude<ToolId, "strip-metadata"> | "inspect";
 
 /** App navigation state: either a module landing page, or a concrete tool. */
 export type Route =
@@ -64,7 +64,6 @@ export const MODULES: ModuleId[] = [
 export const TOOLS: ToolMeta[] = [
   // video
   { id: "video-compress", category: "video", accepts: VIDEO_EXTS, multiFile: true, mediaType: "video" },
-  { id: "video-convert", category: "video", accepts: VIDEO_EXTS, multiFile: true, mediaType: "video" },
   { id: "trim", category: "video", accepts: VIDEO_EXTS, multiFile: true },
   { id: "mute", category: "video", accepts: VIDEO_EXTS, multiFile: true },
   { id: "screenshot", category: "video", accepts: VIDEO_EXTS, multiFile: false },
@@ -79,7 +78,6 @@ export const TOOLS: ToolMeta[] = [
   { id: "inspect", category: "video", accepts: ALL_EXTS, multiFile: false },
   // audio
   { id: "audio-compress", category: "audio", accepts: AUDIO_EXTS, multiFile: true, mediaType: "audio" },
-  { id: "audio-convert", category: "audio", accepts: AUDIO_EXTS, multiFile: true, mediaType: "audio" },
   { id: "extract-audio", category: "audio", accepts: VIDEO_EXTS, multiFile: true },
   { id: "audio-volume", category: "audio", accepts: AUDIO_EXTS, multiFile: false, mediaType: "audio" },
   { id: "audio-merge", category: "audio", accepts: AUDIO_EXTS, multiFile: true, mediaType: "audio" },

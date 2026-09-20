@@ -75,9 +75,7 @@ export interface AudioParams {
 
 export type ToolId =
   | "video-compress"
-  | "video-convert"
   | "audio-compress"
-  | "audio-convert"
   | "screenshot"
   | "speed"
   | "watermark"
@@ -94,9 +92,10 @@ export type ToolId =
   | "audio-merge";
 
 export interface ScreenshotParams {
-  mode: "single" | "interval";
+  mode: "single" | "interval" | "count";
   atSec?: number; // single mode
   everySec?: number; // interval mode
+  count?: number; // count mode: N frames spread evenly across the video
   startSec?: number;
   endSec?: number;
   format: string; // png | jpeg

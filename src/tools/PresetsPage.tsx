@@ -1,16 +1,18 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import {
-  addPreset,
+  hasCustomPreset,
   presetDisplayName,
+  presetSummary,
   removePreset,
   restoreBuiltin,
   saveBuiltinOverride,
+  saveCustomPreset,
   usePresets,
   type Preset,
 } from "../lib/presets";
 import { defaultParamsFor } from "../lib/defaults";
-import PresetParamsEditor from "../components/PresetParamsEditor";
+import PresetDiffEditor from "../components/PresetDiffEditor";
 import { useConfirm } from "../components/ConfirmDialog";
 import Select from "../components/Select";
 import { XIcon } from "../components/icons";
@@ -31,12 +33,24 @@ const ORDER: string[] = [
   "video-contact",
 ];
 
+const secId = (toolId: string) => `presets-sec-${toolId}`;
+
 export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: WorkbenchId) => void }) {
   const { t } = useI18n();
   const all = usePresets();
   const { confirm, dialog: confirmDialog } = useConfirm();
   const [editing, setEditing] = useState<Preset | null>(null);
   const [isNew, setIsNew] = useState(false);
+  /** Name the edited preset was stored under — set when a rename should move
+   *  (instead of collide with) the existing entry. */
+  const [origName, setOrigName] = useState<string | null>(null);
+  /** The preset's stored params when editing began — the diff editor's
+   *  per-field 恢复 baseline. */
+  const [origParams, setOrigParams] = useState<JobParams>({});
+  const [activeSec, setActiveSec] = useState<string>("");
+  // Set while a nav click scrolls to its section, so the observer doesn't
+  // bounce the highlight back to the section still in view mid-scroll.
+  const scrollIntent = useRef<string | null>(null);
 
   const groups: Group[] = useMemo(() => {
     const byTool = new Map<string, Preset[]>();
@@ -59,6 +73,41 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
     return ordered;
   }, [all]);
 
+  const navItems = useMemo(
+    () =>
+      groups.map((g) => ({
+        id: secId(g.toolId),
+        label: t(`tool.${g.toolId}.name`),
+        count: g.presets.length,
+      })),
+    [groups, t]
+  );
+
+  useEffect(() => {
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (scrollIntent.current) return;
+        for (const e of entries)
+          if (e.isIntersecting) setActiveSec(e.target.id);
+      },
+      { rootMargin: "-15% 0px -70% 0px", threshold: 0 }
+    );
+    for (const item of navItems) {
+      const el = document.getElementById(item.id);
+      if (el) obs.observe(el);
+    }
+    return () => obs.disconnect();
+  }, [navItems]);
+
+  const jumpTo = (id: string) => {
+    setActiveSec(id);
+    scrollIntent.current = id;
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.setTimeout(() => {
+      scrollIntent.current = null;
+    }, 600);
+  };
+
   const del = async (toolId: string, name: string) => {
     const ok = await confirm({
       title: t("pm.deleteTitle"),
@@ -76,38 +125,55 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
 
   const startNew = () => {
     const toolId = ORDER[0];
-    setEditing({ name: "", toolId, params: defaultParamsFor(toolId as ToolId), builtin: false });
+    const params = defaultParamsFor(toolId as ToolId);
+    setEditing({ name: "", toolId, params, builtin: false });
     setIsNew(true);
+    setOrigName(null);
+    setOrigParams(params);
   };
 
   const startEdit = (p: Preset) => {
     setEditing({ ...p });
     setIsNew(false);
+    setOrigName(p.name);
+    setOrigParams(p.params);
   };
 
   const handleToolChange = (toolId: string) => {
     if (!editing) return;
-    setEditing({ ...editing, toolId, params: defaultParamsFor(toolId as ToolId) });
+    const params = defaultParamsFor(toolId as ToolId);
+    setEditing({ ...editing, toolId, params });
+    setOrigParams(params);
   };
 
   const handleParamsChange = (p: JobParams) => {
     if (editing) setEditing({ ...editing, params: p });
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!editing) return;
     const name = editing.name.trim();
     if (!name) return;
     if (editing.builtin) {
       saveBuiltinOverride(editing.toolId, name, editing.params);
     } else {
-      addPreset({ ...editing, name, builtin: false });
+      if (hasCustomPreset(editing.toolId, name) && name !== origName) {
+        const ok = await confirm({
+          title: t("pm.conflictTitle"),
+          message: t("pm.conflictMsg", { name }),
+          confirmLabel: t("pm.save"),
+          cancelLabel: t("confirm.cancel"),
+          danger: true,
+        });
+        if (!ok) return;
+      }
+      saveCustomPreset(editing.toolId, origName ?? name, { name, params: editing.params });
     }
     setEditing(null);
   };
 
   return (
-    <div className="mx-auto max-w-3xl">
+    <div className="mx-auto max-w-4xl">
       <div className="mb-4 flex items-start justify-between gap-4">
         <div>
           <h2 className="text-lg font-semibold text-neutral-800 dark:text-neutral-100">
@@ -123,12 +189,30 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
         </button>
       </div>
 
-      {groups.length === 0 ? (
-        <p className="text-sm text-neutral-400 dark:text-neutral-500">{t("preset.empty")}</p>
-      ) : (
-        <div className="space-y-5">
+      <div className="flex items-start gap-5">
+        <nav className="sticky top-0 flex w-36 shrink-0 flex-col gap-0.5 self-start pt-1">
+          {navItems.map((n) => (
+            <button
+              key={n.id}
+              type="button"
+              onClick={() => jumpTo(n.id)}
+              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${
+                activeSec === n.id
+                  ? "bg-brand-50 text-brand-600 dark:bg-brand-950/40 dark:text-brand-400"
+                  : "text-neutral-500 hover:bg-neutral-100 hover:text-neutral-700 dark:text-neutral-400 dark:hover:bg-neutral-800/60 dark:hover:text-neutral-200"
+              }`}
+            >
+              <span className="min-w-0 flex-1 truncate text-left">{n.label}</span>
+              <span className="shrink-0 text-[10px] text-neutral-400 dark:text-neutral-500">
+                {n.count}
+              </span>
+            </button>
+          ))}
+        </nav>
+
+        <div className="min-w-0 flex-1 space-y-5">
           {groups.map((g) => (
-            <div key={g.toolId}>
+            <div key={g.toolId} id={secId(g.toolId)} className="scroll-mt-3">
               <div className="mb-2 flex items-center gap-2">
                 <span className="text-sm font-semibold text-neutral-800 dark:text-neutral-100">
                   {t(`tool.${g.toolId}.name`)}
@@ -137,7 +221,7 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
                   {g.presets.length}
                 </span>
               </div>
-              <div className="space-y-1.5">
+              <div className="divide-y divide-neutral-100 overflow-hidden rounded-xl bg-white ring-1 ring-neutral-200 dark:divide-neutral-800/70 dark:bg-neutral-900 dark:ring-neutral-800">
                 {g.presets.map((p) => (
                   <div
                     key={`${g.toolId}::${p.name}`}
@@ -150,11 +234,18 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
                         onOpenTool(g.toolId as WorkbenchId);
                       }
                     }}
-                    className="group flex items-center gap-2 rounded-xl bg-white p-3 ring-1 ring-neutral-200 transition hover:ring-brand-200 dark:bg-neutral-900 dark:ring-neutral-800 dark:hover:ring-brand-800"
+                    className="group flex items-center gap-2 px-3 py-2.5 transition hover:bg-neutral-50 dark:hover:bg-neutral-800/40"
                   >
-                    <span className="min-w-0 flex-1 truncate text-sm text-neutral-800 dark:text-neutral-100">
-                      {presetDisplayName(p, t)}
-                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm text-neutral-800 dark:text-neutral-100">
+                        {presetDisplayName(p, t)}
+                      </div>
+                      {presetSummary(p, t) && (
+                        <div className="truncate text-[11px] text-neutral-400 dark:text-neutral-500">
+                          {presetSummary(p, t)}
+                        </div>
+                      )}
+                    </div>
                     <span
                       className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
                         p.builtin
@@ -170,16 +261,18 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
                           : t("preset.builtin")
                         : t("preset.custom")}
                     </span>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        startEdit(p);
-                      }}
-                      className="rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
-                    >
-                      {t("pm.edit")}
-                    </button>
+                    {!p.locked && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          startEdit(p);
+                        }}
+                        className="rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+                      >
+                        {t("pm.edit")}
+                      </button>
+                    )}
                     {p.builtin && p.modified && (
                       <button
                         type="button"
@@ -219,7 +312,7 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
             </div>
           ))}
         </div>
-      )}
+      </div>
 
       {editing && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -246,10 +339,10 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
                       {t("pm.name")}
                     </span>
                     <input
-                      value={editing.name}
+                      value={editing.builtin ? presetDisplayName(editing, t) : editing.name}
                       onChange={(e) => setEditing({ ...editing, name: e.target.value })}
                       placeholder={t("pm.presetName")}
-                      disabled={!isNew}
+                      disabled={editing.builtin}
                       className="rounded-lg border border-neutral-300 bg-white px-2 py-1 text-sm text-neutral-700 shadow-sm focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-100 disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
                     />
                   </label>
@@ -274,9 +367,10 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
                 </div>
 
                 <div className="rounded-xl border border-neutral-100 bg-neutral-50/40 p-3 dark:border-neutral-700/60 dark:bg-neutral-800/30">
-                  <PresetParamsEditor
+                  <PresetDiffEditor
                     toolId={editing.toolId}
                     params={editing.params}
+                    original={origParams}
                     onChange={handleParamsChange}
                   />
                 </div>

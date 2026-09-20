@@ -270,6 +270,15 @@ export function minimizeWindow(): void {
   windowControl((win) => win.minimize());
 }
 
+/** The window starts hidden (tauri.conf) so the white cold-start screen is
+ *  never seen; call once after the first paint to reveal it. */
+export function revealWindow(): void {
+  if (!isDesktop) return;
+  void import("@tauri-apps/api/window").then(({ getCurrentWindow }) =>
+    getCurrentWindow().show().then(() => getCurrentWindow().setFocus())
+  );
+}
+
 export function toggleMaximized(): void {
   windowControl((win) => win.toggleMaximize());
 }

@@ -29,6 +29,18 @@ pub fn run() {
             // Restore persisted live monitors so they keep watching across
             // restarts (skipped silently when yt-dlp is not installed yet).
             mediatool_core::ytdlp::resume_monitors(&prep_ctx);
+            // The window starts hidden so the user never stares at the white
+            // cold-start screen; the frontend reveals it after its first
+            // paint. This timer is the safety net: if the frontend fails to
+            // load, the window still appears.
+            let reveal_handle = handle.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                if let Some(win) = reveal_handle.get_webview_window("main") {
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

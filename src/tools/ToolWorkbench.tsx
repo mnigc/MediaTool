@@ -7,7 +7,6 @@ import MetadataPreview from "../components/MetadataPreview";
 import { getTool, type WorkbenchId } from "./registry";
 import FilePicker from "./FilePicker";
 import TaskWorkbench from "./TaskWorkbench";
-import WorkflowPage from "./WorkflowPage";
 import InspectReport from "./panels/InspectPanel";
 import MergeWorkbench from "./MergeWorkbench";
 import type { MediaReport } from "../types";
@@ -134,7 +133,6 @@ function InspectWorkbench({ onBack }: { onBack?: () => void }) {
 
 export default function ToolWorkbench({ tool, onBack }: { tool: WorkbenchId; onBack?: () => void }) {
   if (tool === "inspect") return <InspectWorkbench onBack={onBack} />;
-  if (tool === "workflow") return <WorkflowPage onBack={onBack} />;
   if (tool === "video-merge" || tool === "audio-merge") {
     return <MergeWorkbench tool={tool} onBack={onBack} />;
   }
