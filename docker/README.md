@@ -43,7 +43,14 @@ What you set in `.env`:
 | `MEDIA_LIBRARY` | Your media, mounted read-only at `/media/library`. |
 | `OUTPUT_DIR` | Where finished files go, mounted writable at `/media/output`. Keep it outside the read-only mount. |
 | `PORT` | Host port published (container always listens on 8787). |
+| `TZ` | Container timezone for logs and scheduled recordings; compose defaults to `Asia/Shanghai`. |
 | `PUBLIC_URL` | The URL your browser types, e.g. `http://192.168.1.10:8787`. Only YouTube/Google Drive/OneDrive sign-in needs it, because the provider redirects back to `<PUBLIC_URL>/oauth/callback`; register that exact URI in the provider console. To use it, also uncomment `MEDIATOOL_PUBLIC_URL` in `docker-compose.yml`. |
+
+More optional knobs live as commented lines in `docker-compose.yml`:
+`MEDIATOOL_ROOTS` (the image only browses `/media` by default — host paths
+are unrestricted, but a container-side mount path outside a root stays
+invisible), a bind mount instead of the named state volume, and `user:` for
+output-directory ownership problems.
 
 ## Intel Quick Sync / VAAPI
 
@@ -73,7 +80,8 @@ GitHub, and their copies take precedence over the image's.
 
 ## Updating
 
-The compose file tracks `gwakcho/mediatool:latest`, so updating is just:
+The compose file ships pinned to a release tag. To auto-follow updates, put
+`:latest` in `image:` (every release is published there too), then:
 
 ```sh
 docker compose pull && docker compose up -d
@@ -87,8 +95,8 @@ docker run --rm -v mediatool-data:/data -v "$PWD:/backup" alpine \
   tar czf /backup/mediatool-data.tgz -C /data .
 ```
 
-To pin a version (or roll back), put the tag in `image:` — every release is
-also published as `gwakcho/mediatool:<version>` — then `up -d`.
+To stay on (or roll back to) a specific version, put
+`gwakcho/mediatool:<version>` in `image:` — then `up -d`.
 
 ## Troubleshooting
 
@@ -151,7 +159,13 @@ image: docker.1ms.run/gwakcho/mediatool:latest
 | `MEDIA_LIBRARY` | 你的媒体库，以只读方式挂载到 `/media/library`。 |
 | `OUTPUT_DIR` | 成品文件的输出目录，以可写方式挂载到 `/media/output`。必须放在只读挂载之外。 |
 | `PORT` | 宿主机发布的端口（容器内始终监听 8787）。 |
+| `TZ` | 容器时区，影响日志与定时录制；compose 已默认 `Asia/Shanghai`。 |
 | `PUBLIC_URL` | 浏览器地址栏里输入的那个 URL，例如 `http://192.168.1.10:8787`。只有 YouTube/Google Drive/OneDrive 登录需要它，因为服务商会把浏览器重定向回 `<PUBLIC_URL>/oauth/callback`，需在服务商控制台登记完全一致的 URI。要用它还需取消 `docker-compose.yml` 里 `MEDIATOOL_PUBLIC_URL` 一行的注释。 |
+
+更多可选项以注释行形式放在 `docker-compose.yml` 里：`MEDIATOOL_ROOTS`
+（镜像默认可见范围只有 `/media`——宿主机路径不受限，但容器内挂载点若不在
+root 之内应用就看不到）、用 bind 挂载替代命名状态卷，以及处理输出目录
+所属权问题的 `user:`。
 
 ## Intel 核显加速（Quick Sync / VAAPI）
 
@@ -169,13 +183,17 @@ stat -c %g /dev/dri/renderD128    # 得到 render 组的 GID
 
 ## 引擎
 
-ffmpeg、yt-dlp 和 streamlink 来自镜像内的 Debian 软件源，从 `PATH` 解析，
-因此应用内的"安装引擎"按钮不需要（在无法访问 GitHub 的网络上它们本来也会
-失败）。更新版的 yt-dlp 会随下一次镜像更新到来。
+所有引擎在构建时从其官方源头烘焙进镜像——ffmpeg/ffprobe 来自 BtbN 的
+master 滚动构建（含 VAAPI/QSV 及常用编解码库），yt-dlp 来自其 GitHub
+releases，streamlink 来自 PyPI——因此每个镜像都携带当前版本，从 `PATH`
+解析、无需任何配置。站点提取器变化很快，新版 yt-dlp 会随下一次镜像更新
+到来（`docker compose pull`）。应用内的"安装引擎"按钮仍可作为手动刷新
+的手段（需能访问 GitHub），其安装的副本优先于镜像内的版本。
 
 ## 更新
 
-compose 默认跟随 `gwakcho/mediatool:latest`，因此更新只需：
+compose 默认钉在某个发布 tag 上。想自动跟随更新，把 `image:` 改成
+`:latest`（每个发布版本也会推送到 latest），然后：
 
 ```sh
 docker compose pull && docker compose up -d
@@ -189,8 +207,8 @@ docker run --rm -v mediatool-data:/data -v "$PWD:/backup" alpine \
   tar czf /backup/mediatool-data.tgz -C /data .
 ```
 
-要锁定版本（或回滚），把 `image:` 改成具体 tag 再 `up -d`——每个发布版本
-同时以 `gwakcho/mediatool:<版本号>` 推送。
+要锁定某个版本（或回滚），把 `image:` 改成
+`gwakcho/mediatool:<版本号>` 再 `up -d`。
 
 ## 故障排查
 
