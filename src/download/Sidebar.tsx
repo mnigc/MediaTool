@@ -1,6 +1,8 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useI18n } from "../i18n";
 import { useDownloads } from "../contexts/DownloadCenter";
+import { cookiesList } from "../lib/engine";
+import type { PlatformCookies } from "../types";
 import {
   pipelineById,
   pipelineDisplayName,
@@ -103,9 +105,22 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 export function NetworkSection({ onOpenSettings }: { onOpenSettings: () => void }) {
   const { t } = useI18n();
   const dl = useDownloads();
+  const [platforms, setPlatforms] = useState<PlatformCookies[]>([]);
+  useEffect(() => {
+    let active = true;
+    cookiesList()
+      .then((list) => {
+        if (active) setPlatforms(list);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
   const value = "min-w-0 truncate text-xs text-neutral-600 dark:text-neutral-300";
   const manualCookies = dl.settings.cookiesFile || dl.settings.cookiesText;
-  const configured = manualCookies || dl.settings.proxy;
+  const configured = manualCookies || dl.settings.proxy || platforms.length;
+  const platformHosts = platforms.map((p) => p.host).join("、");
   return (
     <SidebarSection
       title={t("settings.network")}
@@ -118,6 +133,13 @@ export function NetworkSection({ onOpenSettings }: { onOpenSettings: () => void 
           {manualCookies ? t("dl.cookiesManual") : t("dl.notSet")}
         </span>
       </Field>
+      {platforms.length > 0 && (
+        <Field label={t("settings.platformCookies")}>
+          <span className={value} title={platformHosts}>
+            {platformHosts}
+          </span>
+        </Field>
+      )}
       <Field label={t("dl.proxy")}>
         <span className={value} title={dl.settings.proxy || undefined}>
           {dl.settings.proxy || t("dl.notSet")}

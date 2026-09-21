@@ -3,13 +3,14 @@ import { pickPaths } from "../lib/shell";
 import { useI18n } from "../i18n";
 import { LOCALES, LOCALE_NAMES } from "../i18n/translations";
 import { useConfirm } from "../components/ConfirmDialog";
-import { cacheClean, cacheReport, formatBytes } from "../lib/engine";
+import { cacheClean, cacheReport, cookiesList, cookiesRemove, cookiesSet, formatBytes } from "../lib/engine";
+import { Button } from "../components/ui";
 import { useDownloads } from "../contexts/DownloadCenter";
 import { AutoIcon, MoonIcon, RefreshIcon, SpinnerIcon, SunIcon, TrashIcon } from "../components/icons";
 import Select from "../components/Select";
 import UploadSection from "./UploadSettings";
 import type { ThemeMode } from "../hooks/useTheme";
-import type { CacheCleanResult, CacheReport } from "../types";
+import type { CacheCleanResult, CacheReport, PlatformCookies } from "../types";
 
 const THEME_ICONS: Record<ThemeMode, ComponentType<{ className?: string }>> = {
   light: SunIcon,
@@ -163,10 +164,214 @@ export default function SettingsPage({ themeMode, onThemeChange }: SettingsPageP
         </div>
       </div>
 
+      <PlatformCookiesSection />
+
       <UploadSection />
 
       <CacheSection />
     </div>
+  );
+}
+
+/** Cookies per live platform, keyed by the room URL's host. Recording probes
+ *  with these before the global cookies above, since one global file cannot
+ *  sign in to several sites at once. */
+function PlatformCookiesSection() {
+  const { t } = useI18n();
+  const { confirm, dialog } = useConfirm();
+  const [entries, setEntries] = useState<PlatformCookies[]>([]);
+  const [draft, setDraft] = useState<PlatformCookies | null>(null);
+  /** Host of the entry being edited; a new entry may name any host. */
+  const [editingOf, setEditingOf] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    cookiesList()
+      .then(setEntries)
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const save = async () => {
+    if (!draft) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await cookiesSet(draft);
+      setDraft(null);
+      setEditingOf(null);
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (host: string) => {
+    const ok = await confirm({
+      title: t("settings.platformCookies.removeTitle"),
+      message: t("settings.platformCookies.removeMsg", { host }),
+      confirmLabel: t("dl.monitor.delete"),
+      cancelLabel: t("confirm.cancel"),
+      danger: true,
+    });
+    if (!ok) return;
+    await cookiesRemove(host).catch(() => {});
+    refresh();
+  };
+
+  const draftFileSet = !!draft?.cookiesFile?.trim();
+
+  return (
+    <section className="mt-5 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-800">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h2 className="text-sm font-semibold text-neutral-800 dark:text-neutral-200">
+            {t("settings.platformCookies")}
+          </h2>
+          <p className="mt-0.5 text-xs text-neutral-400 dark:text-neutral-500">
+            {t("settings.platformCookiesHint")}
+          </p>
+        </div>
+        {!draft && (
+          <Button
+            size="sm"
+            onClick={() => {
+              setEditingOf(null);
+              setDraft({ host: "", cookiesFile: "", cookiesText: "" });
+            }}
+          >
+            {t("settings.platformCookies.add")}
+          </Button>
+        )}
+      </div>
+
+      {entries.length === 0 && !draft && (
+        <p className="mt-4 text-xs text-neutral-400 dark:text-neutral-500">
+          {t("settings.platformCookies.empty")}
+        </p>
+      )}
+
+      {entries.length > 0 && (
+        <ul className="mt-4 divide-y divide-neutral-100 dark:divide-neutral-800">
+          {entries.map((e) => (
+            <li key={e.host} className="flex items-center gap-3 py-2.5">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm text-neutral-700 dark:text-neutral-300">
+                  {e.host}
+                </div>
+                <div
+                  className="mt-0.5 truncate text-xs text-neutral-400 dark:text-neutral-500"
+                  title={e.cookiesFile || undefined}
+                >
+                  {e.cookiesFile
+                    ? `${t("settings.platformCookies.sourceFile")} · ${e.cookiesFile}`
+                    : t("settings.platformCookies.sourceText")}
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setEditingOf(e.host);
+                  setDraft({
+                    host: e.host,
+                    cookiesFile: e.cookiesFile || "",
+                    cookiesText: e.cookiesText || "",
+                  });
+                }}
+                disabled={!!draft}
+                className="shrink-0 rounded-lg border border-neutral-200 px-2.5 py-1 text-xs text-neutral-500 transition hover:bg-neutral-50 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-400 dark:hover:bg-neutral-800"
+              >
+                {t("dl.monitor.edit")}
+              </button>
+              <button
+                onClick={() => void remove(e.host)}
+                disabled={busy}
+                className="shrink-0 rounded-lg border border-neutral-200 px-2.5 py-1 text-xs text-neutral-400 transition hover:bg-error-50 hover:text-error-500 disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-error-950/40"
+              >
+                {t("dl.monitor.delete")}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {draft && (
+        <div className="mt-4 space-y-3 rounded-xl bg-neutral-50 p-3 ring-1 ring-neutral-200 dark:bg-neutral-800/60 dark:ring-neutral-700">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="shrink-0 text-xs font-medium text-neutral-600 dark:text-neutral-300">
+              {t("settings.platformCookies.host")}
+            </span>
+            <input
+              value={draft.host}
+              onChange={(ev) => setDraft({ ...draft, host: ev.target.value })}
+              placeholder={t("settings.platformCookies.hostPlaceholder")}
+              spellCheck={false}
+              disabled={editingOf !== null}
+              className="min-w-0 max-w-xs flex-1 rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="shrink-0 text-xs font-medium text-neutral-600 dark:text-neutral-300">
+              {t("settings.cookiesFile")}
+            </span>
+            <input
+              value={draft.cookiesFile || ""}
+              onChange={(ev) => setDraft({ ...draft, cookiesFile: ev.target.value })}
+              placeholder="cookies.txt"
+              className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+            />
+            <button
+              onClick={async () => {
+                const [sel] = await pickPaths({});
+                if (sel) setDraft({ ...draft, cookiesFile: sel });
+              }}
+              className="shrink-0 rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+            >
+              {t("settings.cookiesBrowse")}
+            </button>
+          </div>
+          <textarea
+            value={draft.cookiesText || ""}
+            onChange={(ev) => setDraft({ ...draft, cookiesText: ev.target.value })}
+            rows={3}
+            spellCheck={false}
+            placeholder="# Netscape HTTP Cookie File"
+            className={`min-w-0 flex-1 resize-y rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 font-mono text-[11px] leading-relaxed dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 ${draftFileSet ? "opacity-50" : ""}`}
+          />
+          {error && (
+            <p className="rounded-lg bg-error-50 px-2.5 py-1.5 text-[11px] text-error-600 dark:bg-error-950/30 dark:text-error-400">
+              {error}
+            </p>
+          )}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => void save()}
+              disabled={busy || !draft.host.trim()}
+              className="rounded-lg bg-brand-500 px-3 py-1 text-xs font-medium text-white transition hover:bg-brand-600 disabled:opacity-50 dark:bg-brand-600 dark:hover:bg-brand-700"
+            >
+              {t("dl.monitor.save")}
+            </button>
+            <button
+              onClick={() => {
+                setDraft(null);
+                setEditingOf(null);
+                setError(null);
+              }}
+              disabled={busy}
+              className="rounded-lg border border-neutral-200 px-3 py-1 text-xs text-neutral-500 transition hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-400 dark:hover:bg-neutral-800"
+            >
+              {t("dl.monitor.cancel")}
+            </button>
+          </div>
+        </div>
+      )}
+      {dialog}
+    </section>
   );
 }
 

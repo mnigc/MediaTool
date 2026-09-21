@@ -244,7 +244,8 @@ export async function defaultDownloadDir(): Promise<string> {
   return roots.length ? roots[roots.length - 1] : "";
 }
 
-/** A URL of our own making (provider consent page, release notes, project home). */
+/** Open a URL outside the app: a live room the user added, a provider consent
+ *  page, release notes. Never a URL built from untrusted input. */
 export function openExternal(url: string): void {
   if (isDesktop) {
     void import("@tauri-apps/plugin-opener").then(({ openUrl }) => openUrl(url));

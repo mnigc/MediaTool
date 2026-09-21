@@ -73,7 +73,10 @@ pub fn run() {
             commands::monitor_list,
             commands::monitor_remove,
             commands::monitor_record_now,
-            commands::monitor_update
+            commands::monitor_update,
+            commands::cookies_list,
+            commands::cookies_set,
+            commands::cookies_remove
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

@@ -477,6 +477,13 @@ export interface MonitorEdit {
   quality?: string;
 }
 
+/** Cookies saved for one live platform, keyed by the room URL's host. */
+export interface PlatformCookies {
+  host: string;
+  cookiesFile?: string | null;
+  cookiesText?: string | null;
+}
+
 export interface MonitorInfo {
   id: string;
   url: string;
@@ -496,6 +503,8 @@ export interface MonitorInfo {
   currentJob?: string | null;
   pipeline: WorkflowStepInput[];
   uploadTo?: string[];
+  /** Where this room's recordings land; drives the open-folder action. */
+  recordDir?: string | null;
 }
 
 /* ── Upload targets & tasks ───────────────────────────────────── */

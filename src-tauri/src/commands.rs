@@ -187,6 +187,29 @@ pub fn monitor_update(
     mediatool_core::ytdlp::monitor_update(ctx(&app), id, edit)
 }
 
+/* ── Per-platform cookies ───────────────────────────────────────── */
+
+#[tauri::command]
+pub fn cookies_list(app: AppHandle) -> Vec<mediatool_core::ytdlp::PlatformCookies> {
+    let c = ctx(&app);
+    mediatool_core::ytdlp::cookies_list(&*c.env)
+}
+
+#[tauri::command]
+pub fn cookies_set(
+    app: AppHandle,
+    entry: mediatool_core::ytdlp::PlatformCookies,
+) -> Result<mediatool_core::ytdlp::PlatformCookies> {
+    let c = ctx(&app);
+    mediatool_core::ytdlp::cookies_set(&*c.env, entry)
+}
+
+#[tauri::command]
+pub fn cookies_remove(app: AppHandle, host: String) -> Result<()> {
+    let c = ctx(&app);
+    mediatool_core::ytdlp::cookies_remove(&*c.env, host)
+}
+
 /* ── Live recording (streamlink) ────────────────────────────────── */
 
 #[tauri::command]

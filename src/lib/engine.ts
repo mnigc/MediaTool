@@ -29,6 +29,7 @@ import type {
   OauthBeginRequest,
   OauthBeginResult,
   OauthResultEvent,
+  PlatformCookies,
   ProgressEvent,
   StartJobResult,
   StartWorkflowResult,
@@ -158,6 +159,20 @@ export function monitorRecordNow(id: string): Promise<void> {
 
 export function monitorUpdate(id: string, edit: MonitorEdit): Promise<MonitorInfo> {
   return invoke<MonitorInfo>("monitor_update", { id, edit });
+}
+
+export function cookiesList(): Promise<PlatformCookies[]> {
+  return invoke<PlatformCookies[]>("cookies_list");
+}
+
+/** Upsert one platform's cookies, keyed by its host. Returns the stored entry
+ *  with pasted text already materialised into a file. */
+export function cookiesSet(entry: PlatformCookies): Promise<PlatformCookies> {
+  return invoke<PlatformCookies>("cookies_set", { entry });
+}
+
+export function cookiesRemove(host: string): Promise<void> {
+  return invoke<void>("cookies_remove", { host });
 }
 
 export function onDownloadProgress(cb: (e: DownloadProgressEvent) => void): Promise<UnlistenFn> {

@@ -360,6 +360,170 @@ pub(crate) fn cookies_path(env: &dyn AppEnv, opts: &NetOptions) -> Option<String
     Some(path.to_string_lossy().into_owned())
 }
 
+/// Cookies saved for one live platform, keyed by the room URL's host. The
+/// pasted text is materialised into a per-host file at save time so two
+/// platforms never overwrite each other's cookies, and resolution only ever
+/// sees a plain path.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PlatformCookies {
+    pub host: String,
+    pub cookies_file: Option<String>,
+    /// Kept verbatim so the settings page can re-display what was pasted.
+    pub cookies_text: Option<String>,
+}
+
+fn platform_cookies_path(env: &dyn AppEnv) -> Option<PathBuf> {
+    Some(env.app_data_dir()?.join("platform_cookies.json"))
+}
+
+fn read_platform_cookies(env: &dyn AppEnv) -> Vec<PlatformCookies> {
+    let Some(path) = platform_cookies_path(env) else {
+        return vec![];
+    };
+    match std::fs::read_to_string(path) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
+        Err(_) => vec![],
+    }
+}
+
+fn write_platform_cookies(env: &dyn AppEnv, list: &[PlatformCookies]) -> Result<()> {
+    let path = platform_cookies_path(env).ok_or_else(|| AppError("无法定位应用数据目录".into()))?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(AppError::from)?;
+    }
+    std::fs::write(path, serde_json::to_string_pretty(list).map_err(AppError::from)?)
+        .map_err(AppError::from)
+}
+
+/// The host a room URL belongs to, lower-cased with the scheme, `www.` and
+/// anything after the authority stripped — the key cookies are matched on.
+pub fn host_key(url: &str) -> Option<String> {
+    let after_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .filter(|s| !s.is_empty())?;
+    // With userinfo the real host is what follows the '@', so keying on the
+    // text before it would hand a spoofed URL another platform's cookies.
+    // An IPv6 literal is not a platform we support either.
+    if authority.contains('@') || authority.starts_with('[') {
+        return None;
+    }
+    let host = authority.rsplit_once(':').map(|(h, _)| h).unwrap_or(authority);
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host);
+    (!host.is_empty()).then(|| host.to_string())
+}
+
+fn cookie_file_slug(host: &str) -> String {
+    host.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+pub fn cookies_list(env: &dyn AppEnv) -> Vec<PlatformCookies> {
+    read_platform_cookies(env)
+}
+
+/// Upsert by host. An entry with neither a file nor text clears the platform's
+/// cookies, so the UI can delete a row and the recorder falls back to global.
+pub fn cookies_set(env: &dyn AppEnv, entry: PlatformCookies) -> Result<PlatformCookies> {
+    let host = host_key(&entry.host).filter(|h| h.contains('.'))
+        .ok_or_else(|| AppError("请填写平台域名，例如 live.douyin.com".into()))?;
+    let file = entry
+        .cookies_file
+        .as_deref()
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+        .map(str::to_string);
+    let text = entry
+        .cookies_text
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_string);
+
+    let mut stored_file = file.clone();
+    if stored_file.is_none() {
+        if let Some(t) = &text {
+            let dir = env
+                .app_data_dir()
+                .map(|d| d.join("cookies"))
+                .ok_or_else(|| AppError("无法定位应用数据目录".into()))?;
+            std::fs::create_dir_all(&dir).map_err(AppError::from)?;
+            let path = dir.join(format!("{}.txt", cookie_file_slug(&host)));
+            if std::fs::read_to_string(&path).ok().as_deref() != Some(t.as_str()) {
+                std::fs::write(&path, t).map_err(AppError::from)?;
+            }
+            stored_file = Some(path.to_string_lossy().into_owned());
+        }
+    }
+
+    let stored = PlatformCookies {
+        host: host.clone(),
+        cookies_file: stored_file,
+        cookies_text: text,
+    };
+    let mut list = read_platform_cookies(env);
+    list.retain(|e| e.host != host);
+    if stored.cookies_file.is_some() {
+        list.push(stored.clone());
+    }
+    write_platform_cookies(env, &list)?;
+    Ok(stored)
+}
+
+pub fn cookies_remove(env: &dyn AppEnv, host: String) -> Result<()> {
+    let Some(host) = host_key(&host) else {
+        return Ok(());
+    };
+    let list = read_platform_cookies(env);
+    let owned_dir = env.app_data_dir().map(|d| d.join("cookies"));
+    if let Some(entry) = list.iter().find(|e| e.host == host) {
+        // Only files we materialised ourselves are ours to delete.
+        if let (Some(dir), Some(f)) = (&owned_dir, entry.cookies_file.as_deref()) {
+            if Path::new(f).starts_with(dir) {
+                let _ = std::fs::remove_file(f);
+            }
+        }
+    }
+    let kept: Vec<PlatformCookies> = list.into_iter().filter(|e| e.host != host).collect();
+    write_platform_cookies(env, &kept)
+}
+
+/// The cookies a monitor should probe and record with: a platform entry wins
+/// over the values the monitor was created with, because the global setting is
+/// one file for every site while a live room needs its own platform's session.
+pub(crate) fn monitor_net(env: &dyn AppEnv, i: &MonitorInfo) -> NetOptions {
+    let mut net = NetOptions {
+        cookies_file: i.cookies_file.clone(),
+        cookies_text: i.cookies_text.clone(),
+        proxy: i.proxy.clone(),
+    };
+    if let Some(p) = platform_cookies_for(env, &i.url) {
+        net.cookies_file = p.cookies_file;
+        net.cookies_text = p.cookies_text;
+    }
+    net
+}
+
+/// Cookies that apply to a room URL: a platform entry wins over whatever the
+/// monitor was created with, because the global setting is one file for every
+/// site while a live room needs its own platform's session.
+fn platform_cookies_for(env: &dyn AppEnv, url: &str) -> Option<PlatformCookies> {
+    let host = host_key(url)?;
+    read_platform_cookies(env)
+        .into_iter()
+        .find(|e| e.host == host || host.ends_with(&format!(".{}", e.host)))
+}
+
 pub(crate) fn common_net_args(env: &dyn AppEnv, bin: &Path, opts: &NetOptions) -> Vec<String> {
     let _ = bin;
     let mut a: Vec<String> = Vec::new();
@@ -1216,6 +1380,29 @@ pub struct MonitorInfo {
     pub pipeline: Vec<WorkflowStepInput>,
     #[serde(default)]
     pub upload_to: Vec<String>,
+    /// Where this room's recordings land, for the UI's open-folder action.
+    /// Filled in whenever the info is handed out, never stored by the caller.
+    #[serde(default)]
+    pub record_dir: Option<String>,
+}
+
+/// One folder per live room under the monitor's output dir, named after the
+/// streamer; the monitor's base dir when no usable room name exists yet.
+fn room_dir(i: &MonitorInfo) -> String {
+    match record_subdir(i.author.as_deref(), &i.name, &i.url) {
+        Some(sub) => Path::new(&i.output_dir)
+            .join(sub)
+            .to_string_lossy()
+            .into_owned(),
+        None => i.output_dir.clone(),
+    }
+}
+
+impl MonitorInfo {
+    fn reported(mut self) -> Self {
+        self.record_dir = Some(room_dir(&self));
+        self
+    }
 }
 
 impl MonitorInfo {
@@ -1243,6 +1430,7 @@ impl MonitorInfo {
             current_job: None,
             pipeline: r.pipeline.clone(),
             upload_to: r.upload_to.clone(),
+            record_dir: None,
         }
     }
 }
@@ -1260,7 +1448,7 @@ pub struct MonitorManager {
 
 impl MonitorManager {
     fn emit_info(emitter: &dyn Emitter, info: &MonitorInfo) {
-        emit(emitter, "monitor-status", info);
+        emit(emitter, "monitor-status", &info.clone().reported());
     }
 
     fn persist(env: &dyn AppEnv, mgr: &MonitorManager) {
@@ -1368,7 +1556,7 @@ pub fn monitor_add(ctx: Ctx, request: MonitorRequest) -> Result<MonitorInfo> {
     let handle = spawn_monitor(ctx.clone(), bin, info.clone());
     ctx.monitors.monitors.lock().unwrap().insert(id, handle);
     MonitorManager::persist(&*ctx.env, &ctx.monitors);
-    Ok(info)
+    Ok(info.reported())
 }
 
 fn spawn_monitor(ctx: Ctx, bin: PathBuf, info: MonitorInfo) -> MonitorHandle {
@@ -1397,11 +1585,7 @@ fn monitor_loop(
     stop: Arc<AtomicBool>,
     record_now: Arc<AtomicBool>,
 ) {
-    let opts = |i: &MonitorInfo| NetOptions {
-        cookies_file: i.cookies_file.clone(),
-        cookies_text: i.cookies_text.clone(),
-        proxy: i.proxy.clone(),
-    };
+    let opts = |i: &MonitorInfo| monitor_net(&*ctx.env, i);
     loop {
         if stop.load(Ordering::Relaxed) {
             break;
@@ -1535,13 +1719,8 @@ fn record_subdir(author: Option<&str>, name: &str, url: &str) -> Option<String> 
 fn record_once(ctx: &Ctx, bin: &Path, info: &Arc<Mutex<MonitorInfo>>) {
     let (req, pipeline, upload_to, auto) = {
         let i = info.lock().unwrap();
-        let output_dir = match record_subdir(i.author.as_deref(), &i.name, &i.url) {
-            Some(sub) => Path::new(&i.output_dir)
-                .join(sub)
-                .to_string_lossy()
-                .into_owned(),
-            None => i.output_dir.clone(),
-        };
+        let net = monitor_net(&*ctx.env, &i);
+        let output_dir = room_dir(&i);
         (
             DownloadRequest {
                 url: i.url.clone(),
@@ -1549,9 +1728,9 @@ fn record_once(ctx: &Ctx, bin: &Path, info: &Arc<Mutex<MonitorInfo>>) {
                 audio_format: None,
                 output_dir,
                 filename_template: None,
-                cookies_file: i.cookies_file.clone(),
-                cookies_text: i.cookies_text.clone(),
-                proxy: i.proxy.clone(),
+                cookies_file: net.cookies_file,
+                cookies_text: net.cookies_text,
+                proxy: net.proxy,
                 subtitles: Some(false),
                 kind: Some("record".into()),
                 max_duration_sec: None,
@@ -1605,7 +1784,7 @@ pub fn monitor_list(ctx: Ctx) -> Vec<MonitorInfo> {
         .lock()
         .unwrap()
         .values()
-        .map(|h| h.info.lock().unwrap().clone())
+        .map(|h| h.info.lock().unwrap().clone().reported())
         .collect();
     list
 }
@@ -1690,7 +1869,7 @@ pub fn monitor_update(ctx: Ctx, id: String, edit: MonitorEdit) -> Result<Monitor
         ctx.jobs.mark_cancelled(&job_id);
         ctx.jobs.kill(&job_id);
     }
-    Ok(info)
+    Ok(info.reported())
 }
 
 pub fn monitor_remove(ctx: Ctx, id: String) -> Result<()> {
@@ -1761,5 +1940,89 @@ mod tests {
         assert!(validate_live_url("https://live.bilibili.com/123").is_ok());
         assert!(validate_live_url("https://www.twitch.tv/x").is_ok());
         assert!(validate_live_url("https://www.douyin.com/video/123").is_ok());
+    }
+
+    #[test]
+    fn host_key_normalises_the_authority() {
+        assert_eq!(host_key("https://live.douyin.com/969060865386?x=1").as_deref(), Some("live.douyin.com"));
+        assert_eq!(host_key("https://WWW.Twitch.TV/someone").as_deref(), Some("twitch.tv"));
+        assert_eq!(host_key("http://127.0.0.1:8787/x").as_deref(), Some("127.0.0.1"));
+        assert_eq!(host_key("twitch.tv/someone").as_deref(), Some("twitch.tv"));
+    }
+
+    #[test]
+    fn host_key_refers_to_the_authority_not_the_query() {
+        // The path/query must never be mistaken for the host: a crafted URL
+        // would otherwise inherit another platform's cookies.
+        assert_eq!(host_key("https://evil.com/?x=live.douyin.com").as_deref(), Some("evil.com"));
+        assert_eq!(host_key("https://live.douyin.com@evil.com/"), None);
+        assert_eq!(host_key("https://[::1]:8787/x"), None);
+        assert_eq!(host_key("https:///x"), None);
+    }
+
+    #[test]
+    fn pasted_cookies_are_materialised_one_file_per_platform() {
+        let env = temp_env("per-host");
+        cookies_set(&env, PlatformCookies { host: "live.douyin.com".into(), cookies_text: Some("DOUYIN".into()), ..Default::default() }).unwrap();
+        cookies_set(&env, PlatformCookies { host: "live.bilibili.com".into(), cookies_text: Some("BILI".into()), ..Default::default() }).unwrap();
+
+        let list = cookies_list(&env);
+        assert_eq!(list.len(), 2);
+        let douyin = list.iter().find(|e| e.host == "live.douyin.com").unwrap();
+        let bili = list.iter().find(|e| e.host == "live.bilibili.com").unwrap();
+        assert_ne!(douyin.cookies_file, bili.cookies_file);
+        assert_eq!(std::fs::read_to_string(douyin.cookies_file.as_ref().unwrap()).unwrap(), "DOUYIN");
+        assert_eq!(std::fs::read_to_string(bili.cookies_file.as_ref().unwrap()).unwrap(), "BILI");
+    }
+
+    #[test]
+    fn a_rooms_platform_cookie_beats_the_global_one() {
+        let env = temp_env("precedence");
+        let mut monitor = MonitorInfo {
+            url: "https://live.douyin.com/123".into(),
+            cookies_file: Some("global.txt".into()),
+            ..Default::default()
+        };
+        assert_eq!(monitor_net(&env, &monitor).cookies_file.as_deref(), Some("global.txt"));
+
+        cookies_set(&env, PlatformCookies { host: "douyin.com".into(), cookies_file: Some("douyin.txt".into()), ..Default::default() }).unwrap();
+        // A parent domain covers its subdomains, so `douyin.com` applies here.
+        assert_eq!(monitor_net(&env, &monitor).cookies_file.as_deref(), Some("douyin.txt"));
+
+        monitor.url = "https://live.bilibili.com/1".into();
+        assert_eq!(monitor_net(&env, &monitor).cookies_file.as_deref(), Some("global.txt"));
+    }
+
+    #[test]
+    fn removing_a_platform_clears_its_materialised_file() {
+        let env = temp_env("remove");
+        let stored = cookies_set(&env, PlatformCookies { host: "live.douyin.com".into(), cookies_text: Some("X".into()), ..Default::default() }).unwrap();
+        let file = stored.cookies_file.unwrap();
+        assert!(Path::new(&file).exists());
+        cookies_remove(&env, "https://live.douyin.com/123".into()).unwrap();
+        assert!(cookies_list(&env).is_empty());
+        assert!(!Path::new(&file).exists());
+    }
+
+    struct TestEnv(PathBuf);
+
+    impl AppEnv for TestEnv {
+        fn resource_dir(&self) -> Option<PathBuf> {
+            None
+        }
+        fn app_data_dir(&self) -> Option<PathBuf> {
+            Some(self.0.clone())
+        }
+        fn open_url(&self, _url: &str) {}
+    }
+
+    fn temp_env(tag: &str) -> TestEnv {
+        let dir = std::env::temp_dir().join(format!(
+            "mediatool-cookies-{tag}-{:x}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        TestEnv(dir)
     }
 }

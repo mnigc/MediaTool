@@ -38,6 +38,7 @@ frontend sends, so these structs mirror that convention. */
 struct Args {
     path: String,
     id: String,
+    host: String,
     request_id: String,
     url: String,
     media_type: String,
@@ -48,6 +49,8 @@ struct Args {
     options: serde_json::Value,
     #[serde(default)]
     edit: serde_json::Value,
+    #[serde(default)]
+    entry: serde_json::Value,
 }
 
 fn parse(raw: &Bytes) -> Result<Args> {
@@ -168,6 +171,14 @@ async fn dispatch(state: &Arc<AppState>, command: &str, raw: &Bytes) -> Result<s
             let edit = field(&a.edit, "edit")?;
             json!(ytdlp::monitor_update(ctx.clone(), a.id, edit)?)
         }
+
+        /* ── per-platform cookies ── */
+        "cookies_list" => json!(ytdlp::cookies_list(&*ctx.env)),
+        "cookies_set" => {
+            let entry = field(&a.entry, "entry")?;
+            json!(ytdlp::cookies_set(&*ctx.env, entry)?)
+        }
+        "cookies_remove" => json!(ytdlp::cookies_remove(&*ctx.env, a.host)?),
 
         /* ── streamlink ── */
         "streamlink_status" => json!(streamlink::streamlink_status(ctx.clone()).await?),
