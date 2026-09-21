@@ -3,7 +3,7 @@
 
 services:
   mediatool:
-    image: gwakcho/mediatool:0.1.9   # CI also publishes version tags for pinning
+    image: gwakcho/mediatool:0.1.10   # CI also publishes version tags for pinning
     container_name: mediatool
     restart: unless-stopped
 

@@ -1,6 +1,6 @@
 [package]
 name = "mediatool-core"
-version = "0.1.9"
+version = "0.1.10"
 edition = "2021"
 description = "Pure media-processing engine shared by the desktop app and the headless server"
 
