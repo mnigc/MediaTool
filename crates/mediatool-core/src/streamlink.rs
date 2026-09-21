@@ -542,11 +542,13 @@ fn run_hidden(cmd: &mut Command) -> Result<std::process::ExitStatus> {
 
 /* ── Recording ──────────────────────────────────────────────────── */
 
-/// Cheap live-status probe for the monitor loop, used when yt-dlp doesn't
-/// recognise the URL at all (e.g. Douyin live, which only this engine can
-/// capture here). `--json` resolves the plugin and lists the streams without
-/// downloading anything: an object with "streams" means live, an "error"
-/// object means otherwise. Returns `(live_status, title, author)`.
+/// Cheap live-status probe for the monitor loop. This is the primary probe —
+/// recording goes to this engine whenever it's installed, so its answer is the
+/// one that predicts a successful capture. The monitor falls back to yt-dlp
+/// for sites with no plugin here (and for installs without the engine).
+/// `--json` resolves the plugin and lists the streams without downloading
+/// anything: an object with "streams" means live, an "error" object means
+/// otherwise. Returns `(live_status, title, author)`.
 pub fn probe_live(
     env: &dyn AppEnv,
     url: &str,
