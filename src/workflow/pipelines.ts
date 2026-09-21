@@ -3,18 +3,14 @@ import type { WorkflowStepInput } from "../types";
 import { CRF } from "../lib/quality";
 import {
   PLAYER_PREVIEW_CONTACT_PARAMS,
-  VLOSSLESS_VIDEO_PARAMS,
 } from "../lib/presets";
 import { readStorage, writeStorage } from "../lib/storage";
 
 /** A named processing pipeline: an ordered list of tool steps whose outputs
  *  chain into each other. Pipelines are the single shared vocabulary for
  *  "what to run after something finishes" — the workflow builder saves and
- *  loads them, downloads/recordings bind them as post-processing, and
- *  task-center jobs can run one when the encode completes.
- *
- *  Builtin atoms keep the download picker's treatment/addon semantics via
- *  `role`; user pipelines are complete chains with no role. */
+ *  loads them, downloads/recordings bind one as post-processing, and
+ *  task-center jobs can run one when the encode completes. */
 export interface Pipeline {
   id: string;
   /** Display name; builtins resolve through i18n via `nameKey`, customs keep
@@ -24,10 +20,6 @@ export interface Pipeline {
   nameKey?: string;
   /** i18n key of a one-line explanation (chip tooltip / summary detail). */
   descKey?: string;
-  /** Builtin atoms: treatments are mutually exclusive video operations and
-   *  run first in the download picker; addons chain after the treatment.
-   *  Undefined for user pipelines. */
-  role?: "treatment" | "addon";
   steps: WorkflowStepInput[];
   builtin: boolean;
   createdAt: number;
@@ -45,7 +37,6 @@ export const BUILTIN_PIPELINES: BuiltinSpec[] = [
     name: "无损封装 MP4",
     nameKey: "dl.pipeline.remux",
     descKey: "dl.pipeline.remux.desc",
-    role: "treatment",
     // Stream-copy into MP4: zero quality loss and near-instant. Requires the
     // source to already carry mp4-compatible codecs (H.264 + AAC).
     steps: [
@@ -63,26 +54,10 @@ export const BUILTIN_PIPELINES: BuiltinSpec[] = [
     ],
   },
   {
-    id: "vlossless",
-    name: "视觉无损",
-    nameKey: "dl.pipeline.vlossless",
-    descKey: "dl.pipeline.vlossless.desc",
-    role: "treatment",
-    // Same recipe as the "视觉无损" builtin preset — shared constant, so the
-    // two cannot drift apart.
-    steps: [
-      {
-        toolId: "video-compress",
-        params: { ...VLOSSLESS_VIDEO_PARAMS },
-      },
-    ],
-  },
-  {
     id: "transcode",
     name: "转码 MP4",
     nameKey: "dl.pipeline.transcode",
     descKey: "dl.pipeline.transcode.desc",
-    role: "treatment",
     steps: [
       {
         toolId: "video-compress",
@@ -101,10 +76,9 @@ export const BUILTIN_PIPELINES: BuiltinSpec[] = [
   },
   {
     id: "compress",
-    name: "压缩",
+    name: "高压缩（H.264）",
     nameKey: "dl.pipeline.compress",
     descKey: "dl.pipeline.compress.desc",
-    role: "treatment",
     steps: [
       {
         toolId: "video-compress",
@@ -123,10 +97,9 @@ export const BUILTIN_PIPELINES: BuiltinSpec[] = [
   },
   {
     id: "sprite",
-    name: "雪碧图 / 联系表",
+    name: "雪碧图",
     nameKey: "dl.pipeline.sprite",
     descKey: "dl.pipeline.sprite.desc",
-    role: "addon",
     // Same recipe as the "播放器预览" builtin preset — shared constant.
     steps: [
       {
@@ -140,7 +113,6 @@ export const BUILTIN_PIPELINES: BuiltinSpec[] = [
     name: "提取音频",
     nameKey: "dl.pipeline.audio",
     descKey: "dl.pipeline.audio.desc",
-    role: "addon",
     steps: [
       {
         toolId: "extract-audio",
@@ -259,8 +231,8 @@ export function removePipeline(id: string): void {
 }
 
 /** Merge the selected pipeline ids (in selection order) into a step list —
- *  the download/record picker's treatment + addon chips resolve through
- *  this, exactly like the presets did. */
+ *  the download/record picker resolves its bound pipeline through this,
+ *  exactly like the presets did. */
 export function stepsForPipelineIds(ids: string[]): WorkflowStepInput[] {
   return ids.flatMap((id) => pipelineById(id)?.steps ?? []);
 }
