@@ -8,4 +8,20 @@
 ; is a no-op on installs that already have the directory.
 !macro NSIS_HOOK_PREINSTALL
   Delete "$INSTDIR\binaries"
+
+  ; 0.1.8 switched the NSIS bundle from perUser to perMachine. perMachine only
+  ; restores the previous install dir from HKLM, so users who installed perUser
+  ; to a custom dir (e.g. D:\...) get a duplicate install in C:\Program Files on
+  ; the first auto-update. If HKLM has no entry but the stale perUser one does,
+  ; adopt its directory and drop the HKCU entry so it disappears from
+  ; Add/Remove Programs. $R8/$R9 are unused by the generated template.
+  ReadRegStr $R8 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCTNAME}" "InstallLocation"
+  ${If} $R8 == ""
+    ReadRegStr $R9 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCTNAME}" "InstallLocation"
+    ${If} $R9 != ""
+      StrCpy $INSTDIR "$R9"
+      SetOutPath $INSTDIR
+      DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCTNAME}"
+    ${EndIf}
+  ${EndIf}
 !macroend
