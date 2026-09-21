@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { ytdlpProbe } from "../lib/engine";
 import { formatBytes, openOutputFolder } from "../lib/engine";
 import { canRevealInFolder } from "../lib/shell";
@@ -357,7 +364,7 @@ function Thumb({
   const [broken, setBroken] = useState(false);
   if (!src || broken) {
     return (
-      <div className="relative flex h-16 w-28 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-neutral-100 to-neutral-200/70 ring-1 ring-neutral-200/70 dark:from-neutral-800 dark:to-neutral-800/40 dark:ring-neutral-700/60">
+      <div className="relative flex h-14 w-24 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-neutral-100 to-neutral-200/70 ring-1 ring-neutral-200/70 dark:from-neutral-800 dark:to-neutral-800/40 dark:ring-neutral-700/60">
         {audio ? (
           <MusicIcon className="h-5 w-5 text-neutral-400 dark:text-neutral-600" />
         ) : (
@@ -372,7 +379,7 @@ function Thumb({
     );
   }
   return (
-    <div className="relative h-16 w-28 shrink-0 overflow-hidden rounded-xl ring-1 ring-neutral-200/70 dark:ring-neutral-700/60">
+    <div className="relative h-14 w-24 shrink-0 overflow-hidden rounded-xl ring-1 ring-neutral-200/70 dark:ring-neutral-700/60">
       <img
         src={src}
         alt=""
@@ -433,21 +440,28 @@ function DownloadCard({
   const showThumb = task.kind !== "record";
 
   return (
-    <div className="group rounded-2xl bg-white p-4 shadow-card ring-1 ring-neutral-200 transition-shadow hover:shadow-card-hover dark:bg-neutral-900 dark:ring-neutral-800">
+    <div
+      className={`group rounded-2xl bg-white p-3 shadow-card ring-1 ring-neutral-200 transition-shadow hover:shadow-card-hover dark:bg-neutral-900 dark:ring-neutral-800 ${
+        running ? "job-fill" : ""
+      }`}
+      style={
+        running
+          ? ({ "--job-fill": `${Math.min(Math.max(pct, 0), 100)}%` } as CSSProperties)
+          : undefined
+      }
+    >
       {dialog}
-      <div className="flex gap-3">
+      <div className="flex gap-2.5">
         {showThumb && <Thumb src={thumbSrc} audio={audio} />}
 
         <div className="min-w-0 flex-1">
           <p
-            className={`line-clamp-2 text-sm font-medium leading-snug text-neutral-800 dark:text-neutral-100 ${
-              task.title === task.url ? "break-all" : ""
-            }`}
+            className="truncate text-sm font-medium leading-snug text-neutral-800 dark:text-neutral-100"
             title={task.title}
           >
             {task.title}
           </p>
-          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
             <PhaseBadge task={task} />
             {task.quality && (
               <span className="inline-flex shrink-0 items-center whitespace-nowrap rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-medium text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
@@ -455,6 +469,12 @@ function DownloadCard({
               </span>
             )}
           </div>
+          <p
+            className="mt-1 truncate text-[11px] text-neutral-400 dark:text-neutral-500"
+            title={task.output ?? task.url}
+          >
+            {task.output ?? task.url}
+          </p>
         </div>
 
         <div className="flex shrink-0 items-start gap-1.5">
@@ -505,33 +525,19 @@ function DownloadCard({
         </div>
       </div>
 
-      <p className="mt-2 truncate text-[11px] text-neutral-400 dark:text-neutral-500">
-        {task.output ?? task.url}
-      </p>
-
+      {/* Progress is the card's own background fill (same as the transcode
+          cards), so this line only carries the numbers. */}
       {running && (
-        <div className="mt-2.5">
-          <div className="h-1.5 overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
-            <div
-              className={`h-full rounded-full transition-all duration-300 ${
-                task.postprocessing ? "bg-warning-400" : "bg-brand-500"
-              }`}
-              style={{ width: `${task.postprocessing ? 100 : Math.max(pct, 2)}%` }}
-            />
-          </div>
-          <div className="mt-1 flex items-center gap-2 text-[11px] text-neutral-400 dark:text-neutral-500">
-            <span className="font-medium text-neutral-600 dark:text-neutral-300">
-              {task.postprocessing ? t("dl.postprocessing") : `${pct}%`}
+        <div className="mt-1.5 flex items-center gap-2 text-[11px] text-neutral-400 dark:text-neutral-500">
+          <span className="font-medium text-neutral-600 dark:text-neutral-300">{pct}%</span>
+          {task.speed && <span>· {task.speed}</span>}
+          {task.eta && <span>· ETA {task.eta}</span>}
+          {task.downloadedBytes != null && (
+            <span className="ml-auto tabular-nums">
+              {formatBytes(task.downloadedBytes)}
+              {task.totalBytes != null ? ` / ${formatBytes(task.totalBytes)}` : ""}
             </span>
-            {task.speed && <span>· {task.speed}</span>}
-            {task.eta && <span>· ETA {task.eta}</span>}
-            {task.downloadedBytes != null && (
-              <span className="ml-auto tabular-nums">
-                {formatBytes(task.downloadedBytes)}
-                {task.totalBytes != null ? ` / ${formatBytes(task.totalBytes)}` : ""}
-              </span>
-            )}
-          </div>
+          )}
         </div>
       )}
 
