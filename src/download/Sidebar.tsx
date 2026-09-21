@@ -143,12 +143,16 @@ export function PipelineChips({
     const p = pipelineById(id);
     return p ? pipelineDisplayName(p, t) : id;
   };
-  const treatment = selected.find((id) => pipelineById(id)?.role === "treatment");
-  const addon = selected.find((id) => pipelineById(id)?.role === "addon");
-  // Steps chain each output into the next, so the order is fixed:
-  // treatment first, add-on second. "None" simply drops the slot.
-  const commit = (treatmentId: string | null, addonId: string | null) =>
-    onChange([...(treatmentId ? [treatmentId] : []), ...(addonId ? [addonId] : [])]);
+  const detailOf = (id: string) => {
+    const p = pipelineById(id);
+    if (!p) return "";
+    if (p.descKey) return t(p.descKey);
+    return p.steps.map((s) => t(`tool.${s.toolId}.name`)).join(" → ");
+  };
+  // One flat list: builtin atoms and the user's workflow-builder pipelines
+  // are the same kind of thing — a complete chain to run when finished.
+  // Single-select; combos live on the workflow page as saved pipelines.
+  const selectedSet = new Set(selected);
 
   const chip = (active: boolean, label: string, title: string, onClick: () => void) => (
     <button
@@ -166,57 +170,31 @@ export function PipelineChips({
     </button>
   );
 
-  const treatments = pipelines.filter((p) => p.role === "treatment");
-  const addons = pipelines.filter((p) => p.role === "addon");
-  const names = selected.map(nameOf).join(" → ");
-
   return (
     <div className="space-y-2.5">
-      <div>
-        <p className="mb-1 text-xs text-neutral-500 dark:text-neutral-400">
-          {t("dl.pipeline.treatment")}
-        </p>
-        <div className="flex flex-wrap items-center gap-1.5">
-          {chip(
-            !treatment,
-            t("dl.pipeline.noTreatment"),
-            t("dl.pipeline.noTreatment.desc"),
-            () => commit(null, addon ?? null)
-          )}
-          {treatments.map((p) =>
-            chip(
-              treatment === p.id,
-              pipelineDisplayName(p, t),
-              p.descKey ? t(p.descKey) : "",
-              () => commit(treatment === p.id ? null : p.id, addon ?? null)
-            )
-          )}
-        </div>
-      </div>
-      <div>
-        <p className="mb-1 text-xs text-neutral-500 dark:text-neutral-400">
-          {t("dl.pipeline.addon")}
-        </p>
-        <div className="flex flex-wrap items-center gap-1.5">
-          {chip(!addon, t("dl.pipeline.noAddon"), t("dl.pipeline.noAddon.desc"), () =>
-            commit(treatment ?? null, null)
-          )}
-          {addons.map((p) =>
-            chip(
-              addon === p.id,
-              pipelineDisplayName(p, t),
-              p.descKey ? t(p.descKey) : "",
-              () => commit(treatment ?? null, addon === p.id ? null : p.id)
-            )
-          )}
-        </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {chip(
+          selected.length === 0,
+          t("dl.pipeline.noTreatment"),
+          t("dl.pipeline.noTreatment.desc"),
+          () => onChange([])
+        )}
+        {pipelines.map((p) =>
+          chip(
+            selectedSet.has(p.id),
+            pipelineDisplayName(p, t),
+            detailOf(p.id),
+            () => onChange(selectedSet.has(p.id) ? [] : [p.id])
+          )
+        )}
       </div>
       {selected.length > 0 && (
         <div className="text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
-          <div>{names}</div>
-          {treatment && pipelineById(treatment)?.descKey && (
-            <div>{t(pipelineById(treatment)!.descKey!)}</div>
-          )}
+          <div>{selected.map(nameOf).join(" → ")}</div>
+          {selected.map((id) => {
+            const d = detailOf(id);
+            return d ? <div key={id}>{d}</div> : null;
+          })}
         </div>
       )}
     </div>

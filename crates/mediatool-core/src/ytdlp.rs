@@ -799,9 +799,9 @@ pub fn run_download_blocking(
     );
     // Live capture is streamlink's specialty: it handles the HLS/DASH
     // adaptation of a stream that never ends far better. When the engine is
-    // present, hand the whole recording over to it; yt-dlp probes live
-    // status first (falling back to streamlink for sites it doesn't know)
-    // and serves every VOD download.
+    // present, hand the whole recording over to it — and the monitor probes
+    // with it first too (see `monitor_loop`), so detection and capture agree;
+    // yt-dlp serves sites streamlink has no plugin for, plus every VOD download.
     if is_record {
         if let Some(sl) = crate::streamlink::available(&*ctx.env) {
             crate::streamlink::run_record_blocking(ctx, &sl, req, id, pipeline, upload_to);
@@ -1424,11 +1424,13 @@ fn monitor_loop(
                 let i = info.lock().unwrap();
                 (i.url.clone(), opts(&i), i.auto_record)
             };
-            let probe = check_live(&*ctx.env, &bin, &url, &net).or_else(|_| {
-                // Some live sites (e.g. Douyin) aren't recognised by yt-dlp at
-                // all but are handled by the recording engine, so the monitor
-                // would sit on "unknown" and never auto-record. Probe with
-                // streamlink too — it's the engine that would do the capture.
+            // Probe with the capture engine first: recording always goes to
+            // streamlink when it's installed, so its answer is the one that
+            // predicts a successful capture (and its plugins report the
+            // author, which yt-dlp's live extractors often leave "NA").
+            // Sites streamlink has no plugin for — or machines without the
+            // engine — fall back to yt-dlp.
+            let probe = {
                 let cookies = cookies_path(&*ctx.env, &net);
                 crate::streamlink::probe_live(
                     &*ctx.env,
@@ -1436,7 +1438,8 @@ fn monitor_loop(
                     net.proxy.as_deref(),
                     cookies.as_deref(),
                 )
-            });
+                .or_else(|_| check_live(&*ctx.env, &bin, &url, &net))
+            };
             match probe {
                 Ok((status, title, author)) => {
                     let live = status == "is_live";
@@ -1457,6 +1460,26 @@ fn monitor_loop(
 
         if want_now || auto_recording {
             record_now.store(false, Ordering::Relaxed);
+            // Safety net for the yt-dlp fallback probe: its live extractors
+            // often report no uploader, which would leave the recording in
+            // the base output dir instead of the per-author folder.
+            if info.lock().unwrap().author.is_none() {
+                let (url, net) = {
+                    let i = info.lock().unwrap();
+                    (i.url.clone(), opts(&i))
+                };
+                let cookies = cookies_path(&*ctx.env, &net);
+                if let Ok((_, _, author)) = crate::streamlink::probe_live(
+                    &*ctx.env,
+                    &url,
+                    net.proxy.as_deref(),
+                    cookies.as_deref(),
+                ) {
+                    if !author.is_empty() {
+                        info.lock().unwrap().author = Some(author);
+                    }
+                }
+            }
             // Auto-monitored channels keep watching for the next stream;
             // a manual one-shot recording stops the monitor afterwards.
             let one_shot = !info.lock().unwrap().auto_record;
@@ -1609,6 +1632,7 @@ pub struct MonitorEdit {
 }
 
 pub fn monitor_update(ctx: Ctx, id: String, edit: MonitorEdit) -> Result<MonitorInfo> {
+    let mut pause_job: Option<String> = None;
     let info = {
         let mut map = ctx.monitors.monitors.lock().unwrap();
         let h = map
@@ -1627,6 +1651,12 @@ pub fn monitor_update(ctx: Ctx, id: String, edit: MonitorEdit) -> Result<Monitor
             i.interval_sec = interval.max(30);
         }
         if let Some(auto) = edit.auto_record {
+            // Flipping the switch off mid-capture is a pause: stop the
+            // running recording now (footage so far is kept) instead of
+            // waiting for the streamer to go offline.
+            if !auto && i.auto_record {
+                pause_job = i.current_job.clone();
+            }
             i.auto_record = auto;
         }
         if let Some(quality) = edit.quality.filter(|q| !q.trim().is_empty()) {
@@ -1654,6 +1684,12 @@ pub fn monitor_update(ctx: Ctx, id: String, edit: MonitorEdit) -> Result<Monitor
     };
     MonitorManager::emit_info(ctx.emitter.as_ref(), &info);
     MonitorManager::persist(&*ctx.env, &ctx.monitors);
+    // Cancel outside the manager lock; the recording thread emits its own
+    // status update once the capture winds down.
+    if let Some(job_id) = pause_job {
+        ctx.jobs.mark_cancelled(&job_id);
+        ctx.jobs.kill(&job_id);
+    }
     Ok(info)
 }
 

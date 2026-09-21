@@ -3,7 +3,7 @@
 
 services:
   mediatool:
-    image: gwakcho/mediatool:0.1.8   # CI also publishes version tags for pinning
+    image: gwakcho/mediatool:0.1.10   # CI also publishes version tags for pinning
     container_name: mediatool
     restart: unless-stopped
 
@@ -15,12 +15,26 @@ services:
       # Only for browser OAuth (YouTube/Drive/OneDrive): must be the exact
       # URL you type in the browser, including the port.
       # MEDIATOOL_PUBLIC_URL: ${PUBLIC_URL:-}
-      # TZ: Asia/Shanghai
+      TZ: ${TZ:-Asia/Shanghai}
+      # Directory trees the UI may browse, comma-separated (default: /media).
+      # Host paths can be anywhere; only the container-side path must be
+      # under a root, otherwise the app cannot see the mount. Use this to
+      # expose extra volumes, e.g.:
+      # MEDIATOOL_ROOTS: /media,/data/nas-share
 
     volumes:
       - mediatool-data:/data
       - ${MEDIA_LIBRARY:?MEDIA_LIBRARY must be set in .env}:/media/library:ro
       - ${OUTPUT_DIR:?OUTPUT_DIR must be set in .env}:/media/output:rw
+      # Want state (cookies, monitors) in a host folder for easy backups?
+      # Replace the named-volume line above with a bind mount, e.g.:
+      # - /volume1/docker/mediatool-data:/data
+
+    # If jobs fail writing to OUTPUT_DIR over ownership (container writes
+    # as uid 10001): prefer chowning the host output dir to that uid. As an
+    # alternative, run as a host user that already owns it — then also
+    # bind-mount /data to a directory that user owns (see volumes above).
+    # user: "1000:1000"
 
     # Intel QSV/VAAPI: uncomment, then set the GID from
     # `stat -c %g /dev/dri/renderD128`. See README for details.

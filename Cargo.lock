@@ -2294,7 +2294,7 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "mediatool"
-version = "0.1.8"
+version = "0.1.10"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -2316,7 +2316,7 @@ dependencies = [
 
 [[package]]
 name = "mediatool-core"
-version = "0.1.8"
+version = "0.1.10"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -2331,7 +2331,7 @@ dependencies = [
 
 [[package]]
 name = "mediatool-server"
-version = "0.1.8"
+version = "0.1.10"
 dependencies = [
  "axum",
  "futures-util",
