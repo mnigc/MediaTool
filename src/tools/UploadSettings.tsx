@@ -322,7 +322,10 @@ export default function UploadSection() {
                 )}
 
                 <p className="text-xs leading-relaxed text-neutral-400 dark:text-neutral-500">
-                  {t(`upload.help.${draft.kind}`)}
+                  {!isDesktop &&
+                  ["youtube", "gdrive", "onedrive"].includes(draft.kind as string)
+                    ? t("upload.help.oauthWeb")
+                    : t(`upload.help.${draft.kind}`)}
                 </p>
                 {oauthRunning && uploads.oauth && (
                   <>
