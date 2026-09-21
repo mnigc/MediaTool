@@ -11,7 +11,7 @@ import {
   usePipelines,
 } from "../workflow/pipelines";
 import type { Pipeline } from "../workflow/pipelines";
-import { VIDEO_EXTS } from "./registry";
+import { TOOL_ICONS, VIDEO_EXTS } from "./registry";
 import { defaultParamsFor } from "../lib/defaults";
 import { useConfirm } from "../components/ConfirmDialog";
 import UploadTargetChips from "../components/UploadTargetChips";
@@ -345,23 +345,38 @@ export default function WorkflowPage({ onOpenTasks }: { onOpenTasks?: () => void
               {t("workflow.addStep")}
             </button>
             {addOpen && (
-              <div className="absolute right-0 top-full z-30 mt-1 max-h-72 w-56 overflow-y-auto rounded-xl border border-neutral-200 bg-white p-1.5 shadow-card dark:border-neutral-700 dark:bg-neutral-900 animate-slide-up">
+              <div className="absolute right-0 top-full z-30 mt-1 max-h-[26rem] w-56 overflow-y-auto rounded-xl border border-neutral-200 bg-white p-1.5 shadow-card dark:border-neutral-700 dark:bg-neutral-900 animate-slide-up">
                 {hasTerminal && (
                   <p className="px-2.5 py-1.5 text-[10px] text-neutral-400 dark:text-neutral-500">
                     {t("workflow.terminalHint")}
                   </p>
                 )}
-                {WORKFLOW_STEP_TOOLS.map((toolId) => (
-                  <button
-                    key={toolId}
-                    type="button"
-                    onClick={() => addStep(toolId)}
-                    disabled={hasTerminal}
-                    title={hasTerminal ? t("workflow.terminalHint") : undefined}
-                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent dark:text-neutral-200 dark:hover:bg-neutral-800"
-                  >
-                    <span className="text-neutral-400 dark:text-neutral-500">{t(`tool.${toolId}.name`)}</span>
-                  </button>
+                {[
+                  { labelKey: "workflow.stepGroup.chain", ids: WORKFLOW_STEP_TOOLS.filter((id) => !TERMINAL_STEP_TOOLS.includes(id)) },
+                  { labelKey: "workflow.stepGroup.final", ids: WORKFLOW_STEP_TOOLS.filter((id) => TERMINAL_STEP_TOOLS.includes(id)) },
+                ].map((group, gi) => (
+                  <div key={group.labelKey}>
+                    {gi > 0 && <div className="mx-1 my-1 h-px bg-neutral-200 dark:bg-neutral-700" />}
+                    <p className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold text-neutral-500 dark:text-neutral-400">
+                      {t(group.labelKey)}
+                    </p>
+                    {group.ids.map((toolId) => {
+                      const Icon = TOOL_ICONS[toolId as ToolId];
+                      return (
+                        <button
+                          key={toolId}
+                          type="button"
+                          onClick={() => addStep(toolId)}
+                          disabled={hasTerminal}
+                          title={hasTerminal ? t("workflow.terminalHint") : undefined}
+                          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent dark:text-neutral-200 dark:hover:bg-neutral-800"
+                        >
+                          {Icon && <Icon className="h-4 w-4 shrink-0 text-neutral-500 dark:text-neutral-400" />}
+                          <span>{t(`tool.${toolId}.name`)}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 ))}
               </div>
             )}

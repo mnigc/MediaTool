@@ -24,13 +24,14 @@ export const WORKFLOW_STEP_TOOLS: string[] = [
   "mute",
   "watermark",
   "screenshot",
+  "video-contact",
   "extract-audio",
   "strip-metadata",
 ];
 
 /** Terminal steps produce a non-video artifact (images / audio) —
  *  nothing can be chained after them, so they must stay the LAST step. */
-export const TERMINAL_STEP_TOOLS: string[] = ["screenshot", "extract-audio"];
+export const TERMINAL_STEP_TOOLS: string[] = ["screenshot", "video-contact", "extract-audio"];
 
 export type StepStatus = "idle" | "running" | "done" | "error";
 

@@ -1,4 +1,22 @@
+import type { ComponentType } from "react";
 import type { ToolId } from "../types";
+import {
+  CameraIcon,
+  ExtractAudioIcon,
+  GridIcon,
+  MergeIcon,
+  MuteIcon,
+  ScissorsIcon,
+  SearchIcon,
+  SlidersIcon,
+  SpeedIcon,
+  StripMetadataIcon,
+  SubtitleIcon,
+  VolumeIcon,
+  WatermarkIcon,
+  WaveDetectIcon,
+  FrameStripIcon,
+} from "../components/icons";
 
 export type ToolCategory = "video" | "audio";
 
@@ -21,6 +39,27 @@ export type ModuleId =
  *  "strip-metadata" is also no longer a workbench: it is triggered from the
  *  inspect page as a plain job. */
 export type WorkbenchId = Exclude<ToolId, "strip-metadata"> | "inspect";
+
+/** Icon per tool, shared by the module cards and the workflow step picker. */
+export const TOOL_ICONS: Record<ToolId | "inspect", ComponentType<{ className?: string }>> = {
+  "video-compress": SlidersIcon,
+  trim: ScissorsIcon,
+  mute: MuteIcon,
+  screenshot: CameraIcon,
+  speed: SpeedIcon,
+  watermark: WatermarkIcon,
+  "video-subtitle": SubtitleIcon,
+  "video-merge": MergeIcon,
+  "video-frames": FrameStripIcon,
+  "video-contact": GridIcon,
+  "video-silence": WaveDetectIcon,
+  "audio-compress": SlidersIcon,
+  "extract-audio": ExtractAudioIcon,
+  "audio-volume": VolumeIcon,
+  "audio-merge": MergeIcon,
+  "strip-metadata": StripMetadataIcon,
+  inspect: SearchIcon,
+};
 
 /** App navigation state: either a module landing page, or a concrete tool. */
 export type Route =
