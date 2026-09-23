@@ -43,6 +43,8 @@ struct Args {
     url: String,
     media_type: String,
     duration_secs: Option<f64>,
+    width: Option<u32>,
+    count: Option<u32>,
     #[serde(default)]
     request: serde_json::Value,
     #[serde(default)]
@@ -108,6 +110,16 @@ async fn dispatch(state: &Arc<AppState>, command: &str, raw: &Bytes) -> Result<s
         "get_thumbnail" => json!(
             thumbnail::get_thumbnail_spawn(ctx.env.clone(), a.path, a.media_type, a.duration_secs)
                 .await?
+        ),
+        "get_filmstrip" => json!(
+            thumbnail::get_filmstrip_spawn(
+                ctx.env.clone(),
+                a.path,
+                a.count.unwrap_or(8),
+                a.width,
+                a.duration_secs
+            )
+            .await?
         ),
         "start_job" => json!(jobs::start_job(ctx.clone(), field(&a.request, "request")?).await?),
         "start_workflow" => {

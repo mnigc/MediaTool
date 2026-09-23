@@ -49,7 +49,8 @@ const statusClass = (phase: UploadTask["phase"]): string => {
   }
 };
 
-/** One (file × target) transfer, rendered in the task center next to jobs. */
+/** One upload transfer, rendered in the task center next to jobs. A Telegram
+ *  card can cover several files, which land as a single album. */
 export default function UploadCard({ task, onCancel, onRetry, onRemove }: Props) {
   const { t } = useI18n();
   const isDone = task.phase === "done";
@@ -71,9 +72,17 @@ export default function UploadCard({ task, onCancel, onRetry, onRemove }: Props)
             <span className={`shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${KIND_CLS[task.kind]}`}>
               {KIND_LABEL[task.kind]}
             </span>
-            <span className="truncate text-sm font-medium text-neutral-900 dark:text-neutral-100" title={task.filePath}>
-              {task.fileName}
+            <span
+              className="truncate text-sm font-medium text-neutral-900 dark:text-neutral-100"
+              title={task.filePaths.map(baseName).join("\n")}
+            >
+              {baseName(task.filePaths[0] ?? "")}
             </span>
+            {task.filePaths.length > 1 && (
+              <span className="shrink-0 text-xs text-neutral-400 dark:text-neutral-500">
+                {t("upload.card.fileCount", { n: task.filePaths.length })}
+              </span>
+            )}
           </div>
           <p className="mt-0.5 truncate text-xs text-neutral-400 dark:text-neutral-500" title={task.targetName}>
             {task.targetName}
@@ -150,7 +159,7 @@ export default function UploadCard({ task, onCancel, onRetry, onRemove }: Props)
             )}
             {isDone && canRevealInFolder && (
               <button
-                onClick={() => openOutputFolder(task.filePath)}
+                onClick={() => openOutputFolder(task.filePaths[0])}
                 className="flex items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 text-xs font-medium text-neutral-600 ring-1 ring-neutral-200 transition hover:bg-neutral-50 dark:bg-neutral-800 dark:text-neutral-300 dark:ring-neutral-700 dark:hover:bg-neutral-700"
               >
                 <FolderIcon className="h-3.5 w-3.5" />
@@ -193,4 +202,9 @@ export default function UploadCard({ task, onCancel, onRetry, onRemove }: Props)
       )}
     </div>
   );
+}
+
+function baseName(p: string): string {
+  const norm = p.replace(/\\/g, "/");
+  return norm.slice(norm.lastIndexOf("/") + 1);
 }

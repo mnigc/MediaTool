@@ -56,6 +56,7 @@ pub fn run() {
             commands::ffmpeg_status,
             commands::inspect_media,
             commands::get_thumbnail,
+            commands::get_filmstrip,
             commands::upload_start,
             commands::cancel_upload,
             commands::oauth_begin,

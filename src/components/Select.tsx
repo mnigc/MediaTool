@@ -41,6 +41,11 @@ function collectOptions(children: ReactNode): Option[] {
 const TRIGGER_BASE =
   "flex w-full items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-700 transition focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 dark:focus:border-brand-500";
 
+/** Borderless trigger for labels that double as a control (column headers):
+ *  hugs the text, chevron right after it. */
+const TRIGGER_TEXT =
+  "flex items-center gap-0.5 rounded-lg py-1 text-xs font-medium text-neutral-600 transition hover:text-brand-600 disabled:cursor-not-allowed disabled:opacity-50 dark:text-neutral-300 dark:hover:text-brand-300";
+
 /** Styled replacement for native <select>: a button + floating listbox that
  *  matches the app's design system. Accepts the same <option> children and a
  *  simple `onChange(value)` callback. Width is controlled via `className` on
@@ -51,6 +56,7 @@ export default function Select({
   children,
   className = "",
   triggerClassName = "",
+  variant = "field",
   disabled = false,
   title,
 }: {
@@ -60,6 +66,8 @@ export default function Select({
   className?: string;
   /** Extra classes for the trigger button (e.g. header sizing). */
   triggerClassName?: string;
+  /** `"text"` drops the box entirely for an inline label-with-chevron. */
+  variant?: "field" | "text";
   disabled?: boolean;
   title?: string;
 }) {
@@ -222,8 +230,12 @@ export default function Select({
           if (open) setOpen(false);
           else openMenu();
         }}
-        className={`${TRIGGER_BASE} ${triggerClassName} ${
-          open ? "border-brand-400 ring-1 ring-brand-100 dark:border-brand-500" : ""
+        className={`${variant === "text" ? TRIGGER_TEXT : TRIGGER_BASE} ${triggerClassName} ${
+          open
+            ? variant === "text"
+              ? "text-brand-600 dark:text-brand-300"
+              : "border-brand-400 ring-1 ring-brand-100 dark:border-brand-500"
+            : ""
         }`}
       >
         <span className="min-w-0 flex-1 truncate text-left">

@@ -38,6 +38,7 @@ pub fn probe_sync(env: &dyn AppEnv, path: &str) -> Result<MediaInfo> {
 
     let mut width = None;
     let mut height = None;
+    let mut fps = None;
     let mut video_codec = None;
     let mut audio_codec = None;
     let mut has_video = false;
@@ -56,6 +57,18 @@ pub fn probe_sync(env: &dyn AppEnv, path: &str) -> Result<MediaInfo> {
                         .map(String::from);
                     width = s.get("width").and_then(|w| w.as_u64()).map(|w| w as u32);
                     height = s.get("height").and_then(|h| h.as_u64()).map(|h| h as u32);
+                    // The average rate is what a re-encode should reproduce;
+                    // `0/0` shows up on streams ffprobe cannot measure, where
+                    // the nominal rate is the better guess. Absurd values
+                    // (timestamp-padded containers) are dropped instead.
+                    let rate = |key: &str| {
+                        s.get(key)
+                            .and_then(|v| v.as_str())
+                            .and_then(parse_frame_rate)
+                    };
+                    fps = rate("avg_frame_rate")
+                        .or_else(|| rate("r_frame_rate"))
+                        .filter(|f| (1.0..=240.0).contains(f));
                     // HDR10 (smpte2084) and HLG (arib-std-b67) transfers; DV
                     // sources expose the same transfer on their base layer.
                     let transfer = s
@@ -101,12 +114,25 @@ pub fn probe_sync(env: &dyn AppEnv, path: &str) -> Result<MediaInfo> {
         duration_secs,
         width,
         height,
+        fps,
         video_codec,
         audio_codec,
         bitrate_kbps,
         size_bytes,
         hdr,
     })
+}
+
+/// ffprobe frame rates arrive as `num/den`; `0/0` and unparseable values are
+/// reported as unknown.
+fn parse_frame_rate(raw: &str) -> Option<f64> {
+    let (num, den) = raw.split_once('/')?;
+    let n: f64 = num.trim().parse().ok()?;
+    let d: f64 = den.trim().parse().ok()?;
+    if n <= 0.0 || d <= 0.0 {
+        return None;
+    }
+    Some(n / d)
 }
 
 /// Read a child's stdout to EOF with a hard timeout. On timeout the child is

@@ -5,18 +5,18 @@ import type {
   ExtractAudioParams,
   FrameSampleParams,
   MuteParams,
+  RoughCutParams,
   ScreenshotParams,
   SpeedParams,
   SubtitleParams,
+  ToolId,
   ToolParams,
   TrimParams,
-  VideoMergeParams,
   VideoSilenceParams,
   WatermarkParams,
 } from "../types";
-import type { WorkbenchId } from "./registry";
 
-export function blankToolParams(tool: WorkbenchId): ToolParams | null {
+export function blankToolParams(tool: ToolId): ToolParams | null {
   switch (tool) {
     case "screenshot":
       return {
@@ -47,8 +47,14 @@ export function blankToolParams(tool: WorkbenchId): ToolParams | null {
     /* ── New video tools ── */
     case "video-subtitle":
       return { path: "", burn: true } satisfies SubtitleParams;
-    case "video-merge":
-      return { mode: "concat" } satisfies VideoMergeParams;
+    /* The rough-cut editor manages its own params (timeline → clips) and
+     * submits through TaskCenter directly, so the queue default is inert. */
+    case "roughcut":
+      return {
+        mode: "copy",
+        clips: [],
+        container: "mp4",
+      } satisfies RoughCutParams;
     case "video-frames":
       return { interval: 2, fps: 12, width: 480 } satisfies FrameSampleParams;
     case "video-contact":

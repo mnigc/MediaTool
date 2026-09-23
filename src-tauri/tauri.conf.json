@@ -22,7 +22,14 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data: https:; media-src 'self' asset: http://asset.localhost https://asset.localhost blob:; style-src 'self' 'unsafe-inline'",
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "**/*.{mp4,mkv,mov,webm,avi,flv,ts,m4v,wmv,mpeg,mpg,3gp}",
+          "**/*.{MP4,MKV,MOV,WEBM,AVI,FLV,TS,M4V,WMV,MPEG,MPG,3GP}"
+        ]
+      }
     }
   },
   "bundle": {

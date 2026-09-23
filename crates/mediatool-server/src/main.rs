@@ -5,6 +5,7 @@ mod config;
 mod env;
 mod events;
 mod fsbrowse;
+mod media_http;
 mod oauth;
 mod paths;
 mod rpc;
@@ -87,6 +88,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             post(rpc::handle).with_state(state.clone()),
         )
         .route("/api/events", get(ws::upgrade).with_state(emitter))
+        .route("/api/media", get(media_http::stream).with_state(state.clone()))
         .layer(axum::middleware::from_fn_with_state(
             Auth::new(cfg.token.clone()),
             auth::require_token,

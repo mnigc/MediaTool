@@ -71,6 +71,19 @@ pub async fn get_thumbnail(
     mediatool_core::thumbnail::get_thumbnail_spawn(env, path, media_type, duration_secs).await
 }
 
+/// Evenly spaced frames for the rough-cut timeline's filmstrip.
+#[tauri::command]
+pub async fn get_filmstrip(
+    app: AppHandle,
+    path: String,
+    count: u32,
+    width: Option<u32>,
+    duration_secs: Option<f64>,
+) -> Result<Vec<String>> {
+    let env = ctx(&app).env.clone();
+    mediatool_core::thumbnail::get_filmstrip_spawn(env, path, count, width, duration_secs).await
+}
+
 #[tauri::command]
 pub fn cancel_job(app: AppHandle, id: String) {
     let state = app.state::<ShellState>();

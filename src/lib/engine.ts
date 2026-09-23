@@ -92,6 +92,21 @@ export async function getThumbnail(
   });
 }
 
+/** Evenly spaced frames for the rough-cut timeline's filmstrip. */
+export async function getFilmstrip(
+  path: string,
+  count: number,
+  width?: number,
+  durationSecs?: number | null
+): Promise<string[]> {
+  return invoke<string[]>("get_filmstrip", {
+    path,
+    count,
+    width: width ?? null,
+    durationSecs: durationSecs ?? null,
+  });
+}
+
 export async function detectGpu(): Promise<GpuInfo> {
   return invoke<GpuInfo>("detect_gpu");
 }

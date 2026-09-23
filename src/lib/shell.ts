@@ -100,6 +100,21 @@ async function rpc<T>(command: string, args?: Record<string, unknown>): Promise<
   return body as T;
 }
 
+/* ── Media preview URLs ──────────────────────────────────────── */
+
+/** A URL a `<video>`/`<img>` element can load a local file from, in either
+ *  shell. Desktop streams it through the asset protocol; web mode streams
+ *  from the authenticated `/api/media` endpoint (token in the query, like
+ *  the WS handshake). */
+export async function mediaStreamUrl(path: string): Promise<string> {
+  if (isDesktop) {
+    const { convertFileSrc } = await import("@tauri-apps/api/core");
+    return convertFileSrc(path);
+  }
+  const params = new URLSearchParams({ path, token: token ?? "" });
+  return `${API_BASE}/api/media?${params.toString()}`;
+}
+
 /* ── Events ───────────────────────────────────────────────────── */
 
 type Handler = (payload: unknown) => void;

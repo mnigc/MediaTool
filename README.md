@@ -20,8 +20,6 @@
 - **Convert** — any container/codec combo (MP4 · MKV · WebM · MOV × H.264 · HEVC · VP9 · AV1); switching containers auto-matches the right codecs.
 - **Trim** — multi-segment cutting in lossless keyframe mode or precise re-encode mode.
 - **Subtitle** — burn in or soft-mux external subtitle files.
-- **Merge** — concatenate clips into one video.
-- **Speed change** — 0.25× to 4× with audio pitch preserved, optional mute.
 - **Watermark** — image overlay with 9-position anchoring, scale, margin and opacity controls.
 - **Screenshots & frames** — extract a single frame or an interval series to PNG/JPEG; sample frames into a time-lapse video; build contact sheets / player-preview sprite grids.
 - **Remove audio** — lossless mute via stream copy.

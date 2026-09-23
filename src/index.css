@@ -298,18 +298,32 @@ select,
   box-shadow: 0 0 0 2px #4F5ED0, 0 0 0 4px rgba(79, 94, 208, 0.12);
 }
 
-/* range slider */
+/* range slider. The filled part is a hard-stop gradient: with appearance:none the
+   webview paints no progress of its own, and `--mp-fill` (a percentage, set by the
+   caller from value/min/max) says where the thumb is. Undimensioned sliders read
+   as a plain track, which is the old look. */
 input[type="range"].mp-range {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
   height: 6px;
   border-radius: 9999px;
-  background: #e5e7eb;
+  background: linear-gradient(
+    to right,
+    var(--color-brand-300) var(--mp-fill, 0%),
+    #e5e7eb var(--mp-fill, 0%)
+  );
   cursor: pointer;
 }
 .dark input[type="range"].mp-range {
-  background: #404040;
+  background: linear-gradient(
+    to right,
+    var(--color-brand-700) var(--mp-fill, 0%),
+    #404040 var(--mp-fill, 0%)
+  );
+}
+input[type="range"].mp-range:disabled {
+  cursor: not-allowed;
 }
 input[type="range"].mp-range::-webkit-slider-runnable-track {
   -webkit-appearance: none;

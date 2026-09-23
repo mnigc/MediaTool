@@ -190,6 +190,103 @@ fn temp_thumb(prefix: &str, ext: &str) -> PathBuf {
     ))
 }
 
+/* ── Rough-cut timeline filmstrip ──────────────────────────────── */
+
+/// Async wrapper: N evenly spaced frames for a timeline filmstrip.
+pub async fn get_filmstrip_spawn(
+    env: std::sync::Arc<dyn AppEnv>,
+    path: String,
+    count: u32,
+    width: Option<u32>,
+    duration_secs: Option<f64>,
+) -> Result<Vec<String>> {
+    tokio::task::spawn_blocking(move || {
+        get_filmstrip_sync(&*env, &path, count, width, duration_secs)
+    })
+    .await
+    .map_err(|e| crate::error::AppError(e.to_string()))?
+}
+
+/// Up to `count` JPEG frames spread across the source, as data URLs. One
+/// ffmpeg pass dumps a numbered sequence into a temp dir; when the duration is
+/// unknown it falls back to the first frames.
+///
+/// `-skip_frame nokey` is what keeps this usable on a feature-length file:
+/// sampling every `d/n` seconds would otherwise decode everything in between,
+/// a pass the timeout cuts off with nothing to show. Keyframes are precisely
+/// the frames a filmstrip wants, so skipping the rest leaves only demuxing.
+/// Frames written before a timeout are still returned.
+pub fn get_filmstrip_sync(
+    env: &dyn AppEnv,
+    path: &str,
+    count: u32,
+    width: Option<u32>,
+    duration_secs: Option<f64>,
+) -> Result<Vec<String>> {
+    let p = PathBuf::from(path);
+    if !p.exists() {
+        return Ok(vec![]);
+    }
+    let n = count.clamp(2, 16);
+    let w = width.filter(|w| *w >= 16).unwrap_or(160);
+    let dir = std::env::temp_dir().join(format!(
+        "mediatool_strip_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&dir)?;
+
+    let mut vf = match duration_secs {
+        Some(d) if d > 0.0 => format!("fps={n}/{:.3},scale={w}:-2", d),
+        _ => format!("scale={w}:-2"),
+    };
+    vf.push_str(",setpts=N/FRAME_RATE/TB");
+    let pattern = dir.join("%03d.jpg");
+    let args: Vec<String> = vec![
+        "-skip_frame".into(),
+        "nokey".into(),
+        "-i".into(),
+        p.to_string_lossy().to_string(),
+        "-an".into(),
+        "-sn".into(),
+        "-vf".into(),
+        vf,
+        "-frames:v".into(),
+        n.to_string(),
+        "-q:v".into(),
+        "7".into(),
+        "-y".into(),
+        pattern.to_string_lossy().to_string(),
+    ];
+    let Ok((child, _stdout, _stderr, _drain)) = ffmpeg::spawn(env, "ffmpeg", &args) else {
+        let _ = std::fs::remove_dir_all(&dir);
+        return Ok(vec![]);
+    };
+    let _ = wait_with_timeout(child, THUMB_TIMEOUT);
+    // ffmpeg replaced %03d starting at 1; stop at the first gap. A killed pass
+    // leaves the tail unwritten, and so does a source with too few frames.
+    let mut urls = Vec::new();
+    for i in 1..=n {
+        let f = dir.join(format!("{i:03}.jpg"));
+        match std::fs::read(&f) {
+            Ok(buf) if is_complete_jpeg(&buf) => {
+                urls.push(format!("data:image/jpeg;base64,{}", base64_encode(&buf)))
+            }
+            _ => break,
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(urls)
+}
+
+/// A frame ffmpeg was killed while writing has no end-of-image marker and
+/// would render as a broken image, so it counts as missing.
+fn is_complete_jpeg(buf: &[u8]) -> bool {
+    buf.len() > 4 && buf.ends_with(&[0xFF, 0xD9])
+}
+
 fn base64_encode(input: &[u8]) -> String {
     const CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity((input.len() + 2) / 3 * 4);

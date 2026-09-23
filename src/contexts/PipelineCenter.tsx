@@ -170,7 +170,7 @@ export function PipelineCenterProvider({ children }: { children: ReactNode }) {
           // The run's final output is the product — push it to the bound
           // upload targets like every other producer.
           if (ok && output) {
-            uploadOnceRef.current(run.uploadTo, [output], `run-${runId}-${index}`);
+            uploadOnceRef.current([output], run.uploadTo, `run-${runId}-${index}`);
           }
           settle(runId);
           advance(runId);

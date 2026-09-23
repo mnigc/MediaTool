@@ -5,7 +5,6 @@ import type {
   VideoParams,
 } from "../types";
 import { blankToolParams } from "../tools/defaults";
-import type { WorkbenchId } from "../tools/registry";
 import { CRF } from "./quality";
 
 function videoDefaults(format: string, crf: number, audioKbps: number): VideoParams {
@@ -41,7 +40,7 @@ export function defaultParamsFor(toolId: ToolId): JobParams {
     case "audio-compress":
       return blankParams("audio");
     default: {
-      const single = blankToolParams(toolId as WorkbenchId);
+      const single = blankToolParams(toolId);
       if (single) return single;
       return blankParams("video");
     }

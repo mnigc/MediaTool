@@ -84,10 +84,10 @@ export type ToolId =
   | "extract-audio"
   | "strip-metadata"
   | "video-subtitle"
-  | "video-merge"
   | "video-frames"
   | "video-contact"
   | "video-silence"
+  | "roughcut"
   | "audio-volume"
   | "audio-merge";
 
@@ -138,10 +138,26 @@ export interface SubtitleParams {
   burn?: boolean;
 }
 
-/** Concatenate multiple video clips. */
-export interface VideoMergeParams {
-  mode: "concat";
-  mergeInputs?: string[];
+/* ── Rough cut (timeline editor) ───────────────────────────── */
+
+/** One segment of the rough-cut timeline. */
+export interface RoughCutClip {
+  path: string;
+  startTime: number;
+  /** undefined = to end of source */
+  endTime?: number;
+  mute?: boolean;
+  volume?: number; // linear gain, 1 = unchanged
+  speed?: number; // 0.25..4, 1 = unchanged
+}
+
+/** Ordered clip list exported as one file. */
+export interface RoughCutParams {
+  mode: "copy" | "encode";
+  clips: RoughCutClip[];
+  container: "mp4" | "mkv";
+  /** Encoding recipe for "encode" mode; backend defaults when omitted. */
+  encode?: VideoParams;
 }
 
 /* ── New audio tools ───────────────────────────────────────── */
@@ -208,7 +224,7 @@ export type ToolParams =
   | ExtractAudioParams
   | StripMetadataParams
   | SubtitleParams
-  | VideoMergeParams
+  | RoughCutParams
   | AudioVolumeParams
   | AudioMergeParams
   | FrameSampleParams
@@ -327,6 +343,8 @@ export interface DoneEvent {
   ok: boolean;
   cancelled?: boolean;
   output?: string | null;
+  /** Every deliverable of the job; absent when it is just `output`. */
+  outputs?: string[] | null;
   error?: string | null;
   inputSize: number;
   outputSize?: number | null;
@@ -576,8 +594,9 @@ export interface UploadTask {
   targetId: string;
   targetName: string;
   kind: UploadTargetKind;
-  filePath: string;
-  fileName: string;
+  /** Everything handed to this one transfer; only Telegram groups several
+   *  files into a single upload (an album), other kinds get one file each. */
+  filePaths: string[];
   size: number;
   percent: number;
   phase: UploadPhase;
@@ -590,8 +609,7 @@ export interface UploadTask {
 
 export interface UploadRequest {
   target: Record<string, unknown>;
-  filePath: string;
-  name?: string | null;
+  filePaths: string[];
 }
 
 export interface UploadStartResult {

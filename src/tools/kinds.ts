@@ -11,6 +11,14 @@ export function isBatchEditable(toolId: string): boolean {
   return BATCH_EDITABLE_TOOLS.has(toolId);
 }
 
+/** Tools whose cards carry an inline player: their params are cut points, so
+ *  the footage has to sit next to the inputs to be set by eye. */
+export const PREVIEW_TOOLS: ReadonlySet<string> = new Set<ToolId>(["trim"]);
+
+export function hasInlinePreview(toolId: string): boolean {
+  return PREVIEW_TOOLS.has(toolId);
+}
+
 export function mediaTypeOfBatchTool(toolId: BatchToolId): "video" | "audio" {
   return toolId.startsWith("audio") ? "audio" : "video";
 }

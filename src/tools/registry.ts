@@ -12,6 +12,7 @@ import {
   SpeedIcon,
   StripMetadataIcon,
   SubtitleIcon,
+  TimelineIcon,
   VolumeIcon,
   WatermarkIcon,
   WaveDetectIcon,
@@ -37,8 +38,10 @@ export type ModuleId =
 
 /** Pseudo-tool rendered as a panel but never queued as a job.
  *  "strip-metadata" is also no longer a workbench: it is triggered from the
- *  inspect page as a plain job. */
-export type WorkbenchId = Exclude<ToolId, "strip-metadata"> | "inspect";
+ *  inspect page as a plain job. "roughcut" opens its own timeline editor.
+ *  "speed" has no card either — the rough-cut clips cover it; it stays
+ *  available as a chainable workflow step. */
+export type WorkbenchId = Exclude<ToolId, "strip-metadata" | "speed"> | "inspect";
 
 /** Icon per tool, shared by the module cards and the workflow step picker. */
 export const TOOL_ICONS: Record<ToolId | "inspect", ComponentType<{ className?: string }>> = {
@@ -49,10 +52,10 @@ export const TOOL_ICONS: Record<ToolId | "inspect", ComponentType<{ className?: 
   speed: SpeedIcon,
   watermark: WatermarkIcon,
   "video-subtitle": SubtitleIcon,
-  "video-merge": MergeIcon,
   "video-frames": FrameStripIcon,
   "video-contact": GridIcon,
   "video-silence": WaveDetectIcon,
+  roughcut: TimelineIcon,
   "audio-compress": SlidersIcon,
   "extract-audio": ExtractAudioIcon,
   "audio-volume": VolumeIcon,
@@ -101,15 +104,15 @@ export const MODULES: ModuleId[] = [
 ];
 
 export const TOOLS: ToolMeta[] = [
-  // video
+  // Rough-cut timeline editor; a full-page workbench, listed first so it
+  // reads as the video module's headline capability.
+  { id: "roughcut", category: "video", accepts: VIDEO_EXTS, multiFile: true },
   { id: "video-compress", category: "video", accepts: VIDEO_EXTS, multiFile: true, mediaType: "video" },
   { id: "trim", category: "video", accepts: VIDEO_EXTS, multiFile: true },
   { id: "mute", category: "video", accepts: VIDEO_EXTS, multiFile: true },
   { id: "screenshot", category: "video", accepts: VIDEO_EXTS, multiFile: false },
-  { id: "speed", category: "video", accepts: VIDEO_EXTS, multiFile: false },
   { id: "watermark", category: "video", accepts: VIDEO_EXTS, multiFile: false },
   { id: "video-subtitle", category: "video", accepts: VIDEO_EXTS, multiFile: false, mediaType: "video" },
-  { id: "video-merge", category: "video", accepts: VIDEO_EXTS, multiFile: true, mediaType: "video" },
   { id: "video-frames", category: "video", accepts: VIDEO_EXTS, multiFile: false, mediaType: "video" },
   { id: "video-contact", category: "video", accepts: VIDEO_EXTS, multiFile: false, mediaType: "video" },
   { id: "video-silence", category: "video", accepts: VIDEO_EXTS, multiFile: false, mediaType: "video" },

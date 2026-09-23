@@ -17,6 +17,9 @@ pub struct MediaInfo {
     pub duration_secs: Option<f64>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    /// Average video frame rate (falls back to the nominal rate when ffprobe
+    /// reports `0/0`). `None` for audio, images and unreadable streams.
+    pub fps: Option<f64>,
     pub video_codec: Option<String>,
     pub audio_codec: Option<String>,
     pub bitrate_kbps: Option<u64>,
@@ -176,12 +179,55 @@ pub struct SubtitleParams {
     pub burn: Option<bool>,
 }
 
-/// Params for the "video-merge" tool (concatenate multiple clips).
+/// One segment of a rough-cut timeline: a source file trimmed to
+/// [start_time, end_time) with optional per-clip audio/speed tweaks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct VideoMergeParams {
-    /// "concat" (sequential join) — currently the only layout
+pub struct RoughCutClip {
+    /// Absolute path of the source media file.
+    pub path: String,
+    /// Cut start offset in seconds within the source.
+    pub start_time: f64,
+    /// Cut end offset in seconds (None = to end of source).
+    pub end_time: Option<f64>,
+    /// Drop this clip's audio (silence is spliced in when neighbors keep
+    /// theirs, so the concat stays uniform).
+    #[serde(default)]
+    pub mute: bool,
+    /// Linear audio gain multiplier (1.0 = unchanged).
+    #[serde(default = "default_roughcut_volume")]
+    pub volume: f64,
+    /// Playback speed multiplier, clamped 0.25..=4.0 (1.0 = unchanged).
+    #[serde(default = "default_roughcut_speed")]
+    pub speed: f64,
+}
+
+fn default_roughcut_volume() -> f64 {
+    1.0
+}
+
+fn default_roughcut_speed() -> f64 {
+    1.0
+}
+
+/// Params for the "roughcut" tool: an ordered clip list exported as one file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoughCutParams {
+    /// "copy" (lossless keyframe-aligned concat) | "encode" (precise re-encode)
     pub mode: String,
+    /// Ordered timeline segments.
+    pub clips: Vec<RoughCutClip>,
+    /// Output container: "mp4" | "mkv".
+    #[serde(default = "default_roughcut_container")]
+    pub container: String,
+    /// Encoding recipe for "encode" mode (None = sensible defaults).
+    #[serde(default)]
+    pub encode: Option<VideoParams>,
+}
+
+fn default_roughcut_container() -> String {
+    "mp4".to_string()
 }
 
 /// Params for the "audio-volume" tool.
@@ -388,6 +434,11 @@ pub struct DoneEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skipped: Option<bool>,
     pub output: Option<String>,
+    /// Every file the job delivered. Differs from `output` only for jobs with
+    /// several products (multi-segment trim, frame sequences); omitted when
+    /// there is just the one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outputs: Option<Vec<String>>,
     pub error: Option<String>,
     pub input_size: u64,
     pub output_size: Option<u64>,

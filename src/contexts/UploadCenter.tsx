@@ -60,6 +60,7 @@ function loadTasks(): UploadTask[] {
       (t) =>
         t &&
         typeof t.id === "string" &&
+        Array.isArray(t.filePaths) &&
         t.phase !== "running" &&
         t.phase !== "queued"
     );
@@ -91,7 +92,8 @@ interface UploadCenterValue {
   oauth: OauthFlowState | null;
   saveTarget: (target: UploadTarget) => void;
   removeTarget: (id: string) => void;
-  /** Queue one upload per (file × target). */
+  /** Queue `files` for `targetIds`: one Telegram transfer carrying them all
+   *  (they arrive as a single album) plus one transfer per file elsewhere. */
   startUpload: (files: string[], targetIds: string[]) => void;
   /** Completion-hook entry: uploads `files` to `targetIds` once per
    *  `dedupeKey`. Whether to upload and where is decided by the caller's
@@ -206,8 +208,7 @@ export function UploadCenterProvider({
       const { id: _tid, name: _n, ...config } = target;
       const res = await uploadStart({
         target: config as unknown as Record<string, unknown>,
-        filePath: task.filePath,
-        name: task.fileName,
+        filePaths: task.filePaths,
       });
       runningCount.current += 1;
       lastTick.current[res.id] = { bytes: 0, at: Date.now() };
@@ -346,20 +347,23 @@ export function UploadCenterProvider({
 
   const startUpload = useCallback(
     (files: string[], targetIds: string[]) => {
+      if (files.length === 0) return;
       const created: UploadTask[] = [];
-      for (const file of files) {
-        for (const targetId of targetIds) {
-          const target = targetsRef.current.find((x) => x.id === targetId);
-          if (!target) continue;
+      for (const targetId of targetIds) {
+        const target = targetsRef.current.find((x) => x.id === targetId);
+        if (!target) continue;
+        // Telegram merges a job's whole set of deliverables into one transfer
+        // so they land as a single album; every other target takes one file
+        // per transfer.
+        const groups = target.kind === "telegram" ? [files] : files.map((f) => [f]);
+        for (const filePaths of groups) {
           uiCounter += 1;
-          const norm = file.replace(/\\/g, "/");
           created.push({
             id: `up-${uiCounter}`,
             targetId,
             targetName: target.name,
             kind: target.kind,
-            filePath: file,
-            fileName: norm.slice(norm.lastIndexOf("/") + 1),
+            filePaths,
             size: 0,
             percent: 0,
             phase: "queued",

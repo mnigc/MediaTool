@@ -19,7 +19,8 @@ import {
 import { formatBytes } from "../lib/engine";
 import { canRevealInFolder } from "../lib/shell";
 import { useI18n } from "../i18n";
-import { isBatchEditable } from "../tools/kinds";
+import { hasInlinePreview, isBatchEditable } from "../tools/kinds";
+import VideoPreview from "./VideoPreview";
 import { useUploads } from "../contexts/UploadCenter";
 import { pipelineDisplayName, usePipelines } from "../workflow/pipelines";
 
@@ -130,9 +131,18 @@ export default function JobCard({
   const isDone = job.phase === "done";
   const isRunning = job.phase === "running";
   const isQueued = job.phase === "queued";
+  // Every file the job delivered, not just the headline output — a
+  // multi-segment trim has one entry per part.
+  const deliverables = job.resultFiles?.length
+    ? job.resultFiles
+    : job.output
+      ? [job.output]
+      : [];
   // Transcode tools show a size estimate; all queued jobs are editable.
   const isCore = isBatchEditable(job.toolId);
   const isEditable = job.toolId !== "inspect";
+  /** The player replaces the header thumbnail rather than doubling up on it. */
+  const showsPreview = isQueued && hasInlinePreview(job.toolId);
   const [over, setOver] = useState(false);
   const draggable = isQueued && isEditable && !!onReorderStart;
   const [thumb, setThumb] = useState<string | null>(null);
@@ -225,17 +235,18 @@ export default function JobCard({
       }
     >
       <div className="flex items-start gap-4">
-        {thumb ? (
-          <img
-            src={thumb}
-            alt=""
-            className="h-14 w-24 shrink-0 rounded-xl object-cover ring-1 ring-neutral-200 dark:ring-neutral-700"
-          />
-        ) : (
-          <div className={`flex h-14 w-24 shrink-0 items-center justify-center rounded-xl ${badge.cls}`}>
-            <Icon className="h-6 w-6" />
-          </div>
-        )}
+        {!showsPreview &&
+          (thumb ? (
+            <img
+              src={thumb}
+              alt=""
+              className="h-14 w-24 shrink-0 rounded-xl object-cover ring-1 ring-neutral-200 dark:ring-neutral-700"
+            />
+          ) : (
+            <div className={`flex h-14 w-24 shrink-0 items-center justify-center rounded-xl ${badge.cls}`}>
+              <Icon className="h-6 w-6" />
+            </div>
+          ))}
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -307,6 +318,10 @@ export default function JobCard({
           <XIcon className="h-4 w-4" />
         </button>
       </div>
+
+      {showsPreview && (
+        <VideoPreview path={job.info.path} poster={thumb} className="mt-3" />
+      )}
 
       {isError && (
         <>
@@ -517,14 +532,14 @@ export default function JobCard({
         </select>
       )}
 
-      {isDone && uploads.targets.length > 0 && (job.resultFiles?.[0] ?? job.output) && (
+      {isDone && uploads.targets.length > 0 && deliverables.length > 0 && (
         <div className="mt-2 flex items-center gap-2">
           <select
             value=""
             onChange={(e) => {
               const targetId = e.target.value;
               if (!targetId) return;
-              uploads.startUpload([job.resultFiles?.[0] ?? job.output!], [targetId]);
+              uploads.startUpload(deliverables, [targetId]);
               e.target.value = "";
             }}
             className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"

@@ -511,7 +511,7 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
           // Completion hook: the pipeline's final output is the product —
           // push it to the bound upload targets.
           if (ok && output) {
-            uploadOnceRef.current(uploadTo, [output], `pipe-${taskId}-${output}`);
+            uploadOnceRef.current([output], uploadTo, `pipe-${taskId}-${output}`);
           }
           pipelineHandles.current.delete(taskId);
         },
@@ -619,7 +619,7 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
           existing?.phase === "running" &&
           existing.pipelineSteps.length === 0
         ) {
-          uploadOnceRef.current(existing.uploadTo ?? [], [e.output], `dl-${e.id}`);
+          uploadOnceRef.current([e.output], existing.uploadTo ?? [], `dl-${e.id}`);
         }
         // Batches skip link probing and remote thumbnails are often
         // hotlink-protected, so grab a frame from the finished file instead.

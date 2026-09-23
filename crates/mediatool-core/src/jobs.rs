@@ -9,10 +9,10 @@ use crate::media::probe;
 use crate::models::{
     AudioMergeParams, AudioParams, AudioVolumeParams, ContactSheetParams, DoneEvent,
     EstimateRequest, EstimateResult, ExtractAudioParams, FrameSampleParams, JobRequest, MediaInfo,
-    MediaType, MuteParams, ProgressEvent, ScreenshotParams, SpeedParams, StartJobResult,
-    StartWorkflowResult, StripMetadataParams, SubtitleParams, TrimParams, TrimSegment,
-    VideoMergeParams, VideoParams, VideoSilenceParams, WatermarkParams, WorkflowRequest,
-    WorkflowStepInput,
+    MediaType, MuteParams, ProgressEvent, RoughCutClip, RoughCutParams, ScreenshotParams,
+    SpeedParams, StartJobResult, StartWorkflowResult, StripMetadataParams, SubtitleParams,
+    TrimParams, TrimSegment, VideoParams, VideoSilenceParams, WatermarkParams,
+    WorkflowRequest, WorkflowStepInput,
 };
 
 /// Build the output path, placing the result next to the input (or in output_dir).
@@ -1095,57 +1095,427 @@ fn build_video_subtitle_args(info: &MediaInfo, p: &SubtitleParams, out: &Path) -
     }
 }
 
-/// How to treat audio when concatenating videos.
-enum MergeAudio {
-    /// Every input has an audio track → concat v+a.
-    All,
-    /// No input has audio → concat video only.
-    None,
+/* ── Rough cut (粗剪): ordered clip list → one file ─────────────── */
+
+/// Resolved cut window of one clip: [start, end) clamped to the probed source
+/// duration. Errors when the duration is unknown and no end point was given.
+fn roughcut_window(clip: &RoughCutClip, info: &MediaInfo) -> Result<(f64, f64)> {
+    let start = clip.start_time.max(0.0);
+    let end = match (clip.end_time, info.duration_secs) {
+        (Some(e), Some(t)) => e.min(t),
+        (Some(e), None) => e,
+        (None, Some(t)) => t,
+        (None, None) => {
+            return Err(AppError(format!(
+                "无法确定素材时长，请为片段设置出点：{}",
+                clip.path
+            )))
+        }
+    };
+    let end = end.max(start);
+    if end - start < 0.01 {
+        return Err(AppError(format!("片段的出点需大于入点（{}）", clip.path)));
+    }
+    Ok((start, end))
 }
 
-fn build_video_merge_args(inputs: &[String], audio: MergeAudio, out: &Path) -> Vec<String> {
-    let n = inputs.len();
-    let mut a: Vec<String> = Vec::new();
-    for i in inputs {
-        a.push("-i".into());
-        a.push(i.clone());
+/// Lossless rough cut: stream-copy each cut to a scratch segment, then join
+/// with the concat demuxer. Requires matching codec families + resolution
+/// across clips (finer mismatches — fps, pixel format, profile — are the
+/// frontend pre-check's job and degrade gracefully in players).
+fn prepare_roughcut_copy(
+    clips: &[RoughCutClip],
+    windows: &[(f64, f64)],
+    infos: &[MediaInfo],
+    container: &str,
+    out: PathBuf,
+) -> Result<PreparedJob> {
+    let first = &infos[0];
+    let vcodec = codec_family(first.video_codec.as_deref().unwrap_or(""));
+    if vcodec.is_empty() {
+        return Err(AppError("素材缺少视频轨，无法进行无损粗剪".into()));
+    }
+    let any_audio = infos.iter().any(|i| i.audio_codec.is_some());
+    let all_audio = infos.iter().all(|i| i.audio_codec.is_some());
+    if any_audio && !all_audio {
+        return Err(AppError(
+            "素材音轨不一致（部分有音轨、部分没有）：请改用「精确重编码」模式".into(),
+        ));
+    }
+    for (idx, inf) in infos.iter().enumerate() {
+        let fam = codec_family(inf.video_codec.as_deref().unwrap_or(""));
+        if container == "mp4" {
+            if !MP4_COPY_VIDEO.contains(&fam) {
+                return Err(AppError(format!(
+                    "片段 {} 的视频编码 {fam} 无法无损封装进 MP4：请改用 MKV 容器或「精确重编码」模式",
+                    idx + 1
+                )));
+            }
+            if let Some(a) = inf.audio_codec.as_deref() {
+                let afam = codec_family(a);
+                if !MP4_COPY_AUDIO.contains(&afam) {
+                    return Err(AppError(format!(
+                        "片段 {} 的音频编码 {afam} 无法无损封装进 MP4：请改用 MKV 容器或「精确重编码」模式",
+                        idx + 1
+                    )));
+                }
+            }
+        }
+        if fam != vcodec {
+            return Err(AppError(format!(
+                "片段 {} 的视频编码（{fam}）与片段 1（{vcodec}）不一致，无法无损拼接：请改用「精确重编码」模式",
+                idx + 1
+            )));
+        }
+        if (inf.width, inf.height) != (first.width, first.height) {
+            return Err(AppError(format!(
+                "片段 {} 的分辨率与片段 1 不一致（{}×{} ≠ {}×{}），无法无损拼接：请改用「精确重编码」模式",
+                idx + 1,
+                inf.width.unwrap_or(0),
+                inf.height.unwrap_or(0),
+                first.width.unwrap_or(0),
+                first.height.unwrap_or(0),
+            )));
+        }
+    }
+
+    let token = uuid();
+    let mut runs: Vec<(Vec<String>, PathBuf, f64)> = Vec::with_capacity(clips.len() + 1);
+    let mut cleanup: Vec<PathBuf> = Vec::with_capacity(clips.len() + 2);
+    let mut list = String::from("ffconcat version 1.0\n");
+    for (i, (clip, (start, end))) in clips.iter().zip(windows).enumerate() {
+        let part = std::env::temp_dir()
+            .join(format!("mediatool_rc_{token}_part{}.{container}", i + 1));
+        let dur = end - start;
+        runs.push((
+            build_roughcut_part_args(&clip.path, *start, dur, container, &part),
+            part.clone(),
+            dur,
+        ));
+        cleanup.push(part.clone());
+        list.push_str(&format!(
+            "file '{}'\n",
+            concat_escape(&part.to_string_lossy())
+        ));
+    }
+    let list_path = std::env::temp_dir().join(format!("mediatool_rc_{token}_list.txt"));
+    std::fs::write(&list_path, list).map_err(|e| AppError(format!("写入拼接清单失败: {e}")))?;
+    cleanup.push(list_path.clone());
+    // The concat pass copies near-instantly; a zero duration keeps it from
+    // inflating the progress denominator.
+    let concat_args = build_roughcut_concat_args(&list_path, container, &out);
+    runs.push((concat_args, out.clone(), 0.0));
+    Ok(PreparedJob::RunMany {
+        runs,
+        cleanup,
+        final_out: Some(out),
+    })
+}
+
+/// Stream-copy one cut range into a scratch segment file.
+fn build_roughcut_part_args(
+    src: &str,
+    start: f64,
+    dur: f64,
+    container: &str,
+    out: &Path,
+) -> Vec<String> {
+    let mut a: Vec<String> = vec![
+        "-ss".into(),
+        format!("{:.3}", start.max(0.0)),
+        "-i".into(),
+        src.to_string(),
+        "-t".into(),
+        format!("{:.3}", dur),
+        "-map".into(),
+        "0".into(),
+        "-c".into(),
+        "copy".into(),
+    ];
+    if container == "mp4" {
+        // Keyframe-snapped copy cuts can start with negative timestamps,
+        // which breaks both the MP4 muxer and the concat demuxer.
+        a.push("-avoid_negative_ts".into());
+        a.push("make_zero".into());
+    }
+    a.push("-progress".into());
+    a.push("pipe:1".into());
+    a.push("-y".into());
+    a.push(out.to_string_lossy().to_string());
+    a
+}
+
+/// Join the scratch segments via the concat demuxer.
+fn build_roughcut_concat_args(list: &Path, container: &str, out: &Path) -> Vec<String> {
+    let mut a: Vec<String> = vec![
+        "-f".into(),
+        "concat".into(),
+        "-safe".into(),
+        "0".into(),
+        "-i".into(),
+        list.to_string_lossy().to_string(),
+        "-c".into(),
+        "copy".into(),
+    ];
+    if container == "mp4" {
+        a.push("-movflags".into());
+        a.push("+faststart".into());
+    }
+    a.push("-progress".into());
+    a.push("pipe:1".into());
+    a.push("-y".into());
+    a.push(out.to_string_lossy().to_string());
+    a
+}
+
+/// Escape a path for the concat demuxer's single-quoted file directive.
+fn concat_escape(path: &str) -> String {
+    path.replace('\'', "'\\''")
+}
+
+/// The ffmpeg output geometry every video branch is normalized to (the concat
+/// filter requires identical sizes). Derived from the first clip's aspect and
+/// the encode resolution; None when the sources have no probed dimensions.
+fn roughcut_target_dims(first: &MediaInfo, resolution: &str) -> Option<(u32, u32)> {
+    let (w0, h0) = match (first.width, first.height) {
+        (Some(w), Some(h)) if w >= 2 && h >= 2 => (w as f64, h as f64),
+        _ => return None,
+    };
+    let keep = (even(w0 as i64) as u32, even(h0 as i64) as u32);
+    let fixed_h = |h: u32| -> (u32, u32) {
+        let w = ((w0 * h as f64) / h0).round() as i64;
+        (even(w.max(2)) as u32, h)
+    };
+    Some(match resolution {
+        "original" | "" => keep,
+        "480p" => fixed_h(480),
+        "720p" => fixed_h(720),
+        "1080p" => fixed_h(1080),
+        "1440p" => fixed_h(1440),
+        "2160p" => fixed_h(2160),
+        custom if custom.contains('x') => custom
+            .split_once('x')
+            .and_then(|(w, h)| {
+                let w = w.trim().parse::<i64>().ok()?;
+                let h = h.trim().parse::<i64>().ok()?;
+                if w >= 2 && h >= 2 {
+                    Some((even(w) as u32, even(h) as u32))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(keep),
+        _ => keep,
+    })
+}
+
+/// Every audio branch ends with this so the concat filter never sees mixed
+/// sample rates / layouts across segments (44.1 kHz sources resampled, mono
+/// up-mixed, silence sized to match).
+const ROUGHCUT_AUDIO_TAIL: &str =
+    ",aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo";
+
+/// The assembled plan for a rough-cut re-encode: ffmpeg inputs plus the filter
+/// graph that cuts, retimes and re-levels every clip, then concatenates.
+struct RoughCutPlan {
+    /// Arguments up to and including every `-i input`.
+    input_args: Vec<String>,
+    filter_complex: String,
+    /// False when audio is dropped entirely (audioCodec "none" or no audible
+    /// clip) — the concat then runs v-only and the output gets `-an`.
+    with_audio: bool,
+    /// True when the video branches end with `format=nv12,hwupload` (VAAPI
+    /// encode), in which case `-pix_fmt` must stay off.
+    vaapi: bool,
+}
+
+/// Pure planner for the encode mode — testable without an app environment.
+fn plan_roughcut_encode(
+    first: &MediaInfo,
+    clips: &[RoughCutClip],
+    windows: &[(f64, f64)],
+    infos: &[MediaInfo],
+    p: &RoughCutParams,
+) -> Result<RoughCutPlan> {
+    let ep = p.encode.clone().unwrap_or_else(default_roughcut_encode);
+    let want_audio = ep.audio_codec != "none"
+        && clips
+            .iter()
+            .zip(infos.iter())
+            .any(|(c, i)| !c.mute && i.audio_codec.is_some());
+    let target = roughcut_target_dims(first, &ep.resolution);
+    // Every branch is resampled to the first clip's frame rate: the concat
+    // filter tolerates mixed rates but the muxer then carries variable-frame
+    // timestamps, which players and editors handle badly.
+    let target_fps = first.fps;
+    let vaapi = gpu_plan(&ep.video_codec, &ep.gpu).0.ends_with("_vaapi");
+
+    let mut input_args: Vec<String> = Vec::new();
+    if vaapi {
+        input_args.push("-vaapi_device".into());
+        input_args.push("/dev/dri/renderD128".into());
     }
     let mut fc = String::new();
-    match audio {
-        MergeAudio::All => {
-            for idx in 0..n {
-                fc.push_str(&format!("[{}:v][{}:a]", idx, idx));
-            }
-            fc.push_str(&format!("concat=n={}:v=1:a=1[outv][outa]", n));
-            a.push("-filter_complex".into());
-            a.push(fc);
-            a.push("-map".into());
-            a.push("[outv]".into());
-            a.push("-map".into());
-            a.push("[outa]".into());
+    let mut input_idx = 0usize;
+    // concat's input pads are segment-interleaved: [v0][a0][v1][a1]… (audio
+    // pads omitted when the whole export is silent).
+    let mut seg_labels: Vec<String> = Vec::with_capacity(clips.len());
+
+    for (i, ((clip, inf), (start, end))) in clips.iter().zip(infos.iter()).zip(windows).enumerate()
+    {
+        let dur = end - start;
+        let speed = clip.speed.clamp(0.25, 4.0);
+        // Input seek lands on a keyframe at/before the cut; the trim filter
+        // below makes the cut frame-exact from there.
+        input_args.push("-ss".into());
+        input_args.push(format!("{:.3}", start.max(0.0)));
+        input_args.push("-i".into());
+        input_args.push(clip.path.clone());
+        let vi = input_idx;
+        input_idx += 1;
+
+        // Video: exact cut, retime, then normalize geometry so concat never
+        // sees mismatched sizes or sample aspects.
+        let pts = if (speed - 1.0).abs() > 1e-9 {
+            format!("setpts=(PTS-STARTPTS)/{speed:.6}")
+        } else {
+            "setpts=PTS-STARTPTS".to_string()
+        };
+        fc.push_str(&format!("[{vi}:v]trim=duration={dur:.3},{pts}"));
+        // Tone-mapped per clip, not from the first one: an SDR clip in an HDR
+        // timeline must not be flattened, and vice versa.
+        if inf.hdr {
+            fc.push(',');
+            fc.push_str(hdr_tonemap_vf());
         }
-        MergeAudio::None => {
-            for idx in 0..n {
-                fc.push_str(&format!("[{}:v]", idx));
+        if let Some(f) = target_fps {
+            fc.push_str(&format!(",fps={f:.4}"));
+        }
+        if let Some((w, h)) = target {
+            fc.push_str(&format!(",scale={w}:{h}"));
+        }
+        fc.push_str(",setsar=1");
+        if vaapi {
+            fc.push_str(",format=nv12,hwupload");
+        }
+        fc.push_str(&format!("[v{i}];"));
+
+        // Audio: audible clips get cut / retimed / leveled; muted or
+        // audio-less clips splice in sized silence so concat stays uniform.
+        if want_audio {
+            if inf.audio_codec.is_some() && !clip.mute {
+                fc.push_str(&format!(
+                    "[{vi}:a]atrim=duration={dur:.3},asetpts=PTS-STARTPTS"
+                ));
+                for f in atempo_chain(speed) {
+                    fc.push_str(&format!(",atempo={f}"));
+                }
+                let vol = clip.volume.clamp(0.0, 4.0);
+                if (vol - 1.0).abs() > 1e-9 {
+                    fc.push_str(&format!(",volume={vol:.3}"));
+                }
+                fc.push_str(ROUGHCUT_AUDIO_TAIL);
+            } else {
+                input_args.push("-f".into());
+                input_args.push("lavfi".into());
+                input_args.push("-t".into());
+                input_args.push(format!("{:.3}", dur / speed));
+                input_args.push("-i".into());
+                input_args.push("anullsrc=channel_layout=stereo:sample_rate=48000".into());
+                let si = input_idx;
+                input_idx += 1;
+                // anullsrc already runs at the target rate/layout; only the
+                // sample format needs pinning (no leading comma — the label
+                // is directly followed by the filter).
+                fc.push_str(&format!(
+                    "[{si}:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"
+                ));
             }
-            fc.push_str(&format!("concat=n={}:v=1:a=0[outv]", n));
-            a.push("-filter_complex".into());
-            a.push(fc);
-            a.push("-map".into());
-            a.push("[outv]".into());
-            a.push("-an".into());
+            fc.push_str(&format!("[a{i}];"));
+            seg_labels.push(format!("[v{i}][a{i}]"));
+        } else {
+            seg_labels.push(format!("[v{i}]"));
         }
     }
-    a.push("-c:v".into());
-    a.push("libx264".into());
-    a.push("-crf".into());
-    a.push("20".into());
-    a.push("-preset".into());
-    a.push("medium".into());
-    a.push("-c:a".into());
-    a.push("aac".into());
-    a.push("-b:a".into());
-    a.push("192k".into());
+
+    let n = clips.len();
+    let with_audio = want_audio; // every clip then yields exactly one audio label
+    fc.push_str(&seg_labels.concat());
+    if with_audio {
+        fc.push_str(&format!("concat=n={n}:v=1:a=1[vout][aout]"));
+    } else {
+        fc.push_str(&format!("concat=n={n}:v=1:a=0[vout]"));
+    }
+
+    Ok(RoughCutPlan {
+        input_args,
+        filter_complex: fc,
+        with_audio,
+        vaapi,
+    })
+}
+
+/// Defaults when the frontend sends no encode recipe for precise mode.
+fn default_roughcut_encode() -> VideoParams {
+    VideoParams {
+        video_codec: "libx264".into(),
+        quality_mode: "crf".into(),
+        crf: Some(20),
+        target_size_mb: None,
+        video_bitrate_kbps: None,
+        resolution: "original".into(),
+        audio_codec: "aac".into(),
+        audio_bitrate_kbps: Some(192),
+        format: "mp4".into(),
+        preset: "medium".into(),
+        fps: None,
+        gpu: None,
+    }
+}
+
+/// Full argument list for a rough-cut encode pass.
+fn roughcut_encode_args(
+    plan: &RoughCutPlan,
+    info: &MediaInfo,
+    p: &RoughCutParams,
+    container: &str,
+    out: &Path,
+) -> Vec<String> {
+    let ep = p.encode.clone().unwrap_or_else(default_roughcut_encode);
+    let mut a = plan.input_args.clone();
+    a.push("-filter_complex".into());
+    a.push(plan.filter_complex.clone());
+    a.push("-map".into());
+    a.push("[vout]".into());
+    if plan.with_audio {
+        a.push("-map".into());
+        a.push("[aout]".into());
+        match ep.audio_codec.as_str() {
+            "opus" => {
+                a.push("-c:a".into());
+                a.push("libopus".into());
+                a.push("-b:a".into());
+                a.push(format!("{}k", ep.audio_bitrate_kbps.unwrap_or(192)));
+            }
+            _ => {
+                a.push("-c:a".into());
+                a.push("aac".into());
+                a.push("-b:a".into());
+                a.push(format!("{}k", ep.audio_bitrate_kbps.unwrap_or(192)));
+            }
+        }
+    } else {
+        a.push("-an".into());
+    }
+    a.extend(video_encoder_args(info, &ep));
+    if !plan.vaapi {
+        a.push("-pix_fmt".into());
+        a.push("yuv420p".into());
+    }
+    if container == "mp4" {
+        a.push("-movflags".into());
+        a.push("+faststart".into());
+    }
     a.push("-threads".into());
     a.push("0".into());
     a.push("-progress".into());
@@ -1173,7 +1543,6 @@ fn build_audio_volume_args(info: &MediaInfo, p: &AudioVolumeParams, out: &Path) 
     a.push(out.to_string_lossy().to_string());
     a
 }
-
 fn build_audio_merge_args(inputs: &[String], out: &Path) -> Vec<String> {
     let n = inputs.len();
     let mut a: Vec<String> = Vec::new();
@@ -1325,7 +1694,7 @@ fn extension_for(tool_id: &str, info: &MediaInfo, params: &serde_json::Value) ->
         )
         .to_string(),
         "trim" | "mute" | "strip-metadata" => input_ext(info, "mp4"),
-        "video-subtitle" | "video-merge" => safe_container_ext(info),
+        "video-subtitle" => safe_container_ext(info),
         "audio-volume" | "audio-merge" => source_audio_format(&info.path).to_string(),
         "video-frames" => safe_container_ext(info),
         "video-contact" => "png".to_string(),
@@ -1525,6 +1894,7 @@ fn parse_params<T: serde::de::DeserializeOwned>(params: &serde_json::Value) -> R
 /// A fully prepared job: either skipped by the overwrite policy, ready to run
 /// with a single ffmpeg invocation, or a sequence of invocations that produce
 /// multiple output files (e.g. multi-segment trim).
+#[derive(Debug)]
 enum PreparedJob {
     Skipped {
         /// The existing output file that caused the skip, so callers can chain
@@ -1537,6 +1907,12 @@ enum PreparedJob {
     },
     RunMany {
         runs: Vec<(Vec<String>, PathBuf, f64)>,
+        /// Scratch artifacts (rough-cut segment parts, concat list) removed
+        /// once the whole sequence settles, success or failure.
+        cleanup: Vec<PathBuf>,
+        /// The user-facing output when the deliverable is not the first run's
+        /// target (rough-cut's final concat file).
+        final_out: Option<PathBuf>,
     },
 }
 
@@ -1649,9 +2025,9 @@ fn legacy_tool_request(req: &JobRequest) -> JobRequest {
 }
 
 /// Build the args + output path for any tool id, or mark as skipped.
-/// Blocking (may probe merge inputs / encode a PDF source image); call within
+/// Blocking (may probe the rough-cut clip sources); call within
 /// spawn_blocking. `env` is only needed by tools that probe extra inputs
-/// (video-merge); tests pass None.
+/// (rough cut); tests pass None.
 fn prepare_job(
     env: Option<&dyn AppEnv>,
     info: &MediaInfo,
@@ -1848,7 +2224,11 @@ fn prepare_job(
                 runs.push((args, out, dur));
             }
             if multi {
-                Ok(PreparedJob::RunMany { runs })
+                Ok(PreparedJob::RunMany {
+                    runs,
+                    cleanup: Vec::new(),
+                    final_out: None,
+                })
             } else {
                 let (args, out, _) = runs.pop().expect("already branched on multi");
                 Ok(PreparedJob::Run { args, out })
@@ -1900,36 +2280,15 @@ fn prepare_job(
                 out,
             })
         }
-        "video-merge" => {
-            let _p: VideoMergeParams = parse_params(&req.params)?;
-            if req.inputs.len() < 2 {
-                return Err(AppError("合并视频需要至少 2 个文件".into()));
+        "roughcut" => {
+            let p: RoughCutParams = parse_params(&req.params)?;
+            if p.clips.is_empty() {
+                return Err(AppError("粗剪时间线为空：请先添加素材片段".into()));
             }
-            // The concat filter needs a matching audio configuration across
-            // inputs: all-with-audio or all-without. Mixed input would either
-            // fail ("matches no streams") or desync.
-            let mut any_audio = false;
-            let mut all_audio = true;
-            let env = env.ok_or_else(|| AppError("内部错误：缺少应用环境".into()))?;
-            for input in &req.inputs {
-                let inf = crate::media::probe_sync(env, input)?;
-                if inf.audio_codec.is_some() {
-                    any_audio = true;
-                } else {
-                    all_audio = false;
-                }
-            }
-            let audio = if all_audio {
-                MergeAudio::All
-            } else if !any_audio {
-                MergeAudio::None
-            } else {
-                return Err(AppError(
-                    "所选视频的音轨不一致（部分有音轨、部分没有），无法直接合并；请先用「移除音轨」处理后再试".into(),
-                ));
-            };
-            let ext = safe_container_ext(info);
-            let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
+            let container = if p.container == "mkv" { "mkv" } else { "mp4" };
+            // The deliverable is named after the first clip.
+            let ext = container.to_string();
+            let out = output_path(&info.path, &req.output_dir, &ext, &suffix)?;
             let out = match resolve_policy(out, policy) {
                 Ok(p) => p,
                 Err(existing) => {
@@ -1938,10 +2297,32 @@ fn prepare_job(
                     })
                 }
             };
-            Ok(PreparedJob::Run {
-                args: build_video_merge_args(&req.inputs, audio, &out),
-                out,
-            })
+            // Every clip is probed: durations clamp the cut windows, and the
+            // audio presence / codecs drive both modes' validation and the
+            // filter graph (silence splicing).
+            let env = env.ok_or_else(|| AppError("内部错误：缺少应用环境".into()))?;
+            let mut clip_infos: Vec<MediaInfo> = Vec::with_capacity(p.clips.len());
+            for c in &p.clips {
+                if c.path.trim().is_empty() {
+                    return Err(AppError("存在未指定源文件的片段".into()));
+                }
+                clip_infos.push(crate::media::probe_sync(env, &c.path)?);
+            }
+            let windows: Vec<(f64, f64)> = p
+                .clips
+                .iter()
+                .zip(&clip_infos)
+                .map(|(c, inf)| roughcut_window(c, inf))
+                .collect::<Result<_>>()?;
+            if p.mode == "encode" {
+                let plan = plan_roughcut_encode(info, &p.clips, &windows, &clip_infos, &p)?;
+                Ok(PreparedJob::Run {
+                    args: roughcut_encode_args(&plan, info, &p, container, &out),
+                    out,
+                })
+            } else {
+                prepare_roughcut_copy(&p.clips, &windows, &clip_infos, container, out)
+            }
         }
         "video-frames" => {
             let p: FrameSampleParams = parse_params(&req.params)?;
@@ -2753,6 +3134,7 @@ pub async fn start_workflow(ctx: Ctx, req: WorkflowRequest) -> Result<StartWorkf
                 was_cancelled,
                 false,
                 None,
+                None,
                 Some(err),
                 input_size,
                 None,
@@ -2766,6 +3148,7 @@ pub async fn start_workflow(ctx: Ctx, req: WorkflowRequest) -> Result<StartWorkf
                 "done",
                 last_speed.clone(),
             );
+            let outs = deliverables(&out);
             emit_done(
                 ctx.emitter.as_ref(),
                 &task_id,
@@ -2773,6 +3156,7 @@ pub async fn start_workflow(ctx: Ctx, req: WorkflowRequest) -> Result<StartWorkf
                 false,
                 false,
                 Some(out.to_string_lossy().to_string()),
+                (outs.len() > 1).then_some(outs),
                 None,
                 input_size,
                 output_size,
@@ -2822,7 +3206,7 @@ pub async fn start_job(ctx: Ctx, req: JobRequest) -> Result<StartJobResult> {
             }
         }
     }
-    // prepare_job may block (probing merge inputs, converting a PDF source
+    // prepare_job may block (probing rough-cut sources, converting a PDF source
     // image) — keep it off the async runtime workers.
     let prepared = {
         let ctx2 = ctx.clone();
@@ -2835,7 +3219,7 @@ pub async fn start_job(ctx: Ctx, req: JobRequest) -> Result<StartJobResult> {
         .map_err(|e| AppError(e.to_string()))??
     };
 
-    let runs: Vec<(Vec<String>, PathBuf, f64)> = match prepared {
+    let (runs, cleanup, final_out) = match prepared {
         PreparedJob::Skipped { existing } => {
             // Nothing was started; the frontend treats this as a terminal
             // "skipped" phase via the command's return value. The existing
@@ -2852,9 +3236,13 @@ pub async fn start_job(ctx: Ctx, req: JobRequest) -> Result<StartJobResult> {
             // Trim-aware progress denominator (gif / screenshot interval /
             // trimmed single-segment jobs only reach a fraction of the file).
             let dur = effective_duration(&req, &info);
-            vec![(args, out, dur)]
+            (vec![(args, out, dur)], Vec::new(), None)
         }
-        PreparedJob::RunMany { runs } => runs,
+        PreparedJob::RunMany {
+            runs,
+            cleanup,
+            final_out,
+        } => (runs, cleanup, final_out),
     };
 
     if runs.is_empty() {
@@ -2876,7 +3264,11 @@ pub async fn start_job(ctx: Ctx, req: JobRequest) -> Result<StartJobResult> {
         let mut accum = 0.0_f64;
         let mut last_percent = 0.0_f64;
         let mut last_speed: Option<String> = None;
-        let first_out = runs.first().map(|r| r.1.clone());
+        // The reported deliverable: the rough-cut concat file rather than the
+        // first temp segment.
+        let first_out = final_out
+            .clone()
+            .or_else(|| runs.first().map(|r| r.1.clone()));
         let mut total_size: u64 = 0;
         let mut ok = false;
         let mut cancelled = false;
@@ -2974,6 +3366,9 @@ pub async fn start_job(ctx: Ctx, req: JobRequest) -> Result<StartJobResult> {
                 } else {
                     let _ = std::fs::remove_file(out);
                 }
+                for scratch in &cleanup {
+                    let _ = std::fs::remove_file(scratch);
+                }
                 break 'runs;
             }
 
@@ -2999,6 +3394,15 @@ pub async fn start_job(ctx: Ctx, req: JobRequest) -> Result<StartJobResult> {
         }
 
         if ok && !runs.is_empty() {
+            // Assembled jobs (rough-cut) deliver one final file built from
+            // scratch segments — report that file's size, not the sum, which
+            // would double-count the parts — and drop the scratch artifacts.
+            if let Some(f) = &final_out {
+                total_size = std::fs::metadata(f).map(|m| m.len()).unwrap_or(0);
+            }
+            for scratch in &cleanup {
+                let _ = std::fs::remove_file(scratch);
+            }
             emit_progress(
                 ctx.emitter.as_ref(),
                 &task_id,
@@ -3006,6 +3410,16 @@ pub async fn start_job(ctx: Ctx, req: JobRequest) -> Result<StartJobResult> {
                 "done",
                 last_speed.clone(),
             );
+            // Every file the job delivered: an assembled job ships only its
+            // final cut, a multi-segment one ships each part, and a `%03d`
+            // sequence expands into the frames ffmpeg wrote.
+            let outputs: Vec<String> = match &final_out {
+                Some(f) => deliverables(f),
+                None => runs
+                    .iter()
+                    .flat_map(|(_, out, _)| deliverables(out))
+                    .collect(),
+            };
             emit_done(
                 ctx.emitter.as_ref(),
                 &task_id,
@@ -3013,6 +3427,7 @@ pub async fn start_job(ctx: Ctx, req: JobRequest) -> Result<StartJobResult> {
                 false,
                 false,
                 first_out.map(|p| p.to_string_lossy().to_string()),
+                (outputs.len() > 1).then_some(outputs),
                 None,
                 input_size,
                 if total_size > 0 {
@@ -3028,6 +3443,7 @@ pub async fn start_job(ctx: Ctx, req: JobRequest) -> Result<StartJobResult> {
                 false,
                 cancelled,
                 false,
+                None,
                 None,
                 err_msg,
                 input_size,
@@ -3061,6 +3477,22 @@ fn effective_duration(req: &JobRequest, info: &MediaInfo) -> f64 {
             .unwrap_or(total),
         "trim" => parse_params::<TrimParams>(&req.params)
             .map(|p| trim_window_secs(total, p.start_time, p.duration))
+            .unwrap_or(total),
+        "roughcut" => parse_params::<RoughCutParams>(&req.params)
+            .map(|p| {
+                // The encode pass's out_time covers the OUTPUT timeline, so
+                // the denominator is the speed-adjusted total. Clips ending
+                // "to source end" approximate their length from the first
+                // clip's duration — the bar may sag slightly, never stall.
+                p.clips
+                    .iter()
+                    .map(|c| {
+                        let speed = c.speed.clamp(0.25, 4.0);
+                        let end = c.end_time.unwrap_or(total);
+                        ((end - c.start_time).max(0.0)) / speed
+                    })
+                    .sum()
+            })
             .unwrap_or(total),
         _ => total,
     }
@@ -3198,6 +3630,7 @@ fn emit_done(
     cancelled: bool,
     skipped: bool,
     output: Option<String>,
+    outputs: Option<Vec<String>>,
     error: Option<String>,
     input_size: u64,
     output_size: Option<u64>,
@@ -3211,11 +3644,27 @@ fn emit_done(
             cancelled,
             skipped: if skipped { Some(true) } else { None },
             output,
+            outputs,
             error,
             input_size,
             output_size,
         },
     );
+}
+
+/// The files one run actually left behind, a `%03d` sequence expanded into its
+/// individual frames.
+fn deliverables(out: &Path) -> Vec<String> {
+    let files: Vec<PathBuf> = if out.to_string_lossy().contains("%03d") {
+        scan_pattern_outputs(out)
+    } else {
+        vec![out.to_path_buf()]
+    };
+    files
+        .into_iter()
+        .filter(|p| p.is_file())
+        .map(|p| p.to_string_lossy().to_string())
+        .collect()
 }
 
 fn uuid() -> String {
@@ -3243,6 +3692,7 @@ mod tests {
             duration_secs: Some(10.0),
             width: Some(1920),
             height: Some(1080),
+            fps: Some(25.0),
             video_codec: Some("h264".into()),
             audio_codec: Some("aac".into()),
             bitrate_kbps: Some(2000),
@@ -4072,5 +4522,297 @@ mod tests {
         let args = merged_args(&info, &chain, Path::new("out.mp4"), &None);
         assert!(args.contains(&"-an".to_string()));
         assert!(!args.contains(&"aac".to_string()));
+    }
+
+    /* ── rough cut ────────────────────────────────────────────────── */
+
+    fn rc_clip(path: &str, start: f64, end: Option<f64>) -> RoughCutClip {
+        RoughCutClip {
+            path: path.into(),
+            start_time: start,
+            end_time: end,
+            mute: false,
+            volume: 1.0,
+            speed: 1.0,
+        }
+    }
+
+    fn rc_params(clips: Vec<RoughCutClip>) -> RoughCutParams {
+        RoughCutParams {
+            mode: "encode".into(),
+            clips,
+            container: "mp4".into(),
+            encode: None,
+        }
+    }
+
+    #[test]
+    fn roughcut_window_clamps_to_duration() {
+        let info = sample_info(); // 10 s
+        let (s, e) = roughcut_window(&rc_clip("a.mp4", 2.0, Some(20.0)), &info).unwrap();
+        assert_eq!((s, e), (2.0, 10.0));
+        let (s, e) = roughcut_window(&rc_clip("a.mp4", -3.0, None), &info).unwrap();
+        assert_eq!((s, e), (0.0, 10.0));
+        let mut unknown = sample_info();
+        unknown.duration_secs = None;
+        assert!(roughcut_window(&rc_clip("a.mp4", 0.0, None), &unknown).is_err());
+        // Empty window: end == start.
+        assert!(roughcut_window(&rc_clip("a.mp4", 5.0, Some(5.0)), &info).is_err());
+    }
+
+    #[test]
+    fn roughcut_part_and_concat_args() {
+        let part = build_roughcut_part_args("in.mp4", 4.0, 6.0, "mp4", Path::new("p1.mp4"));
+        let ss = part.iter().position(|a| a == "-ss").unwrap();
+        assert_eq!(part[ss + 1], "4.000");
+        let i = part.iter().position(|a| a == "-i").unwrap();
+        assert!(ss < i, "-ss must precede -i for fast seek");
+        assert!(part.contains(&"-c".to_string()) && part.contains(&"copy".to_string()));
+        assert!(part.contains(&"-avoid_negative_ts".to_string()));
+
+        let mkv = build_roughcut_part_args("in.mkv", 0.0, 1.0, "mkv", Path::new("p.mkv"));
+        assert!(!mkv.contains(&"-avoid_negative_ts".to_string()));
+
+        let mp4 = build_roughcut_concat_args(Path::new("l.txt"), "mp4", Path::new("o.mp4"));
+        assert!(mp4.contains(&"-f".to_string()) && mp4.contains(&"concat".to_string()));
+        assert!(mp4.contains(&"-safe".to_string()) && mp4.contains(&"0".to_string()));
+        assert!(mp4.contains(&"-movflags".to_string()));
+        let mkv = build_roughcut_concat_args(Path::new("l.txt"), "mkv", Path::new("o.mkv"));
+        assert!(!mkv.contains(&"-movflags".to_string()));
+
+        assert_eq!(concat_escape("a'b.mp4"), "a'\\''b.mp4");
+    }
+
+    #[test]
+    fn roughcut_target_dims_match_aspect() {
+        let info = sample_info(); // 1920x1080
+        assert_eq!(roughcut_target_dims(&info, "original"), Some((1920, 1080)));
+        assert_eq!(roughcut_target_dims(&info, "720p"), Some((1280, 720)));
+        assert_eq!(roughcut_target_dims(&info, "1080x100"), Some((1080, 100)));
+        let mut odd = sample_info();
+        odd.width = Some(1921);
+        odd.height = Some(1079);
+        let (w, h) = roughcut_target_dims(&odd, "original").unwrap();
+        assert_eq!(w % 2, 0);
+        assert_eq!(h % 2, 0);
+        // Unknown dimensions disable geometry normalization.
+        let mut blind = sample_info();
+        blind.width = None;
+        blind.height = None;
+        assert_eq!(roughcut_target_dims(&blind, "720p"), None);
+    }
+
+    #[test]
+    fn roughcut_encode_plan_audio_and_speed() {
+        let info = sample_info();
+        let mut muted = rc_clip("b.mp4", 1.0, Some(3.0));
+        muted.mute = true;
+        let mut fast = rc_clip("a.mp4", 2.0, Some(4.0));
+        fast.speed = 2.0;
+        fast.volume = 1.5;
+        let clips = vec![rc_clip("a.mp4", 0.0, Some(4.0)), muted, fast];
+        let windows = vec![(0.0, 4.0), (1.0, 3.0), (2.0, 4.0)];
+        let p = rc_params(clips);
+        let plan = plan_roughcut_encode(
+            &info,
+            &p.clips,
+            &windows,
+            &[info.clone(), info.clone(), info.clone()],
+            &p,
+        )
+        .unwrap();
+        assert!(plan.with_audio);
+        // The muted middle clip splices in sized silence…
+        assert!(plan
+            .input_args
+            .iter()
+            .any(|a| a.contains("anullsrc=channel_layout=stereo:sample_rate=48000")));
+        // …the 2x clip retimes video and audio…
+        assert!(plan.filter_complex.contains("setpts=(PTS-STARTPTS)/2.000000"));
+        assert!(plan.filter_complex.contains("atempo=2.000000"));
+        assert!(plan.filter_complex.contains("volume=1.500"));
+        // …and concat joins v+a across all three segments, pads interleaved
+        // per segment (concat's input order).
+        assert!(
+            plan.filter_complex
+                .contains("[v0][a0][v1][a1][v2][a2]concat=n=3:v=1:a=1[vout][aout]"),
+            "fc = {}",
+            plan.filter_complex
+        );
+        assert!(plan.filter_complex.contains("sample_rates=48000"));
+        assert!(
+            !plan.filter_complex.contains(":a],"),
+            "no empty filter after a stream label: {}",
+            plan.filter_complex
+        );
+    }
+
+    #[test]
+    fn roughcut_encode_normalizes_fps_and_hdr_per_clip() {
+        let info = sample_info(); // 25 fps, SDR
+        let mut hdr_info = sample_info();
+        hdr_info.hdr = true;
+        let p = rc_params(vec![
+            rc_clip("a.mp4", 0.0, Some(4.0)),
+            rc_clip("h.mp4", 0.0, Some(4.0)),
+        ]);
+        let windows = vec![(0.0, 4.0), (0.0, 4.0)];
+        let plan = plan_roughcut_encode(
+            &info,
+            &p.clips,
+            &windows,
+            &[sample_info(), hdr_info],
+            &p,
+        )
+        .unwrap();
+        // Every branch lands on the first clip's frame rate…
+        assert_eq!(plan.filter_complex.matches(",fps=25.0000").count(), 2);
+        // …and only the HDR branch tone-maps, with the rate applied after it.
+        assert_eq!(plan.filter_complex.matches("tonemap=hable").count(), 1);
+        assert!(plan
+            .filter_complex
+            .contains("format=yuv420p,fps=25.0000"));
+
+        // A source with no measurable rate leaves the filter out entirely.
+        let mut blind = sample_info();
+        blind.fps = None;
+        let plan = plan_roughcut_encode(
+            &blind,
+            &p.clips,
+            &windows,
+            &[blind.clone(), blind.clone()],
+            &rc_params(p.clips.clone()),
+        )
+        .unwrap();
+        assert!(!plan.filter_complex.contains(",fps="));
+    }
+
+    #[test]
+    fn roughcut_encode_all_muted_drops_audio() {
+        let info = sample_info();
+        let mut m1 = rc_clip("a.mp4", 0.0, Some(4.0));
+        let mut m2 = rc_clip("a.mp4", 0.0, Some(4.0));
+        m1.mute = true;
+        m2.mute = true;
+        let p = rc_params(vec![m1, m2]);
+        let windows = vec![(0.0, 4.0), (0.0, 4.0)];
+        let plan =
+            plan_roughcut_encode(&info, &p.clips, &windows, &[info.clone(), info.clone()], &p)
+                .unwrap();
+        assert!(!plan.with_audio);
+        assert!(plan.filter_complex.contains("concat=n=2:v=1:a=0[vout]"));
+        assert!(
+            !plan.filter_complex.contains("anullsrc"),
+            "no audio branches are built at all"
+        );
+    }
+
+    #[test]
+    fn roughcut_encode_args_shape() {
+        let info = sample_info();
+        let p = rc_params(vec![rc_clip("a.mp4", 1.0, Some(5.0))]);
+        let windows = vec![(1.0, 5.0)];
+        let plan =
+            plan_roughcut_encode(&info, &p.clips, &windows, &[info.clone()], &p).unwrap();
+        let args = roughcut_encode_args(&plan, &info, &p, "mp4", Path::new("o.mp4"));
+        assert_eq!(
+            args.iter().filter(|a| **a == "-i").count(),
+            1,
+            "single audible clip = single input"
+        );
+        let fc = args.iter().position(|a| a == "-filter_complex").unwrap();
+        assert!(args[fc + 1].starts_with("[0:v]trim=duration=4.000"));
+        assert!(args.contains(&"-map".to_string()) && args.contains(&"[vout]".to_string()));
+        assert!(args.contains(&"libx264".to_string()));
+        assert!(args.contains(&"-crf".to_string()));
+        assert!(args.contains(&"-pix_fmt".to_string()));
+        assert!(args.contains(&"-movflags".to_string()));
+        assert_eq!(args.last().unwrap(), "o.mp4");
+    }
+
+    #[test]
+    fn roughcut_copy_mode_runmany() {
+        let info = sample_info();
+        let mut p = rc_params(vec![
+            rc_clip("a.mp4", 0.0, Some(4.0)),
+            rc_clip("a.mp4", 4.0, None),
+        ]);
+        p.mode = "copy".into();
+        let windows = vec![(0.0, 4.0), (4.0, 10.0)];
+        match prepare_roughcut_copy(
+            &p.clips,
+            &windows,
+            &[info.clone(), info],
+            "mp4",
+            PathBuf::from("out.mp4"),
+        )
+        .unwrap()
+        {
+            PreparedJob::RunMany {
+                runs,
+                cleanup,
+                final_out,
+            } => {
+                assert_eq!(runs.len(), 3, "two scratch parts + one concat");
+                assert_eq!(cleanup.len(), 3, "two parts + the concat list");
+                assert!(final_out.is_some());
+                let (args, _, dur) = runs.last().unwrap();
+                assert_eq!(*dur, 0.0, "concat pass must not inflate the denominator");
+                assert!(args.contains(&"concat".to_string()));
+                // The prepare step really wrote the concat list; clean it up
+                // so tests don't leave scratch files behind.
+                for path in &cleanup {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+            _ => panic!("expected RunMany"),
+        }
+    }
+
+    #[test]
+    fn roughcut_copy_rejects_mismatched_clips() {
+        let mut b = sample_info();
+        b.width = Some(1280);
+        let mut p = rc_params(vec![
+            rc_clip("a.mp4", 0.0, Some(4.0)),
+            rc_clip("b.mp4", 0.0, Some(4.0)),
+        ]);
+        p.mode = "copy".into();
+        let windows = vec![(0.0, 4.0), (0.0, 4.0)];
+        let err = prepare_roughcut_copy(
+            &p.clips,
+            &windows,
+            &[sample_info(), b],
+            "mp4",
+            PathBuf::from("o.mp4"),
+        )
+        .unwrap_err();
+        assert!(err.0.contains("分辨率"), "{}", err.0);
+
+        // Different codec families are equally fatal in copy mode.
+        let mut c = sample_info();
+        c.video_codec = Some("vp9".into());
+        let err = prepare_roughcut_copy(
+            &p.clips,
+            &windows,
+            &[sample_info(), c],
+            "mp4",
+            PathBuf::from("o.mp4"),
+        )
+        .unwrap_err();
+        assert!(err.0.contains("编码"), "{}", err.0);
+
+        // Mixed audio presence points at the precise mode instead.
+        let mut silent = sample_info();
+        silent.audio_codec = None;
+        let err = prepare_roughcut_copy(
+            &p.clips,
+            &windows,
+            &[sample_info(), silent],
+            "mp4",
+            PathBuf::from("o.mp4"),
+        )
+        .unwrap_err();
+        assert!(err.0.contains("音轨"), "{}", err.0);
     }
 }

@@ -74,7 +74,7 @@ export default function ToolNav({ route, onNavigate }: Props) {
       <button
         key={id}
         onClick={() => onNavigate({ kind: "module", id })}
-        className={`group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium transition-all duration-200 ${
+        className={`group flex w-full items-center gap-2 rounded-xl px-2.5 py-2.5 text-left text-sm font-medium transition-all duration-200 ${
           isActive
             ? "bg-brand-100/70 text-brand-700 dark:bg-brand-900/70 dark:text-brand-200"
             : "text-neutral-600 hover:bg-neutral-100/80 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800/50 dark:hover:text-neutral-100"
@@ -116,7 +116,7 @@ export default function ToolNav({ route, onNavigate }: Props) {
   return (
     <nav
       data-od-id="tool-nav"
-      className="flex w-52 shrink-0 flex-col overflow-y-auto bg-white dark:bg-neutral-950/50 border-r border-neutral-200/60 dark:border-neutral-800/60 px-2 py-3 scrollbar-thin"
+      className="flex w-40 shrink-0 flex-col overflow-y-auto bg-white dark:bg-neutral-950/50 border-r border-neutral-200/60 dark:border-neutral-800/60 px-1.5 py-3 scrollbar-thin"
     >
       <div className="space-y-1">{primary.map(item)}</div>
       <div className="mt-auto space-y-1 border-t border-neutral-200/60 pt-2 dark:border-neutral-800/60">

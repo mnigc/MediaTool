@@ -147,9 +147,18 @@ impl TargetConfig {
 #[serde(rename_all = "camelCase")]
 pub struct UploadRequest {
     pub target: TargetConfig,
-    pub file_path: String,
-    /// Remote/display name; defaults to the file's own name.
-    pub name: Option<String>,
+    /// Every deliverable of the job. Targets that group files (Telegram albums)
+    /// receive the whole list; the others only ever get the first entry, because
+    /// the frontend queues one transfer per file for those kinds.
+    pub file_paths: Vec<String>,
+}
+
+/// One file of an upload, stat'ed before the transfer starts so progress has a
+/// denominator that holds for the whole group.
+pub struct UploadFile {
+    pub path: PathBuf,
+    pub size: u64,
+    pub name: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -338,24 +347,30 @@ fn uuid(prefix: &str) -> String {
 
 pub async fn upload_start(ctx: Ctx, request: UploadRequest) -> Result<UploadStartResult> {
     request.target.validate().map_err(AppError)?;
-    let path = PathBuf::from(&request.file_path);
-    let meta = tokio::fs::metadata(&path)
-        .await
-        .map_err(|e| AppError(format!("Cannot read {}: {e}", request.file_path)))?;
-    if !meta.is_file() {
-        return Err(AppError(format!("Not a file: {}", request.file_path)));
+    if request.file_paths.is_empty() {
+        return Err(AppError("No file to upload".into()));
     }
-    let size = meta.len();
+    let mut files = Vec::with_capacity(request.file_paths.len());
+    for path in &request.file_paths {
+        let p = PathBuf::from(path);
+        let meta = tokio::fs::metadata(&p)
+            .await
+            .map_err(|e| AppError(format!("Cannot read {path}: {e}")))?;
+        if !meta.is_file() {
+            return Err(AppError(format!("Not a file: {path}")));
+        }
+        files.push(UploadFile {
+            path: p,
+            size: meta.len(),
+            name: file_name(path),
+        });
+    }
     let id = uuid("up");
     let flag = Arc::new(AtomicBool::new(false));
     ctx.uploads.register(&id, flag.clone());
-    let name = request
-        .name
-        .clone()
-        .unwrap_or_else(|| file_name(&request.file_path));
     let spawn_id = id.clone();
     tokio::task::spawn(async move {
-        run_upload(ctx, spawn_id, request.target, path, size, name, flag).await;
+        run_upload(ctx, spawn_id, request.target, files, flag).await;
     });
     Ok(UploadStartResult { id })
 }
@@ -572,13 +587,11 @@ async fn run_upload(
     ctx: Ctx,
     id: String,
     target: TargetConfig,
-    path: PathBuf,
-    size: u64,
-    name: String,
+    files: Vec<UploadFile>,
     flag: Arc<AtomicBool>,
 ) {
     let progress = make_progress(&ctx, &id);
-    let outcome = upload_dispatch(&progress, &target, &path, size, &name, &flag).await;
+    let outcome = upload_dispatch(&progress, &target, &files, &flag).await;
     // The cancel flag is the source of truth: a wrapped stream error surfaces
     // as a generic transport error, but the flag tells us why it stopped.
     let was_cancelled = flag.load(Ordering::Relaxed);
@@ -618,18 +631,23 @@ struct UploadOutcome {
 async fn upload_dispatch(
     progress: &ProgressFn,
     target: &TargetConfig,
-    path: &Path,
-    size: u64,
-    name: &str,
+    files: &[UploadFile],
     flag: &Arc<AtomicBool>,
 ) -> std::result::Result<UploadOutcome, AppError> {
-    progress(0.0, 0, size);
+    let first = files
+        .first()
+        .ok_or_else(|| AppError("No file to upload".into()))?;
+    let name = first.name.as_str();
+    let total: u64 = files.iter().map(|f| f.size).sum();
+    progress(0.0, 0, total);
     match target.kind.as_str() {
-        "webdav" => upload_webdav(progress, target, path, size, name, flag).await,
-        "telegram" => upload_telegram(progress, target, path, size, name, flag).await,
-        "youtube" => upload_youtube(progress, target, path, size, name, flag).await,
-        "gdrive" => upload_gdrive(progress, target, path, size, name, flag).await,
-        "onedrive" => upload_onedrive(progress, target, path, size, name, flag).await,
+        "webdav" => upload_webdav(progress, target, &first.path, first.size, name, flag).await,
+        "telegram" => upload_telegram(progress, target, files, flag).await,
+        "youtube" => upload_youtube(progress, target, &first.path, first.size, name, flag).await,
+        "gdrive" => upload_gdrive(progress, target, &first.path, first.size, name, flag).await,
+        "onedrive" => {
+            upload_onedrive(progress, target, &first.path, first.size, name, flag).await
+        }
         other => Err(AppError(format!("Unknown upload target kind: {other}"))),
     }
     .map(|(url, rt)| UploadOutcome {
@@ -728,45 +746,197 @@ async fn upload_webdav(
 
 /* ── Telegram ───────────────────────────────────────────────────── */
 
+/// The Bot API server refuses any single file above 50 MB in every shape.
 const TELEGRAM_BOT_LIMIT: u64 = 50 * 1024 * 1024;
+/// Photos above this are rejected by `sendPhoto`/media groups, so they degrade
+/// to documents instead of failing the transfer.
+const TELEGRAM_PHOTO_LIMIT: u64 = 10 * 1024 * 1024;
+/// `sendMediaGroup` takes 2–10 items; a longer run becomes several albums.
+const TELEGRAM_ALBUM_MAX: usize = 10;
 
+/// How Telegram will present one file. Only photos and videos may share an
+/// album, so anything else keeps its own message.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum TgShape {
+    Photo,
+    Video,
+    Document,
+}
+
+impl TgShape {
+    fn of(name: &str, size: u64) -> Self {
+        let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+        match ext.as_str() {
+            "jpg" | "jpeg" | "png" | "gif" if size <= TELEGRAM_PHOTO_LIMIT => Self::Photo,
+            "mp4" | "m4v" if size <= TELEGRAM_BOT_LIMIT => Self::Video,
+            _ => Self::Document,
+        }
+    }
+
+    fn method(self) -> &'static str {
+        match self {
+            Self::Photo => "sendPhoto",
+            Self::Video => "sendVideo",
+            Self::Document => "sendDocument",
+        }
+    }
+
+    fn field(self) -> &'static str {
+        match self {
+            Self::Photo => "photo",
+            Self::Video => "video",
+            Self::Document => "document",
+        }
+    }
+}
+
+/// Posts the job's deliverables to a bot chat: everything Telegram can render
+/// inline is grouped into albums (one message per up-to-10 files), the rest goes
+/// out as individual documents. A lone file simply gets its own message, which
+/// is why there is no special case for `files.len() == 1`. Every item keeps its
+/// own filename — the request's display name renames remote objects, not chat
+/// attachments.
 async fn upload_telegram(
     progress: &ProgressFn,
     target: &TargetConfig,
-    path: &Path,
-    size: u64,
-    name: &str,
+    files: &[UploadFile],
     flag: &Arc<AtomicBool>,
 ) -> std::result::Result<(Option<String>, Option<String>), AppError> {
-    if size > TELEGRAM_BOT_LIMIT {
+    if let Some(big) = files.iter().find(|f| f.size > TELEGRAM_BOT_LIMIT) {
         return Err(AppError(format!(
-            "Telegram Bot API 限制 50 MB（此文件 {}）；更大文件可用本地 Bot API server 或改用其他目标",
-            format_size(size)
+            "Telegram Bot API 限制 50 MB（{} 为 {}）；更大文件可用本地 Bot API server 或改用其他目标",
+            big.name,
+            format_size(big.size)
         )));
     }
     let token = target.bot_token.as_deref().unwrap_or("");
     let chat = target.chat_id.as_deref().unwrap_or("");
-    let bytes = tokio::fs::read(path)
+    let client = build_client(target.proxy.as_deref())?;
+
+    let total: u64 = files.iter().map(|f| f.size).sum();
+    let (album, docs) = tg_plan(files);
+
+    let mut sent = 0u64;
+    let mut link = None;
+
+    for chunk in album.chunks(TELEGRAM_ALBUM_MAX) {
+        // A media group needs at least two items, so a leftover single file
+        // keeps its own message.
+        if chunk.len() == 1 {
+            let (file, shape) = chunk[0];
+            let result = tg_send_one(&client, token, chat, shape, file, sent, total, progress, flag)
+                .await?;
+            sent += file.size;
+            link = link.or(tg_link(&result));
+            continue;
+        }
+        let mut items = Vec::with_capacity(chunk.len());
+        for (file, shape) in chunk {
+            check_cancelled(flag)?;
+            let result = tg_send_file(
+                &client, token, "", "uploadFile", "file", file, sent, total, progress, flag,
+            )
+            .await?;
+            sent += file.size;
+            let id = result
+                .get("file_id")
+                .and_then(|x| x.as_str())
+                .ok_or_else(|| AppError("Telegram returned no file id".into()))?;
+            items.push((*shape, id.to_string()));
+        }
+        let result = tg_send_album(&client, token, chat, &items).await?;
+        link = link.or(tg_link(&result));
+    }
+    for (file, shape) in docs {
+        check_cancelled(flag)?;
+        let result = tg_send_one(&client, token, chat, shape, file, sent, total, progress, flag)
+            .await?;
+        sent += file.size;
+        link = link.or(tg_link(&result));
+    }
+
+    progress(100.0, total, total);
+    Ok((link, None))
+}
+
+/// Splits a job's deliverables into what may share an album and what must go
+/// out as its own message.
+fn tg_plan(files: &[UploadFile]) -> (Vec<(&UploadFile, TgShape)>, Vec<(&UploadFile, TgShape)>) {
+    files
+        .iter()
+        .map(|f| (f, TgShape::of(&f.name, f.size)))
+        .partition(|(_, shape)| !matches!(shape, TgShape::Document))
+}
+
+/// Posts one file with the method that fits its shape.
+#[allow(clippy::too_many_arguments)]
+async fn tg_send_one(
+    client: &reqwest::Client,
+    token: &str,
+    chat: &str,
+    shape: TgShape,
+    file: &UploadFile,
+    base: u64,
+    total: u64,
+    progress: &ProgressFn,
+    flag: &Arc<AtomicBool>,
+) -> std::result::Result<serde_json::Value, AppError> {
+    tg_send_file(
+        client,
+        token,
+        chat,
+        shape.method(),
+        shape.field(),
+        file,
+        base,
+        total,
+        progress,
+        flag,
+    )
+    .await
+}
+
+/// One Bot API multipart request carrying a single file, streamed with progress
+/// counted against the whole transfer: `base` bytes already went out and
+/// `total` covers every file of this upload. Empty `chat` omits `chat_id`,
+/// which `uploadFile` does not take.
+#[allow(clippy::too_many_arguments)]
+async fn tg_send_file(
+    client: &reqwest::Client,
+    token: &str,
+    chat: &str,
+    method: &str,
+    field: &str,
+    file: &UploadFile,
+    base: u64,
+    total: u64,
+    progress: &ProgressFn,
+    flag: &Arc<AtomicBool>,
+) -> std::result::Result<serde_json::Value, AppError> {
+    let name = file.name.as_str();
+    let bytes = tokio::fs::read(&file.path)
         .await
         .map_err(|e| AppError(format!("Cannot read file: {e}")))?;
 
     let boundary = format!("mediatool{}", uuid("b"));
     let mut head = Vec::new();
-    for (field, value) in [("chat_id", chat)] {
-        head.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"\r\n\r\n{value}\r\n").as_bytes());
+    if !chat.is_empty() {
+        head.extend_from_slice(
+            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n{chat}\r\n")
+                .as_bytes(),
+        );
     }
     head.extend_from_slice(
         format!(
-            "--{boundary}\r\nContent-Disposition: form-data; name=\"document\"; filename=\"{}\"; filename*=utf-8''{}\r\nContent-Type: {}\r\n\r\n",
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"; filename=\"{}\"; filename*=utf-8''{}\r\nContent-Type: {}\r\n\r\n",
             ascii_fallback_name(name),
             enc(name),
             mime_for(name)
         )
         .as_bytes(),
     );
-    let mut tail_part = Vec::new();
-    tail_part.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-    let total = (head.len() + bytes.len() + tail_part.len()) as u64;
+    let tail_part = format!("\r\n--{boundary}--\r\n");
+    let body_len = (head.len() + bytes.len() + tail_part.len()) as u64;
 
     let head_bytes = Bytes::from(head);
     let file_bytes = Bytes::from(bytes);
@@ -781,11 +951,15 @@ async fn upload_telegram(
         ))
         .chain(futures_util::stream::iter(vec![Ok(tail_bytes)]))
         .boxed();
-    let counted = CountingStream::new(stream, total, progress.clone(), flag.clone());
+    let counted = CountingStream::new(
+        stream,
+        body_len,
+        scoped_progress(progress, base, file.size, total),
+        flag.clone(),
+    );
 
-    let client = build_client(target.proxy.as_deref())?;
     let resp = client
-        .post(format!("https://api.telegram.org/bot{token}/sendDocument"))
+        .post(format!("https://api.telegram.org/bot{token}/{method}"))
         .header(
             reqwest::header::CONTENT_TYPE,
             format!("multipart/form-data; boundary={boundary}"),
@@ -793,6 +967,52 @@ async fn upload_telegram(
         .body(reqwest::Body::wrap_stream(counted))
         .send()
         .await?;
+    tg_result(resp).await
+}
+
+/// Sends already-uploaded files as a single album message.
+async fn tg_send_album(
+    client: &reqwest::Client,
+    token: &str,
+    chat: &str,
+    items: &[(TgShape, String)],
+) -> std::result::Result<serde_json::Value, AppError> {
+    let media: Vec<serde_json::Value> = items
+        .iter()
+        .map(|(shape, id)| match shape {
+            TgShape::Video => {
+                serde_json::json!({"type": "video", "media": id, "supports_streaming": true})
+            }
+            _ => serde_json::json!({"type": "photo", "media": id}),
+        })
+        .collect();
+    let resp = client
+        .post(format!(
+            "https://api.telegram.org/bot{token}/sendMediaGroup"
+        ))
+        .form(&[
+            ("chat_id", chat.to_string()),
+            ("media", serde_json::to_string(&media).unwrap_or_default()),
+        ])
+        .send()
+        .await?;
+    tg_result(resp).await
+}
+
+/// Turns a per-file stream into cumulative progress over the whole upload.
+fn scoped_progress(progress: &ProgressFn, base: u64, file_size: u64, total: u64) -> ProgressFn {
+    let inner = progress.clone();
+    let span = total.max(1);
+    Arc::new(move |pct: f64, _, _| {
+        let done = (base + (pct.clamp(0.0, 100.0) / 100.0 * file_size as f64) as u64).min(span);
+        inner(done as f64 / span as f64 * 100.0, done, span);
+    })
+}
+
+/// Unwraps a Bot API response into its `result` payload.
+async fn tg_result(
+    resp: reqwest::Response,
+) -> std::result::Result<serde_json::Value, AppError> {
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {
@@ -811,13 +1031,18 @@ async fn upload_telegram(
                 .unwrap_or("unknown")
         )));
     }
-    let link = v
-        .pointer("/result/chat/username")
+    Ok(v.get("result").cloned().unwrap_or(serde_json::Value::Null))
+}
+
+/// Deep link to the posted message. A media group answers with an array, so the
+/// first message stands for the album.
+fn tg_link(result: &serde_json::Value) -> Option<String> {
+    let message = result.as_array().and_then(|a| a.first()).unwrap_or(result);
+    message
+        .pointer("/chat/username")
         .and_then(|u| u.as_str())
-        .zip(v.pointer("/result/message_id").and_then(|m| m.as_i64()))
-        .map(|(u, m)| format!("https://t.me/{u}/{m}"));
-    progress(100.0, total, total);
-    Ok((link, None))
+        .zip(message.pointer("/message_id").and_then(|m| m.as_i64()))
+        .map(|(u, m)| format!("https://t.me/{u}/{m}"))
 }
 
 /* ── YouTube ────────────────────────────────────────────────────── */

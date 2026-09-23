@@ -18,7 +18,7 @@ import { getTool, type WorkbenchId } from "../tools/registry";
 import { useUploads } from "./UploadCenter";
 import { runSteps } from "../workflow/runner";
 import { stepsForPipelineIds } from "../workflow/pipelines";
-import type { GpuInfo, WorkflowStepInput } from "../types";
+import type { GpuInfo, RoughCutParams, WorkflowStepInput } from "../types";
 import type { PipelineRun } from "../workflow/types";
 import type { Job, JobParams, ToolId, ToolParams } from "../types";
 
@@ -136,6 +136,8 @@ interface TaskCenterValue {
     opts?: { pipelineIds?: string[]; uploadTo?: string[] }
   ) => Promise<void>;
   mergeAndStart: (toolId: WorkbenchId, paths: string[]) => void;
+  /** Queue the rough-cut timeline as one export job and start it. */
+  startRoughCut: (params: RoughCutParams) => Promise<void>;
   pickFiles: (filters?: Array<{ name: string; extensions: string[] }>) => Promise<void>;
   chooseOutput: () => Promise<void>;
   setOutputDir: (dir: string | null) => void;
@@ -286,7 +288,7 @@ export function TaskCenterProvider({
                 error: e.error ?? null,
                 outputSize: e.outputSize ?? null,
                 logs: e.error ?? null,
-                resultFiles: e.output ? [e.output] : undefined,
+                resultFiles: e.outputs ?? (e.output ? [e.output] : undefined),
               }
             : j
         )
@@ -303,8 +305,13 @@ export function TaskCenterProvider({
           if (finished.pipelineSteps && finished.pipelineSteps.length > 0) {
             runJobPipelineInternal(finished.uiId, e.output, finished.pipelineSteps);
           } else {
-            // Without a bound pipeline the encode output IS the product.
-            uploadOnceRef.current(finished.uploadTo ?? [], [e.output], `job-${e.id}`);
+            // Without a bound pipeline the encode output IS the product — the
+            // whole set of it, so a multi-segment job delivers every part.
+            uploadOnceRef.current(
+              e.outputs ?? [e.output],
+              finished.uploadTo ?? [],
+              `job-${e.id}`
+            );
           }
         }
       } else if (!e.cancelled) {
@@ -487,6 +494,41 @@ export function TaskCenterProvider({
     if (dir) setSettings((s) => ({ ...s, outputDir: dir }));
   }
 
+  /** Create a single rough-cut export job from the timeline and start it.
+   *  The backend names the deliverable after the first clip; inputs[0] is
+   *  that first clip's path, and the clips themselves travel in params. */
+  async function startRoughCut(params: RoughCutParams) {
+    setError(null);
+    const first = params.clips[0]?.path;
+    if (!first) {
+      setError(t("rc.errEmpty"));
+      return;
+    }
+    try {
+      const info = await probeFile(first);
+      uiCounter += 1;
+      const job: Job = {
+        uiId: `ui-${uiCounter}`,
+        toolId: "roughcut",
+        info,
+        params,
+        percent: 0,
+        phase: "queued",
+        output: null,
+        outputSize: null,
+        createdAt: Date.now(),
+      };
+      // Mirror the job into the ref synchronously: `startOne` looks the job
+      // up in `jobsRef` before React re-renders with the new state.
+      const next = [...jobsRef.current, job];
+      jobsRef.current = next;
+      setJobs(next);
+      await startOne(job.uiId);
+    } catch (err) {
+      setError(t("err.read", { error: String(err) }));
+    }
+  }
+
   /** Run the post-processing steps bound to a finished job. Progress is
    *  written onto the job itself so its card shows an inline sub-progress
    *  instead of spawning a separate workflow entry. */
@@ -558,7 +600,7 @@ export function TaskCenterProvider({
         // The pipeline's final output is the product — push IT to the bound
         // upload targets instead of the raw encode output.
         if (ok && output) {
-          uploadOnceRef.current(uploadTo, [output], `jobpipe-${uiId}-${output}`);
+          uploadOnceRef.current([output], uploadTo, `jobpipe-${uiId}-${output}`);
         }
         pipelineHandles.current.delete(uiId);
       },
@@ -871,6 +913,7 @@ export function TaskCenterProvider({
     registerDropHandler,
     addCompressFiles,
     mergeAndStart,
+    startRoughCut,
     pickFiles,
     chooseOutput,
     setOutputDir: (dir) => setSettings((s) => ({ ...s, outputDir: dir })),

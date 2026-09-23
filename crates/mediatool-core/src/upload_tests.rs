@@ -8,6 +8,8 @@ fn noop_progress() -> ProgressFn {
     Arc::new(|_, _, _| {})
 }
 
+const MiB: u64 = 1024 * 1024;
+
 /* ── pure helpers ─────────────────────────────────────────── */
 
 #[test]
@@ -437,4 +439,46 @@ fn webdav_upload_aborts_when_cancelled() {
     assert!(result.is_err(), "cancelled upload must fail");
 
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/* ── Telegram albums ──────────────────────────────────────────── */
+
+fn upload_file(name: &str, size: u64) -> UploadFile {
+    UploadFile {
+        path: PathBuf::from(name),
+        size,
+        name: name.to_string(),
+    }
+}
+
+#[test]
+fn telegram_shape_follows_format_then_size() {
+    assert_eq!(TgShape::of("clip.mp4", MiB), TgShape::Video);
+    assert_eq!(TgShape::of("frame.png", MiB), TgShape::Photo);
+    // What Telegram can't render inline stays a document …
+    assert_eq!(TgShape::of("clip.mkv", MiB), TgShape::Document);
+    assert_eq!(TgShape::of("notes.txt", MiB), TgShape::Document);
+    // … including an image past the bot's photo ceiling, which would otherwise
+    // fail the send outright.
+    assert_eq!(
+        TgShape::of("big.png", TELEGRAM_PHOTO_LIMIT + 1),
+        TgShape::Document
+    );
+    assert_eq!(
+        TgShape::of("big.mp4", TELEGRAM_BOT_LIMIT + 1),
+        TgShape::Document
+    );
+}
+
+#[test]
+fn telegram_plan_keeps_documents_out_of_the_album() {
+    let files = vec![
+        upload_file("cover.jpg", MiB),
+        upload_file("clip.mp4", 8 * MiB),
+        upload_file("notes.txt", MiB),
+    ];
+    let (album, docs) = tg_plan(&files);
+    assert_eq!(album.len(), 2, "photo and video share one album");
+    assert_eq!(docs.len(), 1, "a document gets its own message");
+    assert_eq!(docs[0].0.name, "notes.txt");
 }

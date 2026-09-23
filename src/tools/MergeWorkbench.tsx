@@ -65,12 +65,21 @@ export default function MergeWorkbench({
 
   return (
     <div className="mx-auto max-w-2xl">
-      <div className="mb-5">
+      <div className="mb-5 flex items-start justify-between">
+        <div>
+          <h2 className="flex items-center gap-2 text-lg font-semibold text-neutral-800 dark:text-neutral-100">
+            <MergeIcon className="h-5 w-5 text-brand-500" />
+            {t(`tool.${tool}.name`)}
+          </h2>
+          <p className="mt-0.5 text-xs text-neutral-400 dark:text-neutral-500">
+            {t(`tool.${tool}.desc`)}
+          </p>
+        </div>
         {onBack && (
           <button
             type="button"
             onClick={onBack}
-            className="mb-3 flex items-center gap-1 rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+            className="flex items-center gap-1 rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
           >
             <span className="h-3 w-3" aria-hidden>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -80,13 +89,6 @@ export default function MergeWorkbench({
             {t("module.back")}
           </button>
         )}
-        <h2 className="flex items-center gap-2 text-lg font-semibold text-neutral-800 dark:text-neutral-100">
-          <MergeIcon className="h-5 w-5 text-brand-500" />
-          {t(`tool.${tool}.name`)}
-        </h2>
-        <p className="mt-0.5 text-xs text-neutral-400 dark:text-neutral-500">
-          {t(`tool.${tool}.desc`)}
-        </p>
       </div>
 
       <div className="rounded-2xl border-2 border-dashed border-neutral-200 bg-neutral-50/40 p-6 text-center dark:border-neutral-700 dark:bg-neutral-800/40">

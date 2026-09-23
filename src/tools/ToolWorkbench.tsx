@@ -9,17 +9,26 @@ import FilePicker from "./FilePicker";
 import TaskWorkbench from "./TaskWorkbench";
 import InspectReport from "./panels/InspectPanel";
 import MergeWorkbench from "./MergeWorkbench";
+import RoughCutWorkbench from "./roughcut/RoughCutWorkbench";
 import type { MediaReport } from "../types";
 
 function WorkbenchHeader({ tool, onBack }: { tool: WorkbenchId; onBack?: () => void }) {
   const { t } = useI18n();
   return (
-    <div className="mb-5">
+    <div className="mb-5 flex items-start justify-between">
+      <div>
+        <h2 className="text-lg font-semibold text-neutral-800 dark:text-neutral-100">
+          {t(`tool.${tool}.name`)}
+        </h2>
+        <p className="mt-0.5 text-xs text-neutral-400 dark:text-neutral-500">
+          {t(`tool.${tool}.desc`)}
+        </p>
+      </div>
       {onBack && (
         <button
           type="button"
           onClick={onBack}
-          className="mb-3 flex items-center gap-1 rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+          className="flex items-center gap-1 rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
         >
           <span className="h-3 w-3" aria-hidden>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -29,12 +38,6 @@ function WorkbenchHeader({ tool, onBack }: { tool: WorkbenchId; onBack?: () => v
           {t("module.back")}
         </button>
       )}
-      <h2 className="text-lg font-semibold text-neutral-800 dark:text-neutral-100">
-        {t(`tool.${tool}.name`)}
-      </h2>
-      <p className="mt-0.5 text-xs text-neutral-400 dark:text-neutral-500">
-        {t(`tool.${tool}.desc`)}
-      </p>
     </div>
   );
 }
@@ -133,8 +136,11 @@ function InspectWorkbench({ onBack }: { onBack?: () => void }) {
 
 export default function ToolWorkbench({ tool, onBack }: { tool: WorkbenchId; onBack?: () => void }) {
   if (tool === "inspect") return <InspectWorkbench onBack={onBack} />;
-  if (tool === "video-merge" || tool === "audio-merge") {
+  if (tool === "audio-merge") {
     return <MergeWorkbench tool={tool} onBack={onBack} />;
+  }
+  if (tool === "roughcut") {
+    return <RoughCutWorkbench onBack={onBack} />;
   }
   return <TaskWorkbench toolId={tool} onBack={onBack} />;
 }
