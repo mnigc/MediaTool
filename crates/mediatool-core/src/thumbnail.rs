@@ -227,7 +227,7 @@ pub fn get_filmstrip_sync(
     if !p.exists() {
         return Ok(vec![]);
     }
-    let n = count.clamp(2, 16);
+    let n = count.clamp(2, 32);
     let w = width.filter(|w| *w >= 16).unwrap_or(160);
     let dir = std::env::temp_dir().join(format!(
         "mediatool_strip_{}",

@@ -35,6 +35,7 @@ export default function Player({
   muted,
   onPlayhead,
   onPlayState,
+  onLoadError,
 }: {
   clips: RoughCutClip[];
   sources: Map<string, SourceInfo>;
@@ -44,6 +45,8 @@ export default function Player({
   /** Continuous playhead updates while playing, and seeks from outside. */
   onPlayhead: (secs: number) => void;
   onPlayState: (playing: boolean) => void;
+  /** Load failed for good after retries (true) or recovered (false). */
+  onLoadError: (failed: boolean) => void;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
   // Which clip the element is currently loaded for.
@@ -54,15 +57,18 @@ export default function Player({
   sourcesRef.current = sources;
   const mutedRef = useRef(muted);
   mutedRef.current = muted;
+  const playingRef = useRef(playing);
+  playingRef.current = playing;
 
-  /** Per-clip tweaks, approximated with native element controls: `volume`
-   *  tops out at 1, so gain above that plays flat here but not in the export.
-   *  Re-applied after every `load()` because loading resets the rate. */
+  /** Per-clip tweaks, applied through native element controls. Re-applied after
+   *  every `load()` because loading resets the rate. */
   const applyTweaks = (v: HTMLVideoElement, clip: RoughCutClip) => {
     const speed = speedOf(clip);
     if (v.playbackRate !== speed) v.playbackRate = speed;
     const wantMuted = mutedRef.current || !!clip.mute;
     if (v.muted !== wantMuted) v.muted = wantMuted;
+    // The element ignores an out-of-range write rather than clamping it, and a
+    // gain above its 1.0 ceiling is what the slider used to allow.
     const vol = Math.min(Math.max(clip.volume ?? 1, 0), 1);
     if (v.volume !== vol) v.volume = vol;
   };
@@ -78,14 +84,16 @@ export default function Player({
     }
   };
 
-  const activate = (index: number, local: number, autoplay: boolean) => {
+  const activate = (index: number, local: number, autoplay: boolean, attempt = 0) => {
     const v = ref.current;
     const clip = clipsRef.current[index];
     if (!v || !clip) return;
     const start = () => {
       seekTo(v, clip, local);
       applyTweaks(v, clip);
-      if (autoplay) void v.play().catch(() => onPlayState(false));
+      // autoplay can go stale across a retry — the user may have paused while
+      // the reload was pending
+      if (autoplay && playingRef.current) void v.play().catch(() => onPlayState(false));
     };
     if (activeRef.current === index) {
       start();
@@ -96,12 +104,37 @@ export default function Player({
       if (activeRef.current !== index || ref.current !== v) return;
       v.src = url;
       v.load();
-      const onMeta = () => {
+      const done = () => {
         v.removeEventListener("loadedmetadata", onMeta);
+        v.removeEventListener("error", onErr);
+      };
+      const onMeta = () => {
+        done();
         if (activeRef.current !== index) return;
+        onLoadError(false);
         start();
       };
+      // A load that fails (asset hiccup while probes and filmstrip extraction
+      // crowd the same file) never fires loadedmetadata and used to wedge the
+      // player: activeRef kept claiming the clip was loaded. Retry twice, then
+      // forget the clip so the next play press starts a fresh load.
+      const onErr = () => {
+        done();
+        if (activeRef.current !== index || ref.current !== v) return;
+        activeRef.current = null;
+        if (attempt + 1 < 3) {
+          window.setTimeout(() => {
+            if (activeRef.current === null && ref.current === v) {
+              activate(index, local, autoplay, attempt + 1);
+            }
+          }, 300);
+        } else {
+          onPlayState(false);
+          onLoadError(true);
+        }
+      };
       v.addEventListener("loadedmetadata", onMeta);
+      v.addEventListener("error", onErr);
     });
   };
 
@@ -135,11 +168,20 @@ export default function Player({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playhead, clips, sources]);
 
-  // Play/pause.
+  // Play/pause. A forgotten clip (failed load) gets a fresh full load for
+  // whatever sits under the playhead — play() alone would just reject on an
+  // empty pipeline.
   useEffect(() => {
     const v = ref.current;
     if (!v) return;
     if (playing) {
+      if (activeRef.current === null) {
+        const at = locate(clipsRef.current, sourcesRef.current, playhead);
+        if (at) {
+          activate(at.index, at.local, true);
+          return;
+        }
+      }
       void v.play().catch(() => onPlayState(false));
     } else {
       v.pause();

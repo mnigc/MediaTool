@@ -5,7 +5,7 @@
 //! encoding instead of from a glitchy output file.
 
 import { inspectMedia } from "../../lib/engine";
-import type { StreamReport } from "../../types";
+import type { MediaReport, StreamReport } from "../../types";
 
 export type CompatField =
   | "videoCodec"
@@ -46,6 +46,21 @@ interface MediaReportLike {
 
 const cmp = (a: unknown, b: unknown) => String(a ?? "") !== String(b ?? "");
 
+// Session-lifetime probe cache: the auto-check re-runs on every source-set
+// change, and source files don't change underneath a running session.
+const reportCache = new Map<string, MediaReport>();
+
+/** The full ffprobe report for one source, served from the cache the
+ *  compatibility check already fills — so the spec panel costs no extra probe
+ *  for anything on the timeline. */
+export async function inspectCached(path: string): Promise<MediaReport> {
+  const cached = reportCache.get(path);
+  if (cached) return cached;
+  const report = await inspectMedia(path);
+  reportCache.set(path, report);
+  return report;
+}
+
 /** Compare every unique source against the first clip's source. Cheap fields
  *  first; all mismatches are reported so the user can decide. */
 export async function checkConcatCompat(paths: string[]): Promise<CompatResult> {
@@ -55,7 +70,7 @@ export async function checkConcatCompat(paths: string[]): Promise<CompatResult> 
   await Promise.all(
     unique.map(async (p) => {
       try {
-        reports.set(p, await inspectMedia(p));
+        reports.set(p, await inspectCached(p));
       } catch {
         unreadable.push(p);
       }
