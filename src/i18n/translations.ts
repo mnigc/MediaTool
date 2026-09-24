@@ -386,6 +386,7 @@ const zh: Dict = {
   "settings.platformCookies.removeTitle": "删除平台 Cookies",
   "settings.platformCookies.removeMsg": "确定移除 {host} 的 Cookies 吗？由应用保管的粘贴文本会一并删除，指向你自己文件的只解除关联。",
   "dl.notSet": "未设置",
+  "dl.paramsHint": "此处修改仅对之后新开始的任务生效，进行中的下载 / 录制仍按开始时的参数执行",
 
   "dl.page.title": "视频下载",
   "dl.record.title": "直播录制",
@@ -1302,6 +1303,7 @@ const en: Dict = {
   "settings.platformCookies.removeTitle": "Remove platform cookies",
   "settings.platformCookies.removeMsg": "Remove cookies for {host}? Pasted text kept by the app is deleted too; a file you pointed at is only unlinked.",
   "dl.notSet": "Not set",
+  "dl.paramsHint": "Changes here only affect tasks started afterwards — ongoing downloads and recordings keep the settings they started with",
 
   "dl.page.title": "Video Download",
   "dl.record.title": "Live Recording",

@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useI18n } from "../i18n";
 import { useDownloads } from "../contexts/DownloadCenter";
 import { cookiesList } from "../lib/engine";
+import { InfoIcon } from "../components/icons";
 import type { PlatformCookies } from "../types";
 import {
   pipelineById,
@@ -14,10 +15,17 @@ import { Button } from "../components/ui";
  *  one card, sections separated by dividers. Secondary sections collapse so
  *  the rail stays short and the link input keeps first-screen dominance. */
 export function ConfigSidebar({ children }: { children: ReactNode }) {
+  const { t } = useI18n();
   return (
     <aside className="w-full shrink-0 lg:sticky lg:top-5 lg:w-64">
       <div className="divide-y divide-neutral-100 rounded-2xl bg-white shadow-card ring-1 ring-neutral-200 dark:divide-neutral-800 dark:bg-neutral-900 dark:ring-neutral-800">
         {children}
+        {/* Requests are snapshotted at start, so edits never reach a running
+            task — say so instead of letting users re-tweak mid-capture. */}
+        <div className="flex items-start gap-1.5 px-4 py-3 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+          <InfoIcon className="mt-[3px] h-3 w-3 shrink-0" />
+          <span>{t("dl.paramsHint")}</span>
+        </div>
       </div>
     </aside>
   );
