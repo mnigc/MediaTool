@@ -21,7 +21,7 @@ import DownloadPage from "./download/DownloadPage";
 import RecordPage from "./download/RecordPage";
 import SettingsPage from "./tools/SettingsPage";
 import AboutPage from "./tools/AboutPage";
-import { MODULES, toolToModule, type Route, type WorkbenchId } from "./tools/registry";
+import { MODULES, toolToModule, type ModuleId, type Route, type WorkbenchId } from "./tools/registry";
 
 function AppShell({
   themeMode,
@@ -52,11 +52,30 @@ function AppShell({
     return () => clearTimeout(timer);
   }, [checkForUpdates]);
 
-  const openTool = (tool: WorkbenchId) => setRoute({ kind: "tool", tool });
+  // The last tool opened per module: leaving 视频/音频 for another menu entry
+  // and coming back resumes the workbench you were in, not the card grid.
+  // The tool's own 返回 button is the explicit "back to the grid" and forgets.
+  const [lastTool, setLastTool] = useState<Partial<Record<ModuleId, WorkbenchId>>>({});
+
+  const openTool = (tool: WorkbenchId) => {
+    setLastTool((m) => ({ ...m, [toolToModule(tool)]: tool }));
+    setRoute({ kind: "tool", tool });
+  };
   const backToModule = () => {
-    setRoute((r) =>
-      r.kind === "tool" ? { kind: "module", id: toolToModule(r.tool) } : r
-    );
+    if (route.kind !== "tool") return;
+    const module = toolToModule(route.tool);
+    setLastTool((m) => {
+      const next = { ...m };
+      delete next[module];
+      return next;
+    });
+    setRoute({ kind: "module", id: module });
+  };
+  // Sidebar navigation: only video/audio ever carry a remembered tool —
+  // openTool stores nothing for the other modules.
+  const navigate = (r: Route) => {
+    const tool = r.kind === "module" ? lastTool[r.id] : undefined;
+    setRoute(tool ? { kind: "tool", tool } : r);
   };
 
   const content = () => {
@@ -96,7 +115,11 @@ function AppShell({
     <div className="flex h-screen flex-col">
       <Header />
       <div className="flex min-h-0 flex-1">
-        <ToolNav route={route} onNavigate={setRoute} />
+        <ToolNav
+          route={route}
+          onNavigate={navigate}
+          hasUpdate={updater.update !== null}
+        />
         <main className="app-main min-w-0 flex-1 overflow-y-auto p-5">
           {content()}
         </main>

@@ -77,13 +77,39 @@ function fmtFrameRate(rate: string | null | undefined): string | null {
   return Number.isFinite(fps) && fps > 0 ? `${fps.toFixed(3).replace(/0+$/, "").replace(/\.$/, "")} fps` : rate;
 }
 
+/** The muxer tags a side panel cares about — provenance, not the raw dump
+ *  ("Hw 1", "minor_version 512") the 格式体检 tool shows in full. */
+const CURATED_TAGS = ["creation_time", "encoder"] as const;
+
+const TAG_LABEL_KEY: Record<(typeof CURATED_TAGS)[number], string> = {
+  creation_time: "tool.inspect.creationTime",
+  encoder: "tool.inspect.encoder",
+};
+
+/** creation_time arrives as UTC ("…T02:38:23.000000Z"); show it local and
+ *  minute-precise. Anything unparseable passes through untouched. */
+function fmtTagValue(key: string, value: string): string {
+  if (key === "creation_time") {
+    const d = new Date(value);
+    if (!Number.isNaN(d.getTime())) {
+      const p = (n: number) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    }
+  }
+  return value;
+}
+
 export default function InspectReport({
   report,
   flat,
+  tagsMode = "all",
 }: {
   report: MediaReport;
   /** Stack hairline-separated sections instead of bordered cards. */
   flat?: boolean;
+  /** "all" dumps the raw muxer tags (格式体检); "curated" keeps only the
+   *  readable ones, for panels that sit beside an editor. */
+  tagsMode?: "all" | "curated";
 }) {
   const { t } = useI18n();
   const kindKey: Record<string, string> = {
@@ -112,11 +138,16 @@ export default function InspectReport({
         <Row flat={flat} k={t("tool.inspect.duration")} v={
           report.durationSecs != null ? fmtDuration(report.durationSecs) : null
         } />
-        <Row flat={flat} k={t("tool.inspect.bitrate")} v={report.bitrateKbps != null ? `${report.bitrateKbps} kbps` : null} />
+        {/* vs. the plain 码率 inside each stream section below */}
+        <Row flat={flat} k={t("tool.inspect.totalBitrate")} v={report.bitrateKbps != null ? `${report.bitrateKbps} kbps` : null} />
         <Row flat={flat} k={t("tool.inspect.chapters")} v={report.chapterCount > 0 ? report.chapterCount : null} />
-        {Object.entries(tags).slice(0, 8).map(([k, v]) => (
-          <Row key={k} flat={flat} k={k} v={String(v)} />
-        ))}
+        {tagsMode === "all"
+          ? Object.entries(tags).slice(0, 8).map(([k, v]) => (
+              <Row key={k} flat={flat} k={k} v={String(v)} />
+            ))
+          : CURATED_TAGS.filter((k) => tags[k]).map((k) => (
+              <Row key={k} flat={flat} k={t(TAG_LABEL_KEY[k])} v={fmtTagValue(k, String(tags[k]))} />
+            ))}
       </Card>
 
       {report.streams.map((s) => (

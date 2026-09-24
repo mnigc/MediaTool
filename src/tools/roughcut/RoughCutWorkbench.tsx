@@ -747,7 +747,9 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
           />
 
           <div className="divide-y divide-neutral-100 rounded-lg bg-white ring-1 ring-neutral-200 dark:divide-neutral-800 dark:bg-neutral-900 dark:ring-neutral-800">
-            {selectedClip && selected !== null && (
+            {/* The section stays mounted so the export bar below doesn't jump
+                when a clip gains/loses selection. */}
+            {selectedClip && selected !== null ? (
               <ClipInspector
                 clip={selectedClip}
                 index={selected}
@@ -756,6 +758,12 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
                 onPatch={patchSelected}
                 onMove={moveSelected}
               />
+            ) : (
+              clips.length > 0 && (
+                <div className="px-3 py-2.5 text-xs text-neutral-400 dark:text-neutral-500">
+                  {t("rc.noSelection")}
+                </div>
+              )
             )}
 
             <ExportBar clips={clips} sources={sources} gpuInfo={tasks.gpuInfo} disabled={false} onExport={doExport} />
@@ -862,6 +870,10 @@ function ClipInspector({
         <span className="min-w-0 flex-1 truncate text-xs font-semibold text-neutral-700 dark:text-neutral-200">
           {t("rc.clipN", { n: index + 1 })} · {sourceName(clip.path)}
         </span>
+        {/* position in the track — what the move buttons step through */}
+        <span className="shrink-0 text-[10px] tabular-nums text-neutral-400 dark:text-neutral-500">
+          {index + 1} / {count}
+        </span>
         <TransportButton label={t("rc.moveLeft")} onClick={() => onMove(-1)} disabled={index === 0}>
           <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="m14 6-6 6 6 6" />
@@ -879,32 +891,44 @@ function ClipInspector({
       </div>
 
       <div className="grid grid-cols-2 items-center gap-x-4 gap-y-2 md:grid-cols-3">
+        {/* Seconds in, timecode out: the input edits in seconds while the hint
+            shows the same spot the timeline and player use (00:13.9). */}
         <Field label={t("rc.inPoint")}>
-          <NumInput
-            value={Number(clip.startTime.toFixed(2))}
-            min={0}
-            step={0.1}
-            onChange={(v) =>
-              onPatch({
-                // Never let the two points cross: the backend rejects an
-                // empty window, and the timeline would invert.
-                startTime: Math.min(Math.max(v ?? 0, 0), Math.max(0, end - MIN_SLICE)),
-              })
-            }
-          />
+          <span className="flex w-full items-center gap-1.5">
+            <NumInput
+              value={Number(clip.startTime.toFixed(1))}
+              min={0}
+              step={0.1}
+              onChange={(v) =>
+                onPatch({
+                  // Never let the two points cross: the backend rejects an
+                  // empty window, and the timeline would invert.
+                  startTime: Math.min(Math.max(v ?? 0, 0), Math.max(0, end - MIN_SLICE)),
+                })
+              }
+            />
+            <span className="shrink-0 text-[10px] tabular-nums text-neutral-400 dark:text-neutral-500">
+              {formatTime(clip.startTime)}
+            </span>
+          </span>
         </Field>
         <Field label={t("rc.outPoint")}>
-          <NumInput
-            value={Number(end.toFixed(2))}
-            min={0}
-            step={0.1}
-            onChange={(v) => {
-              const srcDur = sources.get(clip.path)?.durationSecs ?? 0;
-              onPatch({
-                endTime: Math.max(Math.min(v ?? 0, srcDur || (v ?? 0)), clip.startTime + MIN_SLICE),
-              });
-            }}
-          />
+          <span className="flex w-full items-center gap-1.5">
+            <NumInput
+              value={Number(end.toFixed(1))}
+              min={0}
+              step={0.1}
+              onChange={(v) => {
+                const srcDur = sources.get(clip.path)?.durationSecs ?? 0;
+                onPatch({
+                  endTime: Math.max(Math.min(v ?? 0, srcDur || (v ?? 0)), clip.startTime + MIN_SLICE),
+                });
+              }}
+            />
+            <span className="shrink-0 text-[10px] tabular-nums text-neutral-400 dark:text-neutral-500">
+              {formatTime(end)}
+            </span>
+          </span>
         </Field>
         <Field label={t("rc.speed")}>
           <Select
@@ -934,7 +958,7 @@ function ClipInspector({
               className="mp-range min-w-0 flex-1"
             />
             <span className="shrink-0 text-xs tabular-nums text-neutral-400">
-              {(clip.volume ?? 1).toFixed(1)}×
+              {(clip.volume ?? 1).toFixed(2).replace(/\.?0+$/, "")}×
             </span>
           </span>
         </Field>
@@ -1000,7 +1024,7 @@ function SourceMeta({ path }: { path: string | null }) {
               {t("stripmd.error")}
             </p>
           ) : report ? (
-            <InspectReport report={report} flat />
+            <InspectReport report={report} flat tagsMode="curated" />
           ) : (
             <p className="px-3 py-2 text-[11px] text-neutral-500 dark:text-neutral-500">
               {t("stripmd.loading")}

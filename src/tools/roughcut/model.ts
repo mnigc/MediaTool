@@ -30,19 +30,19 @@ export function sourceEnd(clip: RoughCutClip, sources: Map<string, SourceInfo>):
   return clip.endTime ?? sources.get(clip.path)?.durationSecs ?? 0;
 }
 
-/** 1:23.4 style time labels for the ruler and transport. */
-export function formatTime(secs: number): string {
+/** 1:23.4 style time labels for the ruler and transport. `coarse` drops the
+ *  tenth — a ruler tick every 30s reads better as "30:00" than "30:00.0". */
+export function formatTime(secs: number, coarse = false): string {
   const s = Math.max(0, secs);
   const total = Math.floor(s);
   const h = Math.floor(total / 3600);
   const m = Math.floor((total % 3600) / 60);
   const sec = total % 60;
-  const tenth = Math.floor((s * 10) % 10);
   const core =
     h > 0
       ? `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`
       : `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
-  return `${core}.${tenth}`;
+  return coarse ? core : `${core}.${Math.floor((s * 10) % 10)}`;
 }
 
 /** Timeline length of one clip: its source window at that clip's speed. */

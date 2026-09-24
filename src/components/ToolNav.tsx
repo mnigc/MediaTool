@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 import { useI18n } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
+import { useDownloads } from "../contexts/DownloadCenter";
 import { MODULES, toolToModule, type ModuleId, type Route } from "../tools/registry";
 import {
   ChartIcon,
@@ -41,15 +42,18 @@ const MODULE_LABEL: Record<ModuleId, string> = {
 interface Props {
   route: Route;
   onNavigate: (route: Route) => void;
+  /** A newer app release was found by the updater — dots the 关于 entry. */
+  hasUpdate: boolean;
 }
 
 /** App-level entries live at the bottom of the rail, separated from the
  *  work modules above. */
 const FOOTER_MODULES: ModuleId[] = ["settings", "about"];
 
-export default function ToolNav({ route, onNavigate }: Props) {
+export default function ToolNav({ route, onNavigate, hasUpdate }: Props) {
   const { t } = useI18n();
   const tasks = useTasks();
+  const downloads = useDownloads();
   const activeModule = route.kind === "module" ? route.id : toolToModule(route.tool);
 
   // Aggregate task progress shown as a slim bar + count badge on the 任务 item.
@@ -66,6 +70,18 @@ export default function ToolNav({ route, onNavigate }: Props) {
   const taskRunningPct = taskRunning.reduce((a, j) => a + j.percent, 0) / 100;
   const taskProgress =
     taskTotal > 0 ? (taskTerminal + taskRunningPct) / taskTotal : 0;
+
+  // Red dots: work in flight elsewhere, so the rail signals where to look.
+  const downloadRunning = downloads.tasks.some(
+    (x) => x.kind === "download" && x.phase === "running"
+  );
+  const recordRunning = downloads.tasks.some(
+    (x) => x.kind === "record" && x.phase === "running"
+  );
+  const dotFor = (id: ModuleId) =>
+    (id === "download" && downloadRunning) ||
+    (id === "record" && recordRunning) ||
+    (id === "about" && hasUpdate);
 
   const item = (id: ModuleId) => {
     const isActive = activeModule === id;
@@ -90,7 +106,15 @@ export default function ToolNav({ route, onNavigate }: Props) {
           />
         </span>
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate">{t(MODULE_LABEL[id])}</span>
+          <span className="flex items-center gap-1.5">
+            <span className="truncate">{t(MODULE_LABEL[id])}</span>
+            {dotFor(id) && (
+              <span
+                aria-hidden="true"
+                className="h-1.5 w-1.5 shrink-0 rounded-full bg-error-500"
+              />
+            )}
+          </span>
           {id === "tasks" && taskTotal > 0 && (
             <span className="mt-1 flex items-center gap-1.5">
               <span className="h-1 min-w-8 flex-1 overflow-hidden rounded-full bg-neutral-200/80 dark:bg-neutral-700/60">

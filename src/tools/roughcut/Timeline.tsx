@@ -9,6 +9,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { getFilmstrip } from "../../lib/engine";
+import { MuteIcon } from "../../components/icons";
 import type { RoughCutClip } from "../../types";
 import {
   clipDuration,
@@ -220,8 +221,9 @@ export default function Timeline({
                   className="absolute bottom-0 top-0 border-l border-neutral-200 dark:border-neutral-700"
                   style={{ left: s * pxPerSec }}
                 >
+                  {/* ticks a second or wider don't need the tenth */}
                   <span className="absolute left-1 top-0.5 text-[10px] tabular-nums text-neutral-400 dark:text-neutral-500">
-                    {formatTime(s)}
+                    {formatTime(s, step >= 1)}
                   </span>
                 </div>
               ))}
@@ -257,7 +259,7 @@ export default function Timeline({
                     <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between gap-1 bg-gradient-to-t from-black/60 to-transparent px-1.5 pb-0.5 pt-2 text-[10px] leading-tight text-white">
                       <span className="truncate">{name}</span>
                       <span className="flex shrink-0 items-center gap-1 tabular-nums">
-                        {clip.mute && <span aria-hidden>🔇</span>}
+                        {clip.mute && <MuteIcon className="h-2.5 w-2.5 shrink-0" />}
                         {(clip.speed ?? 1) !== 1 && <span>{(clip.speed ?? 1).toFixed(2).replace(/\.?0+$/, "")}×</span>}
                         {dur > 0 && <span>{formatTime(dur)}</span>}
                       </span>
@@ -275,11 +277,8 @@ export default function Timeline({
                 );
               })}
 
-              {clips.length === 0 && (
-                <div className="absolute inset-x-3 inset-y-2 flex items-center justify-center rounded-md border border-dashed border-neutral-200 text-xs text-neutral-400 dark:border-neutral-700 dark:text-neutral-500">
-                  {/* empty-track hint lives in the workbench above; keep the lane visible */}
-                </div>
-              )}
+              {/* the empty-track hint lives in the workbench's player overlay,
+                  so an empty lane stays bare */}
 
               {/* playhead */}
               <div
