@@ -549,9 +549,14 @@ export default function RecordPage({ onOpenSettings }: { onOpenSettings: () => v
   const dl = useDownloads();
   const uploads = useUploads();
   const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
-  const [quality, setQuality] = useState("best");
-  const [pipelineIds, setPipelineIds] = useState<string[]>(["remux"]);
-  const [uploadTo, setUploadTo] = useState<string[]>([]);
+  // Sidebar selections persist through DownloadCenter settings so they
+  // survive page switches (and restarts) instead of snapping back to defaults.
+  const quality = dl.settings.recordQuality;
+  const setQuality = (v: string) => dl.updateSettings({ recordQuality: v });
+  const pipelineIds = dl.settings.recordPipelineIds;
+  const setPipelineIds = (ids: string[]) => dl.updateSettings({ recordPipelineIds: ids });
+  const uploadTo = dl.settings.recordUploadTo;
+  const setUploadTo = (ids: string[]) => dl.updateSettings({ recordUploadTo: ids });
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");
 

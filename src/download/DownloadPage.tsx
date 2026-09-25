@@ -634,10 +634,16 @@ export default function DownloadPage({ onOpenSettings }: { onOpenSettings: () =>
     if (ok) dl.clearFinished("download");
   };
 
-  const [quality, setQuality] = useState(dl.settings.quality);
-  const [audioFormat, setAudioFormat] = useState("mp3");
-  const [pipelineIds, setPipelineIds] = useState<string[]>([]);
-  const [uploadTo, setUploadTo] = useState<string[]>([]);
+  // Sidebar selections persist through DownloadCenter settings so they
+  // survive page switches (and restarts) instead of snapping back to defaults.
+  const quality = dl.settings.quality;
+  const setQuality = (v: string) => dl.updateSettings({ quality: v });
+  const audioFormat = dl.settings.audioFormat;
+  const setAudioFormat = (v: string) => dl.updateSettings({ audioFormat: v });
+  const pipelineIds = dl.settings.pipelineIds;
+  const setPipelineIds = (ids: string[]) => dl.updateSettings({ pipelineIds: ids });
+  const uploadTo = dl.settings.uploadTo;
+  const setUploadTo = (ids: string[]) => dl.updateSettings({ uploadTo: ids });
   const pipelineSummary = pipelineIds
     .map((id) => {
       const p = pipelineById(id);

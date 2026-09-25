@@ -37,7 +37,7 @@ import type {
   WorkflowStepInput,
   YtdlpStatus,
 } from "../types";
-import { stepsForPipelineIds } from "../workflow/pipelines";
+import { pipelineById, stepsForPipelineIds } from "../workflow/pipelines";
 
 /* ── Types ──────────────────────────────────────────────────────── */
 
@@ -81,6 +81,18 @@ export interface DownloadSettings {
   cookiesText: string;
   proxy: string;
   subtitles: boolean;
+  /** Download sidebar: container for audio-only downloads. */
+  audioFormat: string;
+  /** Download sidebar: post-processing pipeline bound to new downloads. */
+  pipelineIds: string[];
+  /** Download sidebar: upload targets bound to new downloads. */
+  uploadTo: string[];
+  /** Record sidebar: quality for newly added monitors. */
+  recordQuality: string;
+  /** Record sidebar: pipeline bound to newly added monitors. */
+  recordPipelineIds: string[];
+  /** Record sidebar: upload targets bound to newly added monitors. */
+  recordUploadTo: string[];
 }
 
 /* ── Persistence ────────────────────────────────────────────────── */
@@ -123,11 +135,24 @@ function loadSettings(): DownloadSettings {
     cookiesText: "",
     proxy: "",
     subtitles: false,
+    audioFormat: "mp3",
+    pipelineIds: [],
+    uploadTo: [],
+    recordQuality: "best",
+    recordPipelineIds: ["remux"],
+    recordUploadTo: [],
   };
   try {
     const raw = readStorage(SETTINGS_KEY);
     if (!raw) return fallback;
-    return { ...fallback, ...(JSON.parse(raw) as Partial<DownloadSettings>) };
+    const merged = { ...fallback, ...(JSON.parse(raw) as Partial<DownloadSettings>) };
+    // A custom pipeline deleted since the last session must not linger in the
+    // sidebar selection (its raw id would render in the summary line).
+    const known = (ids: unknown) =>
+      Array.isArray(ids) && ids.every((id) => pipelineById(id));
+    if (!known(merged.pipelineIds)) merged.pipelineIds = fallback.pipelineIds;
+    if (!known(merged.recordPipelineIds)) merged.recordPipelineIds = fallback.recordPipelineIds;
+    return merged;
   } catch {
     return fallback;
   }
