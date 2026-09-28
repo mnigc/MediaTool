@@ -26,8 +26,27 @@
       "assetProtocol": {
         "enable": true,
         "scope": [
-          "**/*.{mp4,mkv,mov,webm,avi,flv,ts,m4v,wmv,mpeg,mpg,3gp}",
-          "**/*.{MP4,MKV,MOV,WEBM,AVI,FLV,TS,M4V,WMV,MPEG,MPG,3GP}"
+          "**/*.mp4",
+          "**/*.mkv",
+          "**/*.mov",
+          "**/*.webm",
+          "**/*.avi",
+          "**/*.flv",
+          "**/*.ts",
+          "**/*.m4v",
+          "**/*.wmv",
+          "**/*.mpeg",
+          "**/*.mpg",
+          "**/*.3gp",
+          "**/*.mp3",
+          "**/*.aac",
+          "**/*.m4a",
+          "**/*.opus",
+          "**/*.flac",
+          "**/*.wav",
+          "**/*.ogg",
+          "**/*.wma",
+          "**/*.aiff"
         ]
       }
     }
