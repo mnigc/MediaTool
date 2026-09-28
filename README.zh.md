@@ -6,6 +6,19 @@
 
 **把整套媒体工作流装进一个本地应用。** 从网页下载与录制、压缩与转换音视频、把多个步骤串成自动化流水线、处理完自动上传到你指定的地方 —— 没有云端、没有账号，除你主动配置的上传外，数据从不离开你的电脑。底层由 FFmpeg 驱动。
 
+## 📸 界面截图
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/download.png" alt="视频下载" /><br /><sub>视频下载 —— 粘贴链接、选清晰度、批量下</sub></td>
+    <td width="50%"><img src="docs/screenshots/video-tools.png" alt="视频工具" /><br /><sub>11 个视频工具集中在一屏</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/pipelines.png" alt="流水线" /><br /><sub>流水线编排（深色主题）</sub></td>
+    <td><img src="docs/screenshots/presets.png" alt="预设" /><br /><sub>内置与自定义预设（深色主题）</sub></td>
+  </tr>
+</table>
+
 ## ✨ 特性
 
 ### 📥 网页下载与直播录制

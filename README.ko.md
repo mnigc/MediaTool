@@ -6,6 +6,19 @@
 
 **미디어 워크플로 전체를 로컬 앱 하나로.** 웹 다운로드·라이브 녹화, 비디오·오디오 압축 및 변환, 여러 단계를 잇는 자동 파이프라인, 완성 결과의 지정 위치 업로드까지 — 클라우드도 계정도 필요 없습니다. 직접 설정한 업로드 대상을 제외하면 데이터는 절대 기기 밖으로 나가지 않습니다. 엔진은 FFmpeg.
 
+## 📸 스크린샷
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/download.png" alt="비디오 다운로드" /><br /><sub>비디오 다운로드 — 링크 붙여넣기, 화질 선택, 일괄 처리</sub></td>
+    <td width="50%"><img src="docs/screenshots/video-tools.png" alt="비디오 도구" /><br /><sub>11개의 비디오 도구를 한 화면에</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/pipelines.png" alt="파이프라인 빌더" /><br /><sub>파이프라인 빌더 (다크 테마)</sub></td>
+    <td><img src="docs/screenshots/presets.png" alt="프리셋" /><br /><sub>기본 및 사용자 프리셋 (다크 테마)</sub></td>
+  </tr>
+</table>
+
 ## ✨ 기능
 
 ### 📥 웹 다운로드 & 라이브 녹화

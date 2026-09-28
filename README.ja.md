@@ -6,6 +6,19 @@
 
 **メディアワークフロー全体を、ひとつのローカルアプリに。** Webからのダウンロード・ライブ録画、動画・音声の圧縮と変換、複数ステップを繋ぐ自動パイプライン、処理完了後の指定先へのアップロードまで — クラウドもアカウントも不要。自分で設定したアップロード先を除き、データは一切マシン外へ出ません。エンジンは FFmpeg。
 
+## 📸 スクリーンショット
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/download.png" alt="動画ダウンロード" /><br /><sub>動画ダウンロード — リンク貼り付け、画質選択、一括実行</sub></td>
+    <td width="50%"><img src="docs/screenshots/video-tools.png" alt="動画ツール" /><br /><sub>11の動画ツールを1画面に</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/pipelines.png" alt="パイプラインビルダー" /><br /><sub>パイプラインビルダー（ダークテーマ）</sub></td>
+    <td><img src="docs/screenshots/presets.png" alt="プリセット" /><br /><sub>標準・カスタムプリセット（ダークテーマ）</sub></td>
+  </tr>
+</table>
+
 ## ✨ 特徴
 
 ### 📥 Webダウンロード & ライブ録画

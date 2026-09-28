@@ -6,6 +6,19 @@
 
 **Your entire media workflow in one local app.** Download and record from the web, compress and convert video & audio, chain everything into automated pipelines, and push the results wherever you want — no cloud, no accounts, no uploads you didn't ask for. Every byte is processed on your own machine with FFmpeg.
 
+## 📸 Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/download.png" alt="Video download" /><br /><sub>Video download — paste links, pick a quality, batch it</sub></td>
+    <td width="50%"><img src="docs/screenshots/video-tools.png" alt="Video tools" /><br /><sub>Eleven video tools on one screen</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/pipelines.png" alt="Pipeline builder" /><br /><sub>Pipeline builder (dark theme)</sub></td>
+    <td><img src="docs/screenshots/presets.png" alt="Presets" /><br /><sub>Built-in and custom presets (dark theme)</sub></td>
+  </tr>
+</table>
+
 ## ✨ Features
 
 ### 📥 Download & record from the web
