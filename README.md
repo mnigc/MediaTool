@@ -17,6 +17,9 @@
     <td><img src="docs/screenshots/pipelines.png" alt="Pipeline builder" /><br /><sub>Pipeline builder (dark theme)</sub></td>
     <td><img src="docs/screenshots/presets.png" alt="Presets" /><br /><sub>Built-in and custom presets (dark theme)</sub></td>
   </tr>
+  <tr>
+    <td colspan="2"><img src="docs/screenshots/rough-cut.png" alt="Timeline rough cut" /><br /><sub>Timeline rough cut — trim, split and reorder clips, then export as one file (dark theme)</sub></td>
+  </tr>
 </table>
 
 ## ✨ Features

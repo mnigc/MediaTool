@@ -17,6 +17,9 @@
     <td><img src="docs/screenshots/pipelines.png" alt="パイプラインビルダー" /><br /><sub>パイプラインビルダー（ダークテーマ）</sub></td>
     <td><img src="docs/screenshots/presets.png" alt="プリセット" /><br /><sub>標準・カスタムプリセット（ダークテーマ）</sub></td>
   </tr>
+  <tr>
+    <td colspan="2"><img src="docs/screenshots/rough-cut.png" alt="タイムライン粗編集" /><br /><sub>タイムライン粗編集 — トリム・分割・並べ替えを1本のファイルに書き出し（ダークテーマ）</sub></td>
+  </tr>
 </table>
 
 ## ✨ 特徴

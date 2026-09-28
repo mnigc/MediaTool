@@ -17,6 +17,9 @@
     <td><img src="docs/screenshots/pipelines.png" alt="파이프라인 빌더" /><br /><sub>파이프라인 빌더 (다크 테마)</sub></td>
     <td><img src="docs/screenshots/presets.png" alt="프리셋" /><br /><sub>기본 및 사용자 프리셋 (다크 테마)</sub></td>
   </tr>
+  <tr>
+    <td colspan="2"><img src="docs/screenshots/rough-cut.png" alt="타임라인 러프 컷" /><br /><sub>타임라인 러프 컷 — 자르기·분할·재배열 후 하나의 파일로 내보내기 (다크 테마)</sub></td>
+  </tr>
 </table>
 
 ## ✨ 기능

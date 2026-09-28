@@ -17,6 +17,9 @@
     <td><img src="docs/screenshots/pipelines.png" alt="流水线" /><br /><sub>流水线编排（深色主题）</sub></td>
     <td><img src="docs/screenshots/presets.png" alt="预设" /><br /><sub>内置与自定义预设（深色主题）</sub></td>
   </tr>
+  <tr>
+    <td colspan="2"><img src="docs/screenshots/rough-cut.png" alt="时间线粗剪" /><br /><sub>时间线粗剪 —— 裁剪、拆分、重排片段，一次导出成一个文件（深色主题）</sub></td>
+  </tr>
 </table>
 
 ## ✨ 特性
