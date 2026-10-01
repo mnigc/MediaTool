@@ -1,9 +1,53 @@
 mod commands;
+mod settings;
 mod shell;
+mod tray;
 
 pub use mediatool_core::{error, models};
 
-use tauri::Manager;
+use tauri::{AppHandle, Manager};
+
+/// Payload for the `close-confirm` event: what the frontend's confirmation
+/// dialog tells the user is still running.
+#[derive(Clone, serde::Serialize)]
+struct ActiveTasks {
+    jobs: usize,
+    downloads: usize,
+    recordings: usize,
+}
+
+pub fn show_main_window(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+    }
+}
+
+/// Exit path shared by the X button (close-action "exit") and the tray menu's
+/// quit item: with active tasks, surface the confirmation dialog first; the
+/// frontend answers through the `app_exit` command once confirmed.
+pub fn request_app_exit(app: &AppHandle) {
+    let state = app.state::<shell::ShellState>();
+    let jobs = state.jobs.active_job_count();
+    let downloads = state.jobs.active_dls().len();
+    let recordings = state.ctx.monitors.recording_count();
+    drop(state);
+    if jobs + downloads + recordings > 0 {
+        show_main_window(app);
+        let _ = tauri::Emitter::emit(
+            app,
+            "close-confirm",
+            ActiveTasks {
+                jobs,
+                downloads,
+                recordings,
+            },
+        );
+    } else {
+        app.exit(0);
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -29,19 +73,25 @@ pub fn run() {
             // Restore persisted live monitors so they keep watching across
             // restarts (skipped silently when yt-dlp is not installed yet).
             mediatool_core::ytdlp::resume_monitors(&prep_ctx);
-            // The window starts hidden so the user never stares at the white
-            // cold-start screen; the frontend reveals it after its first
-            // paint. This timer is the safety net: if the frontend fails to
-            // load, the window still appears.
-            let reveal_handle = handle.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                if let Some(win) = reveal_handle.get_webview_window("main") {
-                    let _ = win.show();
-                    let _ = win.set_focus();
-                }
-            });
+            // Resident tray icon so a close-to-tray window is one click away.
+            tray::build(&handle)?;
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Single choke point for both the titlebar X and Alt+F4: decide
+            // hide-to-tray vs exit here so the behavior cannot diverge.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let app = window.app_handle();
+                let action =
+                    settings::load_close_action(&*app.state::<shell::ShellState>().ctx.env);
+                match action {
+                    settings::CloseAction::Tray => {
+                        let _ = window.hide();
+                    }
+                    settings::CloseAction::Exit => request_app_exit(app),
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::cache_report,
@@ -80,7 +130,11 @@ pub fn run() {
             commands::cookies_set,
             commands::cookies_remove,
             commands::notify_get,
-            commands::notify_set
+            commands::notify_set,
+            commands::close_action_get,
+            commands::close_action_set,
+            commands::app_exit,
+            commands::tray_set_labels
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

@@ -282,6 +282,40 @@ export function onOauthResult(cb: (e: OauthResultEvent) => void): Promise<Unlist
   return listen<OauthResultEvent>("oauth-result", cb);
 }
 
+/* ── shell: close behavior / tray (desktop only) ────────────────── */
+
+/** What closing the main window does; the backend reads the same setting. */
+export type CloseAction = "tray" | "exit";
+
+export function closeActionGet(): Promise<CloseAction> {
+  return invoke<CloseAction>("close_action_get");
+}
+
+export function closeActionSet(action: CloseAction): Promise<void> {
+  return invoke<void>("close_action_set", { action });
+}
+
+/** Quit for real, after the active-task confirmation. */
+export function appExit(): Promise<void> {
+  return invoke<void>("app_exit");
+}
+
+/** Keep the resident tray menu in the active language. */
+export function traySetLabels(open: string, quit: string): Promise<void> {
+  return invoke<void>("tray_set_labels", { open, quit });
+}
+
+/** Active-task counts carried by the backend's `close-confirm` event. */
+export interface ActiveTasks {
+  jobs: number;
+  downloads: number;
+  recordings: number;
+}
+
+export function onCloseConfirm(cb: (e: ActiveTasks) => void): Promise<UnlistenFn> {
+  return listen<ActiveTasks>("close-confirm", cb);
+}
+
 /* ── server-side directory browsing (web mode) ─────────────────── */
 
 /** Roots the operator mounted; the browser's starting points. */

@@ -240,6 +240,17 @@ const zh: Dict = {
   "confirm.ok": "确认",
   "confirm.cancel": "取消",
 
+  "closeConfirm.title": "确认退出?",
+  "closeConfirm.message": "仍有 {items} 在进行,退出会中断它们。",
+  "closeConfirm.jobs": "{count} 个转码/处理任务",
+  "closeConfirm.downloads": "{count} 个下载任务",
+  "closeConfirm.recordings": "{count} 个正在录制的直播",
+  "closeConfirm.joiner": "、",
+  "closeConfirm.exit": "退出",
+
+  "tray.open": "打开 MediaTool",
+  "tray.quit": "退出",
+
   "empty.message": "还没有任何任务。",
 
   "a11y.taskList": "任务列表",
@@ -363,6 +374,11 @@ const zh: Dict = {
 
   "settings.title": "设置",
   "settings.open": "前往设置",
+  "settings.general": "通用",
+  "settings.closeAction": "关闭窗口时",
+  "settings.closeAction.tray": "最小化到托盘",
+  "settings.closeAction.exit": "退出程序",
+
   "settings.appearance": "外观与语言",
   "settings.language": "语言",
   "settings.theme": "主题",
@@ -1169,6 +1185,17 @@ const en: Dict = {
   "confirm.ok": "Confirm",
   "confirm.cancel": "Cancel",
 
+  "closeConfirm.title": "Exit MediaTool?",
+  "closeConfirm.message": "{items} still active — exiting will interrupt them.",
+  "closeConfirm.jobs": "{count} processing task(s)",
+  "closeConfirm.downloads": "{count} download task(s)",
+  "closeConfirm.recordings": "{count} live recording(s)",
+  "closeConfirm.joiner": ", ",
+  "closeConfirm.exit": "Exit",
+
+  "tray.open": "Open MediaTool",
+  "tray.quit": "Quit",
+
   "empty.message": "No tasks yet.",
 
   "a11y.taskList": "Task list",
@@ -1292,6 +1319,11 @@ const en: Dict = {
 
   "settings.title": "Settings",
   "settings.open": "Open settings",
+  "settings.general": "General",
+  "settings.closeAction": "When the window is closed",
+  "settings.closeAction.tray": "Minimize to tray",
+  "settings.closeAction.exit": "Exit app",
+
   "settings.appearance": "Appearance & language",
   "settings.language": "Language",
   "settings.theme": "Theme",

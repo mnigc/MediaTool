@@ -1451,6 +1451,18 @@ impl MonitorManager {
         emit(emitter, "monitor-status", &info.clone().reported());
     }
 
+    /// How many monitors are recording right now. Monitors that are only
+    /// watching are not counted: they are persisted and auto-resumed at the
+    /// next launch, so quitting through them loses nothing.
+    pub fn recording_count(&self) -> usize {
+        self.monitors
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|h| h.info.lock().unwrap().current_job.is_some())
+            .count()
+    }
+
     fn persist(env: &dyn AppEnv, mgr: &MonitorManager) {
         let map = mgr.monitors.lock().unwrap();
         let infos: Vec<MonitorInfo> = map

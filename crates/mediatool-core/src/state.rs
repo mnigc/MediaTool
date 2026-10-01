@@ -166,4 +166,11 @@ impl JobManager {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
     }
+
+    /// How many jobs have a live child process right now. Queued jobs the
+    /// frontend has not started yet are not visible here — they exist only
+    /// in the frontend's task center and simply never start on exit.
+    pub fn active_job_count(&self) -> usize {
+        self.children.lock().unwrap().len()
+    }
 }

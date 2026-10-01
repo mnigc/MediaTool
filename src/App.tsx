@@ -2,9 +2,12 @@ import { useEffect, useState } from "react";
 import Header from "./components/Header";
 import ToolNav from "./components/ToolNav";
 import ToastContainer from "./components/ToastContainer";
+import CloseConfirmGate from "./components/CloseConfirmGate";
 import WebGate from "./components/WebGate";
 import { FileBrowserProvider } from "./components/FileBrowser";
-import { appVersion, revealWindow } from "./lib/shell";
+import { appVersion, isDesktop } from "./lib/shell";
+import { traySetLabels } from "./lib/engine";
+import { useI18n } from "./i18n";
 import { useTheme, type ThemeMode } from "./hooks/useTheme";
 import { useToasts, type ToastItem } from "./hooks/useToasts";
 import { useUpdater } from "./hooks/useUpdater";
@@ -125,6 +128,8 @@ function AppShell({
         </main>
       </div>
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+      {/* Exit confirmation while jobs / downloads / recordings are active */}
+      <CloseConfirmGate />
     </div>
   );
 }
@@ -132,13 +137,23 @@ function AppShell({
 export default function App() {
   const { themeMode, setThemeMode } = useTheme();
   const { toasts, pushToast, dismissToast } = useToasts();
+  const { t, locale } = useI18n();
 
   useEffect(() => {
-    // Reveal the hidden window once the first frame is painted (Rust has a
-    // 5s fallback timer in case this never runs).
-    const raf = requestAnimationFrame(() => revealWindow());
+    // The window is visible from launch; the static #boot-splash in
+    // index.html covers the bundle-loading gap. Drop it once the app DOM is
+    // mounted (next frame, so the real UI is painted underneath first).
+    const raf = requestAnimationFrame(() =>
+      document.getElementById("boot-splash")?.remove()
+    );
     return () => cancelAnimationFrame(raf);
   }, []);
+
+  useEffect(() => {
+    // Keep the resident tray menu in the active language.
+    if (!isDesktop) return;
+    void traySetLabels(t("tray.open"), t("tray.quit")).catch(() => {});
+  }, [locale, t]);
 
   return (
     <WebGate>

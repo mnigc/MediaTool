@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState, type ComponentType } from "react";
-import { pickPaths } from "../lib/shell";
+import { isDesktop, pickPaths } from "../lib/shell";
 import { useI18n } from "../i18n";
 import { LOCALES, LOCALE_NAMES } from "../i18n/translations";
 import { useConfirm } from "../components/ConfirmDialog";
-import { cacheClean, cacheReport, cookiesList, cookiesRemove, cookiesSet, formatBytes } from "../lib/engine";
+import { cacheClean, cacheReport, closeActionGet, closeActionSet, cookiesList, cookiesRemove, cookiesSet, formatBytes } from "../lib/engine";
+import type { CloseAction } from "../lib/engine";
 import { Button } from "../components/ui";
 import { useDownloads } from "../contexts/DownloadCenter";
 import { AutoIcon, MoonIcon, RefreshIcon, SpinnerIcon, SunIcon, TrashIcon } from "../components/icons";
@@ -38,6 +39,20 @@ export default function SettingsPage({ themeMode, onThemeChange }: SettingsPageP
     "flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3";
   const labelCls = "shrink-0 text-xs font-medium text-neutral-600 dark:text-neutral-300 sm:w-24";
 
+  // Close behavior lives in a backend JSON file so the Rust close handler
+  // (X button / Alt+F4) reads the same setting.
+  const [closeAction, setCloseAction] = useState<CloseAction>("tray");
+  useEffect(() => {
+    if (!isDesktop) return;
+    void closeActionGet()
+      .then(setCloseAction)
+      .catch(() => {});
+  }, []);
+  const changeCloseAction = useCallback((action: CloseAction) => {
+    setCloseAction(action);
+    if (isDesktop) void closeActionSet(action).catch(() => {});
+  }, []);
+
   return (
     <div className="mx-auto max-w-2xl">
       <div className="mb-5">
@@ -46,7 +61,41 @@ export default function SettingsPage({ themeMode, onThemeChange }: SettingsPageP
         </h2>
       </div>
 
-      <div className="rounded-2xl bg-white p-4 shadow-card ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-800">
+      {isDesktop && (
+        <div className="rounded-2xl bg-white p-4 shadow-card ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-800">
+          <p className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">
+            {t("settings.general")}
+          </p>
+          <div className="mt-4 space-y-4">
+            <div className={row}>
+              <span className={labelCls}>{t("settings.closeAction")}</span>
+              <div className="flex items-center rounded-xl border border-neutral-200 bg-neutral-50/50 p-1 dark:border-neutral-700 dark:bg-neutral-800/50">
+                {(["tray", "exit"] as const).map((opt) => {
+                  const label =
+                    opt === "tray"
+                      ? t("settings.closeAction.tray")
+                      : t("settings.closeAction.exit");
+                  return (
+                    <button
+                      key={opt}
+                      onClick={() => changeCloseAction(opt)}
+                      className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all duration-200 ${
+                        closeAction === opt
+                          ? "bg-brand-100/70 text-brand-700 dark:bg-brand-900/70 dark:text-brand-200"
+                          : "text-neutral-500 hover:bg-neutral-200/50 hover:text-neutral-700 dark:text-neutral-400 dark:hover:bg-neutral-700/50 dark:hover:text-neutral-200"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className={`rounded-2xl bg-white p-4 shadow-card ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-800 ${isDesktop ? "mt-5" : ""}`}>
         <p className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">
           {t("settings.appearance")}
         </p>

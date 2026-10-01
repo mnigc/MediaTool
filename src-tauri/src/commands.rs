@@ -60,6 +60,33 @@ pub fn notify_set(app: AppHandle, targets: Vec<mediatool_core::notify::NotifyTar
     mediatool_core::notify::save_targets(&*ctx(&app).env, &targets)
 }
 
+/* ── Shell (close behavior / tray) ──────────────────────────────── */
+
+#[tauri::command]
+pub fn close_action_get(app: AppHandle) -> crate::settings::CloseAction {
+    crate::settings::load_close_action(&*ctx(&app).env)
+}
+
+#[tauri::command]
+pub fn close_action_set(app: AppHandle, action: crate::settings::CloseAction) -> Result<()> {
+    crate::settings::save_close_action(&*ctx(&app).env, action)
+        .map_err(error::AppError)
+}
+
+/// Quit for real, after the frontend's active-task confirmation. Goes through
+/// `AppHandle::exit` so `RunEvent::ExitRequested` still kills every child.
+#[tauri::command]
+pub fn app_exit(app: AppHandle) {
+    app.exit(0);
+}
+
+/// Keep the tray menu in the user's language; called on startup and whenever
+/// the locale changes.
+#[tauri::command]
+pub fn tray_set_labels(app: AppHandle, open: String, quit: String) {
+    crate::tray::update_labels(&app, open, quit);
+}
+
 /* ── Jobs / media ───────────────────────────────────────────────── */
 
 #[tauri::command]

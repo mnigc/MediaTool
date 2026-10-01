@@ -4,10 +4,75 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MediaTool · 本地媒体工具箱</title>
+    <script>
+      // Paint the theme background before any CSS loads so the startup frame
+      // never flashes the wrong color. Mirrors useTheme's resolution:
+      // storage key + legacy prefix, auto falls back to the system scheme.
+      (function () {
+        try {
+          var mode = localStorage.getItem("mediatool.theme");
+          if (mode === null) mode = localStorage.getItem("mediapress.theme");
+          var dark =
+            mode === "dark" ||
+            (mode !== "light" &&
+              window.matchMedia &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          var style = document.createElement("style");
+          style.textContent =
+            "body{background:" + (dark ? "#0a0a0a" : "#ffffff") + "}";
+          document.head.appendChild(style);
+        } catch (e) {}
+      })();
+    </script>
   </head>
 
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <!-- Static boot splash: visible from the first frame while the JS bundle
+         loads (slow in `vite dev`); React removes #boot-splash once mounted. -->
+    <div id="boot-splash">
+      <div class="boot-spinner"></div>
+      <p id="boot-text">正在加载…</p>
+    </div>
+    <style>
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        color: #737373;
+        font-family: ui-sans-serif, system-ui, "Segoe UI", "Microsoft YaHei",
+          sans-serif;
+        font-size: 13px;
+      }
+      .boot-spinner {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        border: 3px solid rgba(115, 115, 115, 0.25);
+        border-top-color: #737373;
+        animation: boot-spin 0.8s linear infinite;
+      }
+      @keyframes boot-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
+    <script>
+      // Match the splash text to the browser language (same rule as i18n's
+      // detectLocale: zh → Chinese, everything else → English).
+      try {
+        var lang = (navigator.language || "").toLowerCase();
+        if (lang.indexOf("zh") !== 0) {
+          document.getElementById("boot-text").textContent = "Loading…";
+        }
+      } catch (e) {}
+    </script>
   </body>
 </html>
