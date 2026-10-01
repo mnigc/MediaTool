@@ -1,3 +1,4 @@
+import { deleteFile } from "../lib/engine";
 import { startWorkflow } from "./engine";
 import type { RunSettings, WorkflowStep } from "./types";
 import type { WorkflowStepInput } from "../types";
@@ -53,6 +54,16 @@ export function runSteps(opts: {
       opts.onProgress(percent, r.index);
     },
     onFinish: (ok, error, output, note) => {
+      // Drop the original once the pipeline replaced it. Best-effort: a locked
+      // or vanished file must not turn a finished run into a failure.
+      if (
+        ok &&
+        opts.settings?.deleteSource &&
+        output &&
+        output.toLowerCase() !== opts.input.toLowerCase()
+      ) {
+        deleteFile(opts.input).catch(() => {});
+      }
       opts.onFinish(ok, error ?? null, output ?? null, note ?? null);
     },
     t: opts.t,

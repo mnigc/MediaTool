@@ -46,6 +46,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::cache_report,
             commands::cache_clean,
+            commands::delete_file,
             commands::probe_file,
             commands::start_job,
             commands::start_workflow,
@@ -77,7 +78,9 @@ pub fn run() {
             commands::monitor_update,
             commands::cookies_list,
             commands::cookies_set,
-            commands::cookies_remove
+            commands::cookies_remove,
+            commands::notify_get,
+            commands::notify_set
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

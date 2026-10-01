@@ -1627,11 +1627,36 @@ fn monitor_loop(
             match probe {
                 Ok((status, title, author)) => {
                     let live = status == "is_live";
-                    let mut i = info.lock().unwrap();
-                    i.live_status = Some(status);
-                    i.title = (!title.is_empty()).then_some(title);
-                    if !author.is_empty() {
-                        i.author = Some(author);
+                    let mut push: Option<crate::notify::NotifyEvent> = None;
+                    let mut proxy: Option<String> = None;
+                    {
+                        let mut i = info.lock().unwrap();
+                        // Persisted live_status doubles as the edge detector:
+                        // "unknown" from a failed probe neither suppresses the
+                        // push nor fakes a rising edge on the next success.
+                        let was_live = i.live_status.as_deref() == Some("is_live");
+                        i.live_status = Some(status);
+                        i.title = (!title.is_empty()).then_some(title);
+                        if !author.is_empty() {
+                            i.author = Some(author);
+                        }
+                        if live && !was_live {
+                            proxy = i.proxy.clone();
+                            push = Some(crate::notify::NotifyEvent {
+                                kind: crate::notify::NotifyEventKind::Live,
+                                monitor: i.name.clone(),
+                                author: i.author.clone(),
+                                title: i.title.clone(),
+                                url: i.url.clone(),
+                                duration_sec: None,
+                            });
+                        }
+                    }
+                    if let Some(ev) = push {
+                        // Targets come from the shared registry, read at push
+                        // time so edits apply to already-running monitors.
+                        let targets = crate::notify::load_targets(&*ctx.env);
+                        crate::notify::push(&targets, proxy.as_deref(), &ev);
                     }
                     auto_recording = live && auto;
                 }
@@ -1762,8 +1787,9 @@ fn record_once(ctx: &Ctx, bin: &Path, info: &Arc<Mutex<MonitorInfo>>) {
     MonitorManager::emit_info(ctx.emitter.as_ref(), &info.lock().unwrap().clone());
     // The download-started event (emitted inside run_download_blocking via
     // req.title) creates the task item on the frontend.
+    let started = std::time::Instant::now();
     run_download_blocking(ctx, bin, req, &id, pipeline, upload_to);
-    {
+    let (ev, proxy) = {
         let mut i = info.lock().unwrap();
         i.current_job = None;
         // Manual one-shot recordings stop the monitor; auto recordings keep it
@@ -1773,8 +1799,20 @@ fn record_once(ctx: &Ctx, bin: &Path, info: &Arc<Mutex<MonitorInfo>>) {
         } else {
             "stopped".into()
         };
-    }
+        let ev = crate::notify::NotifyEvent {
+            kind: crate::notify::NotifyEventKind::RecordingFinished,
+            monitor: i.name.clone(),
+            author: i.author.clone(),
+            title: i.title.clone(),
+            url: i.url.clone(),
+            duration_sec: Some(started.elapsed().as_secs()),
+        };
+        (ev, i.proxy.clone())
+    };
     MonitorManager::emit_info(ctx.emitter.as_ref(), &info.lock().unwrap().clone());
+    // Shared registry read at push time; a no-op when nothing is configured.
+    let targets = crate::notify::load_targets(&*ctx.env);
+    crate::notify::push(&targets, proxy.as_deref(), &ev);
 }
 
 pub fn monitor_list(ctx: Ctx) -> Vec<MonitorInfo> {

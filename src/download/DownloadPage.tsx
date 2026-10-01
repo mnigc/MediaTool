@@ -724,6 +724,15 @@ export default function DownloadPage({ onOpenSettings }: { onOpenSettings: () =>
           summary={pipelineSummary || t("dl.pipeline.noTreatment")}
         >
           <PipelineChips selected={pipelineIds} onChange={setPipelineIds} />
+          <label className="flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-300">
+            <input
+              type="checkbox"
+              checked={dl.settings.pipelineDeleteSource}
+              onChange={(e) => dl.updateSettings({ pipelineDeleteSource: e.target.checked })}
+              className="h-3.5 w-3.5 accent-brand-500"
+            />
+            {t("dl.pipeline.deleteSource")}
+          </label>
         </SidebarSection>
 
         <SidebarSection

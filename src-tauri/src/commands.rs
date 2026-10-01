@@ -30,6 +30,36 @@ pub async fn cache_clean(app: AppHandle) -> mediatool_core::cache::CacheCleanRes
     mediatool_core::cache::cache_clean(ctx(&app).env.clone()).await
 }
 
+/* ── Files ──────────────────────────────────────────────────────── */
+
+/// Delete one file (never a directory). Used by the "drop the source file
+/// after post-processing" option; a missing file counts as success so an
+/// already-removed source never fails a finished pipeline.
+#[tauri::command]
+pub fn delete_file(_app: AppHandle, path: String) -> Result<()> {
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return Ok(());
+    }
+    if p.is_dir() {
+        return Err(error::AppError("不能删除目录".into()));
+    }
+    std::fs::remove_file(p).map_err(|e| error::AppError(format!("删除失败: {e}")))
+}
+
+/* ── Notifications ──────────────────────────────────────────────── */
+
+/// The shared push-destination registry for live monitors (Telegram/webhook).
+#[tauri::command]
+pub fn notify_get(app: AppHandle) -> Vec<mediatool_core::notify::NotifyTarget> {
+    mediatool_core::notify::load_targets(&*ctx(&app).env)
+}
+
+#[tauri::command]
+pub fn notify_set(app: AppHandle, targets: Vec<mediatool_core::notify::NotifyTarget>) -> Result<()> {
+    mediatool_core::notify::save_targets(&*ctx(&app).env, &targets)
+}
+
 /* ── Jobs / media ───────────────────────────────────────────────── */
 
 #[tauri::command]

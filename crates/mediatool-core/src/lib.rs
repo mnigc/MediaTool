@@ -15,6 +15,7 @@ pub mod inspect;
 pub mod jobs;
 pub mod media;
 pub mod models;
+pub mod notify;
 pub mod state;
 pub mod streamlink;
 pub mod thumbnail;

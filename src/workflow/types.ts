@@ -50,6 +50,9 @@ export interface RunSettings {
   outputSuffix?: string;
   gpu?: string;
   overwritePolicy?: "overwrite" | "rename" | "skip";
+  /** After every step succeeded, delete the original input file (the product
+   *  replaces it). Only meaningful when output and input differ. */
+  deleteSource?: boolean;
 }
 
 /* ── Bound pipeline runs ─────────────────────────────────────── */

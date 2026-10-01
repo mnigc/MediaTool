@@ -26,6 +26,7 @@ import type {
   MonitorInfo,
   MonitorRequest,
   NetOptions,
+  NotifyTarget,
   OauthBeginRequest,
   OauthBeginResult,
   OauthResultEvent,
@@ -66,6 +67,12 @@ export async function cancelJob(id: string): Promise<void> {
 
 export async function openOutputFolder(path: string): Promise<void> {
   return invoke<void>("open_output_folder", { path });
+}
+
+/** Delete one file; missing files count as success. Used by the
+ *  "delete source after post-processing" option on the record sidebar. */
+export async function deleteFile(path: string): Promise<void> {
+  return invoke<void>("delete_file", { path });
 }
 
 /** Sizes of the app's own scratch data (user files are never reported). */
@@ -178,6 +185,16 @@ export function monitorUpdate(id: string, edit: MonitorEdit): Promise<MonitorInf
 
 export function cookiesList(): Promise<PlatformCookies[]> {
   return invoke<PlatformCookies[]>("cookies_list");
+}
+
+/** The shared push-destination registry for live monitors (Telegram/webhook);
+ *  one global config all monitors notify through. */
+export function notifyGet(): Promise<NotifyTarget[]> {
+  return invoke<NotifyTarget[]>("notify_get");
+}
+
+export function notifySet(targets: NotifyTarget[]): Promise<void> {
+  return invoke<void>("notify_set", { targets });
 }
 
 /** Upsert one platform's cookies, keyed by its host. Returns the stored entry

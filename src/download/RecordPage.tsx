@@ -6,6 +6,8 @@ import {
   monitorRecordNow,
   monitorRemove,
   monitorUpdate,
+  notifyGet,
+  notifySet,
   onMonitorStatus,
   openOutputFolder,
 } from "../lib/engine";
@@ -24,7 +26,7 @@ import SaveLocationBar from "./SaveLocationBar";
 import { platformLabel } from "../lib/platforms";
 import { ConfigSidebar, Field, NetworkSection, PipelineChips, SidebarSection } from "./Sidebar";
 import { pipelineById, pipelineDisplayName } from "../workflow/pipelines";
-import type { MonitorInfo } from "../types";
+import type { MonitorInfo, NotifyTarget } from "../types";
 
 const QUALITIES = ["best", "2160p", "1080p", "720p", "480p"] as const;
 /** Poll cadence for new monitors; the backend clamps to a 30 s floor. */
@@ -348,6 +350,153 @@ function AutoRecordSwitch({ m }: { m: MonitorInfo }) {
   );
 }
 
+/* ── notification targets editor ────────────────────────────────── */
+
+const notifyInputCls =
+  "min-w-0 rounded-lg border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-800 placeholder:text-neutral-400 focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-100 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200";
+
+function NotifyEditor({
+  value,
+  onChange,
+}: {
+  value: NotifyTarget[];
+  onChange: (v: NotifyTarget[]) => void;
+}) {
+  const { t } = useI18n();
+  const update = (idx: number, patch: Partial<Extract<NotifyTarget, { kind: "telegram" }>>) => {
+    onChange(value.map((x, i) => (i === idx ? ({ ...x, ...patch } as NotifyTarget) : x)));
+  };
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <button
+          type="button"
+          onClick={() => onChange([...value, { kind: "telegram", botToken: "", chatId: "" }])}
+          className="rounded-full border border-neutral-200 px-2 py-0.5 text-[11px] text-neutral-600 transition hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-700/60"
+        >
+          {t("dl.notify.addTelegram")}
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange([...value, { kind: "webhook", url: "" }])}
+          className="rounded-full border border-neutral-200 px-2 py-0.5 text-[11px] text-neutral-600 transition hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-700/60"
+        >
+          {t("dl.notify.addWebhook")}
+        </button>
+      </div>
+      {value.length === 0 ? (
+        <p className="mt-1.5 text-[11px] text-neutral-400 dark:text-neutral-500">
+          {t("dl.notify.empty")}
+        </p>
+      ) : (
+        <div className="mt-1.5 space-y-1.5">
+          {value.map((target, idx) => (
+            <div key={idx} className="flex items-center gap-1.5">
+              {target.kind === "telegram" ? (
+                <>
+                  <input
+                    value={target.botToken}
+                    onChange={(e) => update(idx, { botToken: e.target.value.trim() })}
+                    placeholder={t("dl.notify.botToken")}
+                    className={`${notifyInputCls} w-56`}
+                  />
+                  <input
+                    value={target.chatId}
+                    onChange={(e) => update(idx, { chatId: e.target.value.trim() })}
+                    placeholder={t("dl.notify.chatId")}
+                    className={`${notifyInputCls} w-28`}
+                  />
+                </>
+              ) : (
+                <input
+                  value={target.url}
+                  onChange={(e) =>
+                    onChange(
+                      value.map((x, i) => (i === idx ? { kind: "webhook" as const, url: e.target.value.trim() } : x)),
+                    )
+                  }
+                  placeholder={t("dl.notify.webhookUrl")}
+                  className={`${notifyInputCls} flex-1`}
+                />
+              )}
+              <button
+                type="button"
+                title={t("dl.notify.remove")}
+                onClick={() => onChange(value.filter((_, i) => i !== idx))}
+                className="shrink-0 rounded-lg p-1 text-neutral-400 transition hover:bg-error-50 hover:text-error-600 dark:hover:bg-error-950/40 dark:hover:text-error-400"
+              >
+                <TrashIcon className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="mt-1.5 text-[11px] text-neutral-400 dark:text-neutral-500">{t("dl.notify.hint")}</p>
+    </div>
+  );
+}
+
+/** Global notification config: one shared push-target registry every monitor
+ *  notifies through (backend-persisted, so the headless server pushes too). */
+function NotifySection() {
+  const { t } = useI18n();
+  const [targets, setTargets] = useState<NotifyTarget[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    notifyGet().then(setTargets).catch(() => setTargets([]));
+  }, []);
+
+  const save = async () => {
+    if (!targets) return;
+    setBusy(true);
+    setError(null);
+    // Drop half-filled rows (a token without a chat id can never deliver).
+    const clean = targets.filter(
+      (x) => (x.kind === "webhook" ? x.url !== "" : x.botToken !== "" && x.chatId !== ""),
+    );
+    try {
+      await notifySet(clean);
+      setTargets(clean);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      {targets === null ? (
+        <p className="text-[11px] text-neutral-400 dark:text-neutral-500">…</p>
+      ) : (
+        <>
+          <NotifyEditor value={targets} onChange={setTargets} />
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => void save()}
+              disabled={busy}
+              className="rounded-lg bg-brand-500 px-3 py-1 text-xs font-medium text-white transition hover:bg-brand-600 disabled:opacity-50 dark:bg-brand-600 dark:hover:bg-brand-700"
+            >
+              {t("dl.monitor.save")}
+            </button>
+            {saved && <span className="text-[11px] text-success-600 dark:text-success-400">{t("dl.notify.saved")}</span>}
+          </div>
+        </>
+      )}
+      {error && (
+        <p className="mt-2 rounded-lg bg-error-50 px-2.5 py-1.5 text-[11px] text-error-600 dark:bg-error-950/30 dark:text-error-400">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function EditMonitorForm({
   m,
   onDone,
@@ -557,6 +706,7 @@ export default function RecordPage({ onOpenSettings }: { onOpenSettings: () => v
   const setPipelineIds = (ids: string[]) => dl.updateSettings({ recordPipelineIds: ids });
   const uploadTo = dl.settings.recordUploadTo;
   const setUploadTo = (ids: string[]) => dl.updateSettings({ recordUploadTo: ids });
+  const recordDeleteSource = dl.settings.recordDeleteSource;
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");
 
@@ -706,6 +856,15 @@ export default function RecordPage({ onOpenSettings }: { onOpenSettings: () => v
           summary={pipelineSummary || t("dl.pipeline.noTreatment")}
         >
           <PipelineChips selected={pipelineIds} onChange={setPipelineIds} />
+          <label className="flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-300">
+            <input
+              type="checkbox"
+              checked={recordDeleteSource}
+              onChange={(e) => dl.updateSettings({ recordDeleteSource: e.target.checked })}
+              className="h-3.5 w-3.5 accent-brand-500"
+            />
+            {t("dl.pipeline.deleteSource")}
+          </label>
         </SidebarSection>
 
         <SidebarSection
@@ -722,6 +881,15 @@ export default function RecordPage({ onOpenSettings }: { onOpenSettings: () => v
               </p>
             )}
           </div>
+        </SidebarSection>
+
+        <SidebarSection
+          title={t("dl.notify.title")}
+          collapsible
+          defaultOpen={false}
+          summary={t("dl.notify.scope")}
+        >
+          <NotifySection />
         </SidebarSection>
 
         <NetworkSection onOpenSettings={onOpenSettings} />

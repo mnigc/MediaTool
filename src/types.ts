@@ -473,6 +473,11 @@ export interface DownloadStartedEvent {
   uploadTo?: string[];
 }
 
+/** One push destination for a monitor's live/finished events. */
+export type NotifyTarget =
+  | { kind: "telegram"; botToken: string; chatId: string }
+  | { kind: "webhook"; url: string };
+
 export interface MonitorRequest {
   url: string;
   name?: string | null;

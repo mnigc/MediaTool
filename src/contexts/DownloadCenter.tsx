@@ -85,6 +85,8 @@ export interface DownloadSettings {
   audioFormat: string;
   /** Download sidebar: post-processing pipeline bound to new downloads. */
   pipelineIds: string[];
+  /** Download sidebar: delete the source download once its pipeline finishes. */
+  pipelineDeleteSource: boolean;
   /** Download sidebar: upload targets bound to new downloads. */
   uploadTo: string[];
   /** Record sidebar: quality for newly added monitors. */
@@ -93,6 +95,8 @@ export interface DownloadSettings {
   recordPipelineIds: string[];
   /** Record sidebar: upload targets bound to newly added monitors. */
   recordUploadTo: string[];
+  /** Record sidebar: delete the source recording once its pipeline finishes. */
+  recordDeleteSource: boolean;
 }
 
 /* ── Persistence ────────────────────────────────────────────────── */
@@ -137,10 +141,12 @@ function loadSettings(): DownloadSettings {
     subtitles: false,
     audioFormat: "mp3",
     pipelineIds: [],
+    pipelineDeleteSource: false,
     uploadTo: [],
     recordQuality: "best",
     recordPipelineIds: ["remux"],
     recordUploadTo: [],
+    recordDeleteSource: false,
   };
   try {
     const raw = readStorage(SETTINGS_KEY);
@@ -472,7 +478,8 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
   const runPipelineInternal = useCallback(
     (taskId: string, input: string, steps: WorkflowStepInput[]) => {
       if (steps.length === 0) return;
-      const uploadTo = tasksRef.current.find((x) => x.id === taskId)?.uploadTo ?? [];
+      const task = tasksRef.current.find((x) => x.id === taskId);
+      const uploadTo = task?.uploadTo ?? [];
       setTasks((prev) =>
         prev.map((x) =>
           x.id === taskId
@@ -495,6 +502,14 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
         steps,
         // No outputDir: results land next to the acquired file.
         allowCopyFallback: true,
+        // Sidebar option: once the pipeline replaces the acquired file, drop
+        // the original. Each page has its own toggle (record vs download).
+        settings:
+          (task?.kind === "record"
+            ? settingsRef.current.recordDeleteSource
+            : settingsRef.current.pipelineDeleteSource)
+            ? { deleteSource: true }
+            : undefined,
         onProgress: (percent, stepIndex) => {
           setTasks((prev) =>
             prev.map((x) =>
@@ -625,11 +640,16 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
           postprocessing: false,
           ...(titleFromFile ? { title: titleFromFile } : {}),
         });
+        // A manually paused recording keeps the captured footage; that file is
+        // the deliverable, so it goes through the same completion hooks as a
+        // recording that ended by itself.
+        const keptRecording =
+          !e.ok && e.cancelled === true && e.kind === "record" && !!e.output;
         // Completion hook: run the bound post-processing workflow — only on
         // the running→done transition, so a duplicated done event can never
         // start a second pipeline run for the same file.
         if (
-          e.ok &&
+          (e.ok || keptRecording) &&
           e.output &&
           existing?.phase === "running" &&
           existing.pipelineSteps.length > 0
@@ -639,7 +659,7 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
         // Completion hook: without post-processing the downloaded file IS the
         // final product — push it to the bound upload targets.
         if (
-          e.ok &&
+          (e.ok || keptRecording) &&
           e.output &&
           existing?.phase === "running" &&
           existing.pipelineSteps.length === 0
