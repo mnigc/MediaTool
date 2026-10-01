@@ -1211,6 +1211,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1f9e3d69d39e4862ffed03ed071a76f9a13ba1d9109d355b0f0aa6b15e393c4"
 dependencies = [
  "futures-core",
+ "futures-sink",
 ]
 
 [[package]]
@@ -2300,7 +2301,7 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "mediatool"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -2322,7 +2323,7 @@ dependencies = [
 
 [[package]]
 name = "mediatool-core"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -2337,7 +2338,7 @@ dependencies = [
 
 [[package]]
 name = "mediatool-server"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "axum",
  "futures-util",
@@ -3327,6 +3328,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2",
