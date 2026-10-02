@@ -11,7 +11,7 @@ import { formatBytes, openOutputFolder } from "../lib/engine";
 import { canRevealInFolder } from "../lib/shell";
 import { friendlyError } from "../lib/errors";
 import { tKey, useI18n } from "../i18n";
-import { useDownloads } from "../contexts/DownloadCenter";
+import { useDownloads, useDownloadActions } from "../contexts/DownloadCenter";
 import { useUploads } from "../contexts/UploadCenter";
 import { CopyIcon, FilmIcon, FolderIcon, MusicIcon, XIcon } from "../components/icons";
 import PipelineMiniProgress from "../components/PipelineMiniProgress";
@@ -74,6 +74,7 @@ function extractProbe(json: Record<string, unknown>): ProbeResult | null {
 function YtdlpHint() {
   const { t } = useI18n();
   const dl = useDownloads();
+  const dlActions = useDownloadActions();
   const s = dl.ytdlp;
   if (!s) return null;
   if (!s.installed) {
@@ -81,7 +82,7 @@ function YtdlpHint() {
       <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-warning-100 bg-warning-50 px-4 py-2.5 text-sm text-warning-700 dark:border-warning-900/50 dark:bg-warning-950/30 dark:text-warning-400">
         <span className="flex-1">{t("dl.missingGoAbout")}</span>
         <button
-          onClick={() => void dl.installYtdlp()}
+          onClick={() => void dlActions.installYtdlp()}
           disabled={dl.ytdlpInstalling}
           className="rounded-lg bg-warning-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-warning-700 disabled:opacity-50"
         >
@@ -136,6 +137,7 @@ function NewDownloadForm({
 }) {
   const { t } = useI18n();
   const dl = useDownloads();
+  const dlActions = useDownloadActions();
   const [urlText, setUrlText] = useState("");
   const urls = parseUrls(urlText);
   const [probe, setProbe] = useState<ProbeResult | null>(null);
@@ -195,7 +197,7 @@ function NewDownloadForm({
     try {
       for (const u of urls) {
         // One failed link leaves an errored card; the rest keep going.
-        await dl
+        await dlActions
           .startDownload({
             url: u,
             title: urls.length === 1 ? (probe?.title ?? null) : null,
@@ -444,6 +446,7 @@ function DownloadCard({
 }) {
   const { t } = useI18n();
   const dl = useDownloads();
+  const dlActions = useDownloadActions();
   const { confirm, dialog } = useConfirm();
   const running = task.phase === "running";
   const pct = Math.round(task.percent);
@@ -498,17 +501,17 @@ function DownloadCard({
 
         <div className="flex shrink-0 items-start gap-1.5">
           {(running || pipelineRunning) && (
-            <CardButton onClick={() => dl.cancelTask(task.id)}>{t("confirm.cancel")}</CardButton>
+            <CardButton onClick={() => dlActions.cancelTask(task.id)}>{t("confirm.cancel")}</CardButton>
           )}
           {!running && task.phase === "error" && task.retryReq && (
-            <CardButton onClick={() => dl.retryTask(task.id)}>{t("job.retry")}</CardButton>
+            <CardButton onClick={() => dlActions.retryTask(task.id)}>{t("job.retry")}</CardButton>
           )}
           {/* Finished with a bound pipeline that isn't in flight: offer a manual
               rerun (failed post-processing, or a re-run onto a fresh output). */}
           {task.phase === "done" &&
             task.pipelineSteps.length > 0 &&
             task.pipeline?.phase !== "running" && (
-              <CardButton onClick={() => dl.runPipeline(task.id)}>
+              <CardButton onClick={() => dlActions.runPipeline(task.id)}>
                 {t("dl.pipeline.rerun")}
               </CardButton>
             )}
@@ -534,7 +537,7 @@ function DownloadCard({
                 cancelLabel: t("confirm.cancel"),
                 danger: true,
               });
-              if (ok) dl.removeTask(task.id);
+              if (ok) dlActions.removeTask(task.id);
             }}
             className="flex h-6 w-6 items-center justify-center rounded-lg text-neutral-300 transition hover:bg-error-50 hover:text-error-500 dark:text-neutral-600 dark:hover:bg-error-950/40"
             title={t("job.remove")}
@@ -622,6 +625,7 @@ function DownloadCard({
 export default function DownloadPage({ onOpenSettings }: { onOpenSettings: () => void }) {
   const { t } = useI18n();
   const dl = useDownloads();
+  const dlActions = useDownloadActions();
   const uploads = useUploads();
   const { confirm, dialog } = useConfirm();
   // Recordings live on the record page next to their monitors.
@@ -639,19 +643,19 @@ export default function DownloadPage({ onOpenSettings }: { onOpenSettings: () =>
       cancelLabel: t("confirm.cancel"),
       danger: true,
     });
-    if (ok) dl.clearFinished("download");
+    if (ok) dlActions.clearFinished("download");
   };
 
   // Sidebar selections persist through DownloadCenter settings so they
   // survive page switches (and restarts) instead of snapping back to defaults.
   const quality = dl.settings.quality;
-  const setQuality = (v: string) => dl.updateSettings({ quality: v });
+  const setQuality = (v: string) => dlActions.updateSettings({ quality: v });
   const audioFormat = dl.settings.audioFormat;
-  const setAudioFormat = (v: string) => dl.updateSettings({ audioFormat: v });
+  const setAudioFormat = (v: string) => dlActions.updateSettings({ audioFormat: v });
   const pipelineIds = dl.settings.pipelineIds;
-  const setPipelineIds = (ids: string[]) => dl.updateSettings({ pipelineIds: ids });
+  const setPipelineIds = (ids: string[]) => dlActions.updateSettings({ pipelineIds: ids });
   const uploadTo = dl.settings.uploadTo;
-  const setUploadTo = (ids: string[]) => dl.updateSettings({ uploadTo: ids });
+  const setUploadTo = (ids: string[]) => dlActions.updateSettings({ uploadTo: ids });
   const pipelineSummary = pipelineIds
     .map((id) => {
       const p = pipelineById(id);
@@ -736,7 +740,7 @@ export default function DownloadPage({ onOpenSettings }: { onOpenSettings: () =>
             <input
               type="checkbox"
               checked={dl.settings.pipelineDeleteSource}
-              onChange={(e) => dl.updateSettings({ pipelineDeleteSource: e.target.checked })}
+              onChange={(e) => dlActions.updateSettings({ pipelineDeleteSource: e.target.checked })}
               className="h-3.5 w-3.5 accent-brand-500"
             />
             {t("dl.pipeline.deleteSource")}
@@ -764,7 +768,7 @@ export default function DownloadPage({ onOpenSettings }: { onOpenSettings: () =>
             <input
               type="checkbox"
               checked={dl.settings.subtitles}
-              onChange={(e) => dl.updateSettings({ subtitles: e.target.checked })}
+              onChange={(e) => dlActions.updateSettings({ subtitles: e.target.checked })}
               className="h-3.5 w-3.5 accent-brand-500"
             />
             {t("dl.subtitles")}

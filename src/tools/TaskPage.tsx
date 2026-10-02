@@ -6,8 +6,8 @@ import EmptyState from "../components/EmptyState";
 import { useConfirm } from "../components/ConfirmDialog";
 import { openOutputFolder } from "../lib/engine";
 import { useI18n } from "../i18n";
-import { useTasks } from "../contexts/TaskCenter";
-import { useUploads } from "../contexts/UploadCenter";
+import { useTasks, useTaskActions } from "../contexts/TaskCenter";
+import { useUploads, useUploadActions } from "../contexts/UploadCenter";
 import { usePipelineRuns } from "../contexts/PipelineCenter";
 
 /** Task-center page: a compact overview of every queued job. Parameters are
@@ -15,7 +15,9 @@ import { usePipelineRuns } from "../contexts/PipelineCenter";
 export default function TaskPage() {
   const { t } = useI18n();
   const tasks = useTasks();
+  const taskActions = useTaskActions();
   const uploads = useUploads();
+  const uploadActions = useUploadActions();
   const runs = usePipelineRuns();
   const { confirm, dialog: confirmDialog } = useConfirm();
 
@@ -31,8 +33,8 @@ export default function TaskPage() {
       confirmLabel: t("app.startAll.confirm"),
       cancelLabel: t("confirm.cancel"),
     });
-    if (ok) tasks.startAll();
-  }, [tasks, confirm, t]);
+    if (ok) taskActions.startAll();
+  }, [tasks, taskActions, confirm, t]);
 
   const handleClearFinished = useCallback(async () => {
     const removable = jobs.filter(
@@ -50,8 +52,8 @@ export default function TaskPage() {
       cancelLabel: t("confirm.cancel"),
       danger: true,
     });
-    if (ok) tasks.clearFinished();
-  }, [jobs, tasks, confirm, t]);
+    if (ok) taskActions.clearFinished();
+  }, [jobs, taskActions, confirm, t]);
 
   const handleRetryAllFailed = useCallback(async () => {
     const failed = tasks.stats.failedCount;
@@ -62,8 +64,8 @@ export default function TaskPage() {
       confirmLabel: t("app.retryFailed.confirm"),
       cancelLabel: t("confirm.cancel"),
     });
-    if (ok) tasks.retryAllFailed();
-  }, [tasks, confirm, t]);
+    if (ok) taskActions.retryAllFailed();
+  }, [tasks, taskActions, confirm, t]);
 
   const handleClearAll = useCallback(async () => {
     if (jobs.length === 0) return;
@@ -74,8 +76,8 @@ export default function TaskPage() {
       cancelLabel: t("confirm.cancel"),
       danger: true,
     });
-    if (ok) tasks.clearAll();
-  }, [jobs, tasks, confirm, t]);
+    if (ok) taskActions.clearAll();
+  }, [jobs, taskActions, confirm, t]);
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -161,12 +163,12 @@ export default function TaskPage() {
                 job={job}
                 startIndex={i}
                 showToolBadge
-                onStart={tasks.startOne}
-                onCancel={tasks.cancelOne}
-                onRemove={tasks.removeOne}
+                onStart={taskActions.startOne}
+                onCancel={taskActions.cancelOne}
+                onRemove={taskActions.removeOne}
                 onOpenFolder={openOutputFolder}
-                onRetry={tasks.retryOne}
-                onRunPipeline={tasks.runJobPipeline}
+                onRetry={taskActions.retryOne}
+                onRunPipeline={taskActions.runJobPipeline}
               />
             ))}
             {pipelineRuns.length > 0 && (
@@ -201,9 +203,9 @@ export default function TaskPage() {
               <UploadCard
                 key={u.id}
                 task={u}
-                onCancel={uploads.cancelUploadTask}
-                onRetry={uploads.retryUploadTask}
-                onRemove={uploads.removeUploadTask}
+                onCancel={uploadActions.cancelUploadTask}
+                onRetry={uploadActions.retryUploadTask}
+                onRemove={uploadActions.removeUploadTask}
               />
             ))}
           </div>

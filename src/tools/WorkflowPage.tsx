@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { pickPaths } from "../lib/shell";
 import { tKey, useI18n } from "../i18n";
-import { useTasks } from "../contexts/TaskCenter";
+import { useTaskActions } from "../contexts/TaskCenter";
 import { usePipelineRuns } from "../contexts/PipelineCenter";
 import {
   addPipeline,
@@ -36,7 +36,7 @@ type NameModal =
 
 export default function WorkflowPage({ onOpenTasks }: { onOpenTasks?: () => void }) {
   const { t } = useI18n();
-  const tasks = useTasks();
+  const taskActions = useTaskActions();
   const runs = usePipelineRuns();
   const pipelines = usePipelines();
   const { confirm, dialog: confirmDialog } = useConfirm();
@@ -56,7 +56,7 @@ export default function WorkflowPage({ onOpenTasks }: { onOpenTasks?: () => void
   const loadRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    tasks.registerDropHandler((paths) => {
+    taskActions.registerDropHandler((paths) => {
       const v = paths.filter(isVideo);
       if (v.length > 0) {
         setFiles((prev) => {
@@ -65,7 +65,7 @@ export default function WorkflowPage({ onOpenTasks }: { onOpenTasks?: () => void
         });
       }
     });
-    return () => tasks.registerDropHandler(null);
+    return () => taskActions.registerDropHandler(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

@@ -14,7 +14,7 @@ import {
 import { canRevealInFolder, openExternal } from "../lib/shell";
 import { friendlyError } from "../lib/errors";
 import { useI18n, type TranslationKey } from "../i18n";
-import { useDownloads } from "../contexts/DownloadCenter";
+import { useDownloads, useDownloadActions } from "../contexts/DownloadCenter";
 import { useUploads } from "../contexts/UploadCenter";
 import { useToasts } from "../hooks/useToasts";
 import UploadTargetChips from "../components/UploadTargetChips";
@@ -735,6 +735,7 @@ function MonitorCard({
 export default function RecordPage({ onOpenSettings }: { onOpenSettings: () => void }) {
   const { t } = useI18n();
   const dl = useDownloads();
+  const dlActions = useDownloadActions();
   const uploads = useUploads();
   // This page owns its toast channel: App's onToast prop isn't threaded here,
   // and a bare useToasts() would push into a list nothing renders.
@@ -743,11 +744,11 @@ export default function RecordPage({ onOpenSettings }: { onOpenSettings: () => v
   // Sidebar selections persist through DownloadCenter settings so they
   // survive page switches (and restarts) instead of snapping back to defaults.
   const quality = dl.settings.recordQuality;
-  const setQuality = (v: string) => dl.updateSettings({ recordQuality: v });
+  const setQuality = (v: string) => dlActions.updateSettings({ recordQuality: v });
   const pipelineIds = dl.settings.recordPipelineIds;
-  const setPipelineIds = (ids: string[]) => dl.updateSettings({ recordPipelineIds: ids });
+  const setPipelineIds = (ids: string[]) => dlActions.updateSettings({ recordPipelineIds: ids });
   const uploadTo = dl.settings.recordUploadTo;
-  const setUploadTo = (ids: string[]) => dl.updateSettings({ recordUploadTo: ids });
+  const setUploadTo = (ids: string[]) => dlActions.updateSettings({ recordUploadTo: ids });
   const recordDeleteSource = dl.settings.recordDeleteSource;
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");
@@ -804,7 +805,7 @@ export default function RecordPage({ onOpenSettings }: { onOpenSettings: () => v
           {dl.streamlink && !dl.streamlink.installed && dl.streamlink.installable && (
             <Button
               size="sm"
-              onClick={() => void dl.installStreamlink()}
+              onClick={() => void dlActions.installStreamlink()}
               disabled={dl.streamlinkInstalling}
             >
               {dl.streamlinkInstalling ? t("dl.installing") : t("dl.record.installEngine")}
@@ -903,7 +904,7 @@ export default function RecordPage({ onOpenSettings }: { onOpenSettings: () => v
             <input
               type="checkbox"
               checked={recordDeleteSource}
-              onChange={(e) => dl.updateSettings({ recordDeleteSource: e.target.checked })}
+              onChange={(e) => dlActions.updateSettings({ recordDeleteSource: e.target.checked })}
               className="h-3.5 w-3.5 accent-brand-500"
             />
             {t("dl.pipeline.deleteSource")}

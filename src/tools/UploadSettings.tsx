@@ -2,7 +2,7 @@ import { useState } from "react";
 import { isDesktop } from "../lib/shell";
 import { useI18n } from "../i18n";
 import { useConfirm } from "../components/ConfirmDialog";
-import { useUploads } from "../contexts/UploadCenter";
+import { useUploads, useUploadActions } from "../contexts/UploadCenter";
 import Select from "../components/Select";
 import { CheckCircleIcon, SpinnerIcon, TrashIcon } from "../components/icons";
 import type { UploadTarget, UploadTargetKind } from "../types";
@@ -59,6 +59,7 @@ function Req() {
 export default function UploadSection() {
   const { t } = useI18n();
   const uploads = useUploads();
+  const uploadActions = useUploadActions();
   const { confirm, dialog: confirmDialog } = useConfirm();
   const [draft, setDraft] = useState<UploadTarget | null>(null);
 
@@ -73,7 +74,7 @@ export default function UploadSection() {
       cancelLabel: t("confirm.cancel"),
       danger: true,
     });
-    if (ok) uploads.removeTarget(id);
+    if (ok) uploadActions.removeTarget(id);
   }
 
   function patchDraft(patch: Partial<UploadTarget>) {
@@ -374,7 +375,7 @@ export default function UploadSection() {
             </button>
             {isOauthDraft && (
               <button
-                onClick={() => uploads.beginOauth(draft)}
+                onClick={() => uploadActions.beginOauth(draft)}
                 disabled={oauthRunning || !draftClientId || (draft.kind !== "onedrive" && !draftSecret)}
                 className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs font-medium text-brand-700 transition hover:bg-brand-100 disabled:opacity-50 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-300 dark:hover:bg-brand-900"
               >
@@ -384,7 +385,7 @@ export default function UploadSection() {
             <button
               onClick={() => {
                 if (missingFields.length > 0) return;
-                uploads.saveTarget({ ...draft, name: draft.name.trim() });
+                uploadActions.saveTarget({ ...draft, name: draft.name.trim() });
                 setDraft(null);
               }}
               disabled={missingFields.length > 0}

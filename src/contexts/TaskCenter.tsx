@@ -15,7 +15,7 @@ import { useI18n } from "../i18n";
 import { isBatchEditable } from "../tools/kinds";
 import { extOk } from "../tools/FilePicker";
 import { getTool, type WorkbenchId } from "../tools/registry";
-import { useUploads } from "./UploadCenter";
+import { useUploadActions } from "./UploadCenter";
 import { runSteps } from "../workflow/runner";
 import { stepsForPipelineIds } from "../workflow/pipelines";
 import type { GpuInfo, RoughCutParams, WorkflowStepInput } from "../types";
@@ -121,7 +121,10 @@ function saveSettings(s: TaskSettings) {
   writeStorage(SETTINGS_KEY, JSON.stringify(s));
 }
 
-interface TaskCenterValue {
+/** High-frequency state: the jobs array is replaced on every progress event,
+ *  so this value changes often. Components that only trigger actions should
+ *  subscribe to TaskActionsContext instead. */
+export interface TaskDataValue {
   jobs: Job[];
   loading: boolean;
   error: string | null;
@@ -132,6 +135,11 @@ interface TaskCenterValue {
   overall: number;
   totalIn: number;
   totalOut: number;
+}
+
+/** Stable action callbacks. Every action reads refs / setState only (t and
+ *  onToast go through their refs), so the identities never change. */
+export interface TaskActionsValue {
   registerDropHandler: (fn: ((paths: string[]) => void) | null) => void;
   addCompressFiles: (
     paths: string[],
@@ -172,11 +180,22 @@ interface TaskCenterValue {
   runJobPipeline: (uiId: string, pipelineId: string) => void;
 }
 
-const TaskCenterContext = createContext<TaskCenterValue | null>(null);
+const TaskCenterContext = createContext<TaskDataValue | null>(null);
+const TaskActionsContext = createContext<TaskActionsValue | null>(null);
 
-export function useTasks(): TaskCenterValue {
+/** Data half only. Re-renders the caller on every progress event — pair it
+ *  with useTaskActions() when actions are needed too. */
+export function useTasks(): TaskDataValue {
   const v = useContext(TaskCenterContext);
   if (!v) throw new Error("useTasks must be used within TaskCenterProvider");
+  return v;
+}
+
+/** Actions half only. Identity-stable, so callers that only trigger actions
+ *  never re-render on progress events. */
+export function useTaskActions(): TaskActionsValue {
+  const v = useContext(TaskActionsContext);
+  if (!v) throw new Error("useTaskActions must be used within TaskCenterProvider");
   return v;
 }
 
@@ -197,7 +216,7 @@ export function TaskCenterProvider({
   const [gpuInfo, setGpuInfo] = useState<GpuInfo>({ available: false, backends: [] });
 
   // Auto-upload hook: resolved once, used inside the mount-only done listener.
-  const { uploadOnce } = useUploads();
+  const { uploadOnce } = useUploadActions();
   const uploadOnceRef = useRef(uploadOnce);
   uploadOnceRef.current = uploadOnce;
 
@@ -961,12 +980,10 @@ export function TaskCenterProvider({
     [jobs]
   );
 
-  // The context value is rebuilt only when the state it exposes changes:
-  // every action reads refs / setState only (t and onToast go through their
-  // refs), so the function identities are stable across renders. Without the
-  // memo, each high-frequency progress tick re-created the value and
-  // re-rendered every consumer of the context.
-  const value = useMemo<TaskCenterValue>(
+  // The data value is rebuilt only when the state it exposes changes; the
+  // action functions live in their own context below so a progress tick never
+  // reaches consumers that only trigger actions.
+  const value = useMemo<TaskDataValue>(
     () => ({
       jobs,
       loading,
@@ -978,6 +995,16 @@ export function TaskCenterProvider({
       overall,
       totalIn,
       totalOut,
+    }),
+    [jobs, loading, error, settings, gpuInfo, stats, allDone, overall, totalIn, totalOut]
+  );
+
+  // Every action reads refs / setState only (t and onToast go through their
+  // refs), so capturing the first render's instances is safe and the memo
+  // never needs to recompute: the identities are stable for the provider's
+  // whole lifetime, which is what lets memo'd cards keep their callbacks.
+  const actions = useMemo<TaskActionsValue>(
+    () => ({
       registerDropHandler,
       addCompressFiles,
       mergeAndStart,
@@ -1008,8 +1035,12 @@ export function TaskCenterProvider({
     // The action functions are intentionally not listed: they never change
     // identity (see the comment above).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [jobs, loading, error, settings, gpuInfo, stats, allDone, overall, totalIn, totalOut]
+    []
   );
 
-  return <TaskCenterContext.Provider value={value}>{children}</TaskCenterContext.Provider>;
+  return (
+    <TaskCenterContext.Provider value={value}>
+      <TaskActionsContext.Provider value={actions}>{children}</TaskActionsContext.Provider>
+    </TaskCenterContext.Provider>
+  );
 }

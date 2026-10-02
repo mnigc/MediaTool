@@ -12,7 +12,7 @@ import { formatBytes, openOutputFolder } from "../lib/engine";
 import { canRevealInFolder } from "../lib/shell";
 import { estimateOutputSize } from "../lib/estimate";
 import { tKey, useI18n } from "../i18n";
-import { useTasks } from "../contexts/TaskCenter";
+import { useTasks, useTaskActions } from "../contexts/TaskCenter";
 import { useUploads } from "../contexts/UploadCenter";
 import { pipelineById, pipelineDisplayName, usePipelines } from "../workflow/pipelines";
 import { ConfigSidebar, Field, SidebarSection } from "../download/Sidebar";
@@ -41,6 +41,7 @@ interface TaskWorkbenchProps {
 export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
   const { t } = useI18n();
   const tasks = useTasks();
+  const taskActions = useTaskActions();
   const { confirm, dialog: confirmDialog } = useConfirm();
   const pipelines = usePipelines();
   const [filter, setFilter] = useState<FilterStatus>("all");
@@ -69,16 +70,16 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
   const displayMediaType = meta.mediaType ?? meta.category;
 
   useEffect(() => {
-    tasks.registerDropHandler((paths) => {
+    taskActions.registerDropHandler((paths) => {
       const valid = paths.filter((p) => extOk(p, accepts));
       if (valid.length === 0) return;
       const toAdd = multiFile ? valid : valid.slice(0, 1);
-      tasks.addCompressFiles(toAdd, toolId, multiFile, {
+      taskActions.addCompressFiles(toAdd, toolId, multiFile, {
         pipelineIds: afterPipelineRef.current ? [afterPipelineRef.current] : [],
         uploadTo: uploadToRef.current,
       });
     });
-    return () => tasks.registerDropHandler(null);
+    return () => taskActions.registerDropHandler(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toolId]);
 
@@ -133,8 +134,8 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
       confirmLabel: t("app.startAll.confirm"),
       cancelLabel: t("confirm.cancel"),
     });
-    if (ok) tasks.startAll(toolId);
-  }, [jobs, tasks, confirm, t, toolId]);
+    if (ok) taskActions.startAll(toolId);
+  }, [jobs, taskActions, confirm, t, toolId]);
 
   const handleClearFinished = useCallback(async () => {
     const removable = jobs.filter(
@@ -152,8 +153,8 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
       cancelLabel: t("confirm.cancel"),
       danger: true,
     });
-    if (ok) tasks.clearFinished();
-  }, [jobs, tasks, confirm, t]);
+    if (ok) taskActions.clearFinished();
+  }, [jobs, taskActions, confirm, t]);
 
   const handleRetryAllFailed = useCallback(async () => {
     const failed = jobs.filter((j) => j.phase === "error").length;
@@ -164,8 +165,8 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
       confirmLabel: t("app.retryFailed.confirm"),
       cancelLabel: t("confirm.cancel"),
     });
-    if (ok) tasks.retryAllFailed();
-  }, [jobs, tasks, confirm, t]);
+    if (ok) taskActions.retryAllFailed();
+  }, [jobs, taskActions, confirm, t]);
 
   const handleClearAll = useCallback(async () => {
     if (jobs.length === 0) return;
@@ -176,8 +177,8 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
       cancelLabel: t("confirm.cancel"),
       danger: true,
     });
-    if (ok) tasks.clearAll();
-  }, [jobs, tasks, confirm, t]);
+    if (ok) taskActions.clearAll();
+  }, [jobs, taskActions, confirm, t]);
 
   const supportHint = displayMediaType
     ? t(`dz.support.${displayMediaType}`, { exts: accepts.map((e) => `.${e}`).join(", ") })
@@ -240,7 +241,7 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
         <DropZone
           dragOver={false}
           supportHint={supportHint}
-          onClick={() => tasks.pickFiles([{ name: filterName, extensions: accepts }])}
+          onClick={() => taskActions.pickFiles([{ name: filterName, extensions: accepts }])}
           onDragOver={(e) => e.preventDefault()}
           onDragLeave={() => {}}
           onDrop={(e) => e.preventDefault()}
@@ -312,7 +313,7 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
               compact
               dragOver={false}
               jobCount={jobs.length}
-              onClick={() => tasks.pickFiles([{ name: filterName, extensions: accepts }])}
+              onClick={() => taskActions.pickFiles([{ name: filterName, extensions: accepts }])}
               onDragOver={(e) => e.preventDefault()}
               onDragLeave={() => {}}
               onDrop={(e) => e.preventDefault()}
@@ -321,17 +322,17 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
 
           <JobList
             jobs={filteredJobs}
-            onJobStart={tasks.startOne}
-            onJobCancel={tasks.cancelOne}
-            onJobRemove={tasks.removeOne}
+            onJobStart={taskActions.startOne}
+            onJobCancel={taskActions.cancelOne}
+            onJobRemove={taskActions.removeOne}
             onJobOpenFolder={openOutputFolder}
-            onJobChangeParams={tasks.changeParams}
-            onJobSyncParams={syncParamsEditable ? tasks.syncParamsToAll : undefined}
-            onJobRetry={tasks.retryOne}
-            onJobRunPipeline={tasks.runJobPipeline}
-            onReorderStart={tasks.reorderStart}
-            onReorderOver={tasks.reorderOver}
-            onReorderDrop={tasks.reorderDrop}
+            onJobChangeParams={taskActions.changeParams}
+            onJobSyncParams={syncParamsEditable ? taskActions.syncParamsToAll : undefined}
+            onJobRetry={taskActions.retryOne}
+            onJobRunPipeline={taskActions.runJobPipeline}
+            onReorderStart={taskActions.reorderStart}
+            onReorderOver={taskActions.reorderOver}
+            onReorderDrop={taskActions.reorderDrop}
           />
         </>
       )}
@@ -363,7 +364,7 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
               {dir ?? t("sidebar.sameDirFull")}
             </p>
             <div className="flex gap-1.5">
-              <Button size="sm" onClick={() => void tasks.chooseOutput()}>
+              <Button size="sm" onClick={() => void taskActions.chooseOutput()}>
                 {t("dl.changeDir")}
               </Button>
               {dir && canRevealInFolder && (
@@ -372,7 +373,7 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
                 </Button>
               )}
               {dir && (
-                <Button size="sm" onClick={() => tasks.setOutputDir(null)}>
+                <Button size="sm" onClick={() => taskActions.setOutputDir(null)}>
                   {t("sidebar.sameDir")}
                 </Button>
               )}
@@ -388,7 +389,7 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
             <Field label={t("sidebar.suffix")}>
               <input
                 value={tasks.settings.outputSuffix}
-                onChange={(e) => tasks.setOutputSuffix(sanitizeSuffix(e.target.value))}
+                onChange={(e) => taskActions.setOutputSuffix(sanitizeSuffix(e.target.value))}
                 placeholder="_mediatool"
                 className="w-28 min-w-0 rounded-lg border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-800 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 focus:border-brand-400 focus:ring-1 focus:ring-brand-100"
               />
@@ -396,7 +397,7 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
             <Field label={t("sidebar.overwritePolicy")}>
               <Select
                 value={tasks.settings.overwritePolicy}
-                onChange={(v) => tasks.setOverwritePolicy(v as "overwrite" | "rename" | "skip")}
+                onChange={(v) => taskActions.setOverwritePolicy(v as "overwrite" | "rename" | "skip")}
                 className="w-32"
               >
                 <option value="rename">{t("sidebar.ov.rename")}</option>
@@ -407,7 +408,7 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
             <Field label={t("sidebar.parallel")}>
               <Select
                 value={String(tasks.settings.maxConcurrent)}
-                onChange={(v) => tasks.setMaxConcurrent(Number(v))}
+                onChange={(v) => taskActions.setMaxConcurrent(Number(v))}
                 className="w-20"
               >
                 <option value={1}>1</option>
@@ -421,7 +422,7 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
             <SidebarSection title={t("sidebar.gpu")} collapsible defaultOpen={false} summary={tasks.settings.gpu ? t(tKey(`gpu.${tasks.settings.gpu}`)) : t("gpu.cpu")}>
               <Select
                 value={tasks.settings.gpu}
-                onChange={(v) => tasks.setGpu(v)}
+                onChange={(v) => taskActions.setGpu(v)}
                 disabled={!tasks.gpuInfo.available}
                 className="w-full"
                 title={t("sidebar.gpu")}

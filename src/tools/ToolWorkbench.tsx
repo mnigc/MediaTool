@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { inspectMedia } from "../lib/engine";
 import { friendlyError } from "../lib/errors";
 import { useI18n } from "../i18n";
-import { useTasks } from "../contexts/TaskCenter";
+import { useTaskActions } from "../contexts/TaskCenter";
 import { useConfirm } from "../components/ConfirmDialog";
 import MetadataPreview from "../components/MetadataPreview";
 import { getTool, type WorkbenchId } from "./registry";
@@ -46,7 +46,7 @@ function WorkbenchHeader({ tool, onBack }: { tool: WorkbenchId; onBack?: () => v
 /** Instant ffprobe report viewer (not a queued task). */
 function InspectWorkbench({ onBack }: { onBack?: () => void }) {
   const { t } = useI18n();
-  const tasks = useTasks();
+  const taskActions = useTaskActions();
   const { confirm, dialog: confirmDialog } = useConfirm();
   const meta = getTool("inspect")!;
   const [file, setFile] = useState<string | null>(null);
@@ -55,11 +55,11 @@ function InspectWorkbench({ onBack }: { onBack?: () => void }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    tasks.registerDropHandler((paths) => {
+    taskActions.registerDropHandler((paths) => {
       const valid = paths.find((p) => meta.accepts.some((e) => p.toLowerCase().endsWith(`.${e}`)));
       if (valid) setFile(valid);
     });
-    return () => tasks.registerDropHandler(null);
+    return () => taskActions.registerDropHandler(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -92,8 +92,8 @@ function InspectWorkbench({ onBack }: { onBack?: () => void }) {
       cancelLabel: t("confirm.cancel"),
     });
     if (!ok) return;
-    await tasks.addTasks("strip-metadata", [file], {});
-    await tasks.startAll("strip-metadata");
+    await taskActions.addTasks("strip-metadata", [file], {});
+    await taskActions.startAll("strip-metadata");
   };
 
   return (

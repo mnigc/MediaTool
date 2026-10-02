@@ -10,7 +10,7 @@ import { getThumbnail, openOutputFolder, probeFile } from "../../lib/engine";
 import { friendlyError } from "../../lib/errors";
 import { basename } from "../../lib/path";
 import { useI18n } from "../../i18n";
-import { useTasks } from "../../contexts/TaskCenter";
+import { useTasks, useTaskActions } from "../../contexts/TaskCenter";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { extOk } from "../FilePicker";
 import { getTool } from "../registry";
@@ -76,6 +76,7 @@ function rangeFill(value: number, min: number, max: number): React.CSSProperties
 export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
   const { t } = useI18n();
   const tasks = useTasks();
+  const taskActions = useTaskActions();
   const { confirm, dialog } = useConfirm();
   // useConfirm doesn't expose its open state, so in-flight dialogs are counted
   // here: the global keyboard handler must not split/delete clips behind a
@@ -220,8 +221,8 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
   );
 
   useEffect(() => {
-    tasks.registerDropHandler((paths) => void addSources(paths));
-    return () => tasks.registerDropHandler(null);
+    taskActions.registerDropHandler((paths) => void addSources(paths));
+    return () => taskActions.registerDropHandler(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [addSources]);
 
@@ -459,8 +460,8 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
 
   // Stable reference so the memo'd ExportBar doesn't re-render every frame.
   const doExport = useCallback(
-    (params: RoughCutParams) => void tasks.startRoughCut(params),
-    [tasks]
+    (params: RoughCutParams) => void taskActions.startRoughCut(params),
+    [taskActions]
   );
 
   const job = useMemo(() => {
@@ -836,7 +837,7 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
                     </div>
                     <button
                       type="button"
-                      onClick={() => job.rustId && tasks.cancelOne(job.uiId)}
+                      onClick={() => job.rustId && taskActions.cancelOne(job.uiId)}
                       className="mt-1.5 text-xs text-neutral-400 underline-offset-2 hover:text-error-500 hover:underline"
                     >
                       {t("confirm.cancel")}

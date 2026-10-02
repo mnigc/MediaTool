@@ -11,7 +11,7 @@ import {
 import { readStorage, writeStorage } from "../lib/storage";
 import { useI18n } from "../i18n";
 import { useTasks } from "./TaskCenter";
-import { useUploads } from "./UploadCenter";
+import { useUploadActions } from "./UploadCenter";
 import { runSteps } from "../workflow/runner";
 import type {
   PipelineFileStatus,
@@ -72,7 +72,7 @@ let runCounter = 0;
 export function PipelineCenterProvider({ children }: { children: ReactNode }) {
   const { t } = useI18n();
   const tasks = useTasks();
-  const { uploadOnce } = useUploads();
+  const { uploadOnce } = useUploadActions();
 
   const [runs, setRuns] = useState<PipelineRunTask[]>(loadRuns);
 

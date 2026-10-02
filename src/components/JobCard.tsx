@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { memo, useEffect, useState, type CSSProperties } from "react";
 import type { Job, JobParams } from "../types";
 import JobParamsEditor from "../tools/JobParamsEditor";
 import { getThumbnail } from "../lib/engine";
@@ -23,7 +23,7 @@ import { canRevealInFolder } from "../lib/shell";
 import { tKey, useI18n, type TranslationKey } from "../i18n";
 import { hasInlinePreview, isBatchEditable } from "../tools/kinds";
 import VideoPreview from "./VideoPreview";
-import { useUploads } from "../contexts/UploadCenter";
+import { useUploads, useUploadActions } from "../contexts/UploadCenter";
 import { pipelineDisplayName, usePipelines } from "../workflow/pipelines";
 
 type Props = {
@@ -103,7 +103,11 @@ function meta(job: Job): string {
   return parts.join(" · ");
 }
 
-export default function JobCard({
+// memo: the card only re-renders when its own `job` (or a callback prop)
+// changes. Every callback comes from useTaskActions()/module imports and is
+// identity-stable, so a sibling job's progress tick re-renders the list but
+// bails out here.
+export default memo(function JobCard({
   job,
   startIndex,
   onStart,
@@ -120,7 +124,8 @@ export default function JobCard({
   showToolBadge = false,
 }: Props) {
   const { t } = useI18n();
-  const uploads = useUploads();
+  const { targets } = useUploads();
+  const { startUpload } = useUploadActions();
   const pipelines = usePipelines();
   const badge = TypeBadgeStyle[job.info.mediaType] ?? TypeBadgeStyle.video;
   const Icon = badge.Icon;
@@ -545,20 +550,20 @@ export default function JobCard({
         </select>
       )}
 
-      {isDone && uploads.targets.length > 0 && deliverables.length > 0 && (
+      {isDone && targets.length > 0 && deliverables.length > 0 && (
         <div className="mt-2 flex items-center gap-2">
           <select
             value=""
             onChange={(e) => {
               const targetId = e.target.value;
               if (!targetId) return;
-              uploads.startUpload(deliverables, [targetId]);
+              startUpload(deliverables, [targetId]);
             }}
             className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
             aria-label={t("upload.card.uploadTo")}
           >
             <option value="">{t("upload.card.uploadTo")}</option>
-            {uploads.targets.map((x) => (
+            {targets.map((x) => (
               <option key={x.id} value={x.id}>
                 {x.name}
               </option>
@@ -586,4 +591,4 @@ export default function JobCard({
       )}
     </div>
   );
-}
+});

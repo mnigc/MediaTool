@@ -6,7 +6,7 @@
 
 import { memo, useEffect, useRef, useState } from "react";
 import { useI18n } from "../../i18n";
-import { useTasks } from "../../contexts/TaskCenter";
+import { useTasks, useTaskActions } from "../../contexts/TaskCenter";
 import Select from "../../components/Select";
 import { Field } from "../panels/ui";
 import { CRF } from "../../lib/quality";
@@ -36,7 +36,8 @@ const ExportBar = memo(function ExportBar({
   onExport: (params: RoughCutParams) => void;
 }) {
   const { t } = useI18n();
-  const { settings, chooseOutput } = useTasks();
+  const { settings } = useTasks();
+  const { chooseOutput } = useTaskActions();
   const [mode, setMode] = useState<"copy" | "encode">("copy");
   const [container, setContainer] = useState<"mp4" | "mkv">("mp4");
   const [codec, setCodec] = useState<"libx264" | "libx265">("libx264");

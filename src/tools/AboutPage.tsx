@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { canSelfUpdate, openExternal } from "../lib/shell";
 import { useI18n } from "../i18n";
 import { DEV_UNAVAILABLE, useUpdater } from "../hooks/useUpdater";
-import { useDownloads } from "../contexts/DownloadCenter";
+import { useDownloads, useDownloadActions } from "../contexts/DownloadCenter";
 import { ffmpegStatus } from "../lib/engine";
 import type { FfmpegStatus } from "../types";
 import {
@@ -49,6 +49,7 @@ function InstallBar({ percent, message }: { percent: number | null; message: str
 function YtdlpSection() {
   const { t } = useI18n();
   const dl = useDownloads();
+  const dlActions = useDownloadActions();
   const s = dl.ytdlp;
 
   return (
@@ -75,7 +76,7 @@ function YtdlpSection() {
           </span>
         ) : s.installed ? (
           <button
-            onClick={() => void dl.checkYtdlpUpdate()}
+            onClick={() => void dlActions.checkYtdlpUpdate()}
             disabled={dl.ytdlpChecking || dl.ytdlpInstalling}
             className="inline-flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-1.5 text-sm font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700 disabled:opacity-50"
           >
@@ -92,7 +93,7 @@ function YtdlpSection() {
               {t("dl.missing")}
             </span>
             <button
-              onClick={() => void dl.installYtdlp()}
+              onClick={() => void dlActions.installYtdlp()}
               disabled={dl.ytdlpInstalling}
               className="rounded-xl bg-warning-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-warning-700 disabled:opacity-50"
             >
@@ -123,7 +124,7 @@ function YtdlpSection() {
             </div>
           </div>
           <button
-            onClick={() => void dl.installYtdlp()}
+            onClick={() => void dlActions.installYtdlp()}
             disabled={dl.ytdlpInstalling}
             className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-brand-600 disabled:opacity-50"
           >
@@ -142,7 +143,7 @@ function YtdlpSection() {
           <span className="min-w-0 break-words">{dl.ytdlpInstallMessage}</span>
           {s?.installed && !dl.ytdlpInstalling && !dl.ytdlpChecking && !dl.ytdlpLatest && (
             <button
-              onClick={() => void dl.installYtdlp()}
+              onClick={() => void dlActions.installYtdlp()}
               className="shrink-0 rounded-lg border border-neutral-200 px-2.5 py-1 text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
             >
               {t("dl.upgradeAnyway")}
@@ -160,6 +161,7 @@ function YtdlpSection() {
 function StreamlinkSection() {
   const { t } = useI18n();
   const dl = useDownloads();
+  const dlActions = useDownloadActions();
   const s = dl.streamlink;
 
   return (
@@ -186,7 +188,7 @@ function StreamlinkSection() {
           </span>
         ) : s.installed ? (
           <button
-            onClick={() => void dl.checkStreamlinkUpdate()}
+            onClick={() => void dlActions.checkStreamlinkUpdate()}
             disabled={dl.streamlinkChecking || dl.streamlinkInstalling}
             className="inline-flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-1.5 text-sm font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700 disabled:opacity-50"
           >
@@ -204,7 +206,7 @@ function StreamlinkSection() {
             </span>
             {s.installable && (
               <button
-                onClick={() => void dl.installStreamlink()}
+                onClick={() => void dlActions.installStreamlink()}
                 disabled={dl.streamlinkInstalling}
                 className="rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-brand-600 disabled:opacity-50 dark:bg-brand-600 dark:hover:bg-brand-700"
               >
@@ -237,7 +239,7 @@ function StreamlinkSection() {
           </div>
           {s.installable ? (
             <button
-              onClick={() => void dl.installStreamlink()}
+              onClick={() => void dlActions.installStreamlink()}
               disabled={dl.streamlinkInstalling}
               className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-brand-600 disabled:opacity-50"
             >

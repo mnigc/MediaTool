@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useI18n } from "../i18n";
-import { useTasks } from "../contexts/TaskCenter";
+import { useTasks, useTaskActions } from "../contexts/TaskCenter";
 import Select from "./Select";
 import { FolderIcon, XIcon } from "./icons";
 
@@ -31,6 +31,7 @@ export const sanitizeSuffix = (raw: string) =>
 export default function OutputSettings({ compact = false }: OutputSettingsProps) {
   const { t } = useI18n();
   const tasks = useTasks();
+  const taskActions = useTaskActions();
 
   if (compact) {
     return (
@@ -38,7 +39,7 @@ export default function OutputSettings({ compact = false }: OutputSettingsProps)
         <div className="flex items-center rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-800">
           <Tooltip label={tasks.settings.outputDir ?? t("sidebar.sameDirFull")}>
             <button
-              onClick={() => void tasks.chooseOutput()}
+              onClick={() => void taskActions.chooseOutput()}
               className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-neutral-700 transition hover:bg-neutral-50 dark:text-neutral-200 dark:hover:bg-neutral-700"
             >
               <FolderIcon className="h-3.5 w-3.5 shrink-0 text-brand-500" />
@@ -51,7 +52,7 @@ export default function OutputSettings({ compact = false }: OutputSettingsProps)
             <>
               <div className="h-3 w-px bg-neutral-200 dark:bg-neutral-600" />
               <button
-                onClick={() => tasks.setOutputDir(null)}
+                onClick={() => taskActions.setOutputDir(null)}
                 className="flex items-center justify-center rounded-r-lg px-1.5 py-1 text-neutral-400 transition hover:bg-error-50 hover:text-error-500 dark:text-neutral-500 dark:hover:bg-error-950/30 dark:hover:text-error-400"
                 title={t("sidebar.sameDirFull")}
               >
@@ -62,14 +63,14 @@ export default function OutputSettings({ compact = false }: OutputSettingsProps)
         </div>
         <input
           value={tasks.settings.outputSuffix}
-          onChange={(e) => tasks.setOutputSuffix(sanitizeSuffix(e.target.value))}
+          onChange={(e) => taskActions.setOutputSuffix(sanitizeSuffix(e.target.value))}
           placeholder="_mediatool"
           className="w-24 rounded-lg border border-neutral-200 bg-white px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 focus:border-brand-400 focus:ring-1 focus:ring-brand-100"
           title={t("sidebar.suffix")}
         />
         <Select
           value={tasks.settings.overwritePolicy}
-          onChange={(v) => tasks.setOverwritePolicy(v as "overwrite" | "rename" | "skip")}
+          onChange={(v) => taskActions.setOverwritePolicy(v as "overwrite" | "rename" | "skip")}
           className="w-28"
           title={t("sidebar.overwritePolicy")}
         >
@@ -79,7 +80,7 @@ export default function OutputSettings({ compact = false }: OutputSettingsProps)
         </Select>
         <Select
           value={String(tasks.settings.maxConcurrent)}
-          onChange={(v) => tasks.setMaxConcurrent(Number(v))}
+          onChange={(v) => taskActions.setMaxConcurrent(Number(v))}
           className="w-16"
           title={t("sidebar.parallel")}
         >
@@ -101,7 +102,7 @@ export default function OutputSettings({ compact = false }: OutputSettingsProps)
           <div className="mt-1 flex items-center rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-800">
             <Tooltip label={tasks.settings.outputDir ?? t("sidebar.sameDirFull")}>
               <button
-                onClick={() => void tasks.chooseOutput()}
+                onClick={() => void taskActions.chooseOutput()}
                 className="flex flex-1 min-w-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-xs text-neutral-700 transition hover:bg-neutral-50 dark:text-neutral-200 dark:hover:bg-neutral-700"
               >
                 <FolderIcon className="h-3.5 w-3.5 shrink-0 text-brand-500" />
@@ -114,7 +115,7 @@ export default function OutputSettings({ compact = false }: OutputSettingsProps)
               <>
                 <div className="h-3 w-px bg-neutral-200 dark:bg-neutral-600" />
                 <button
-                  onClick={() => tasks.setOutputDir(null)}
+                  onClick={() => taskActions.setOutputDir(null)}
                   className="flex items-center justify-center rounded-r-lg px-1.5 py-1.5 text-neutral-400 transition hover:bg-error-50 hover:text-error-500 dark:text-neutral-500 dark:hover:bg-error-950/30 dark:hover:text-error-400"
                   title={t("sidebar.sameDirFull")}
                 >
@@ -130,7 +131,7 @@ export default function OutputSettings({ compact = false }: OutputSettingsProps)
           </div>
           <input
             value={tasks.settings.outputSuffix}
-            onChange={(e) => tasks.setOutputSuffix(sanitizeSuffix(e.target.value))}
+            onChange={(e) => taskActions.setOutputSuffix(sanitizeSuffix(e.target.value))}
             placeholder="_mediatool"
             className="mt-1 w-full rounded-lg border border-neutral-200 bg-white px-2 py-1.5 text-xs dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 focus:border-brand-400 focus:ring-1 focus:ring-brand-100"
           />
@@ -141,7 +142,7 @@ export default function OutputSettings({ compact = false }: OutputSettingsProps)
           </div>
           <Select
             value={tasks.settings.overwritePolicy}
-            onChange={(v) => tasks.setOverwritePolicy(v as "overwrite" | "rename" | "skip")}
+            onChange={(v) => taskActions.setOverwritePolicy(v as "overwrite" | "rename" | "skip")}
             className="mt-1 w-full"
           >
             <option value="rename">{t("sidebar.ov.rename")}</option>
@@ -155,7 +156,7 @@ export default function OutputSettings({ compact = false }: OutputSettingsProps)
           </div>
           <Select
             value={String(tasks.settings.maxConcurrent)}
-            onChange={(v) => tasks.setMaxConcurrent(Number(v))}
+            onChange={(v) => taskActions.setMaxConcurrent(Number(v))}
             className="mt-1 w-full"
           >
             <option value={1}>1</option>

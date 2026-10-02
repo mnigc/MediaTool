@@ -7,7 +7,7 @@ import { useConfirm } from "../components/ConfirmDialog";
 import { cacheClean, cacheReport, closeActionGet, closeActionSet, cookiesList, cookiesRemove, cookiesSet, formatBytes } from "../lib/engine";
 import type { CloseAction } from "../lib/engine";
 import { Button } from "../components/ui";
-import { useDownloads } from "../contexts/DownloadCenter";
+import { useDownloads, useDownloadActions } from "../contexts/DownloadCenter";
 import { AutoIcon, MoonIcon, RefreshIcon, SpinnerIcon, SunIcon, TrashIcon } from "../components/icons";
 import Select from "../components/Select";
 import UploadSection from "./UploadSettings";
@@ -29,6 +29,7 @@ interface SettingsPageProps {
 export default function SettingsPage({ themeMode, onThemeChange }: SettingsPageProps) {
   const { t, locale, setLocale } = useI18n();
   const dl = useDownloads();
+  const dlActions = useDownloadActions();
 
   // Effective cookie source mirrors the backend priority: file > pasted text.
   // Dimmed inputs are being overridden (still editable).
@@ -161,14 +162,14 @@ export default function SettingsPage({ themeMode, onThemeChange }: SettingsPageP
             <div className="flex min-w-0 flex-1 gap-2">
               <input
                 value={dl.settings.cookiesFile}
-                onChange={(e) => dl.updateSettings({ cookiesFile: e.target.value })}
+                onChange={(e) => dlActions.updateSettings({ cookiesFile: e.target.value })}
                 placeholder="cookies.txt"
                 className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
               />
               <button
                 onClick={async () => {
                   const [sel] = await pickPaths({});
-                  if (sel) dl.updateSettings({ cookiesFile: sel });
+                  if (sel) dlActions.updateSettings({ cookiesFile: sel });
                 }}
                 className="shrink-0 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
               >
@@ -180,7 +181,7 @@ export default function SettingsPage({ themeMode, onThemeChange }: SettingsPageP
             <span className={labelCls}>{t("settings.cookiesText")}</span>
             <textarea
               value={dl.settings.cookiesText}
-              onChange={(e) => dl.updateSettings({ cookiesText: e.target.value })}
+              onChange={(e) => dlActions.updateSettings({ cookiesText: e.target.value })}
               rows={3}
               spellCheck={false}
               placeholder="# Netscape HTTP Cookie File"
@@ -206,7 +207,7 @@ export default function SettingsPage({ themeMode, onThemeChange }: SettingsPageP
             <span className={labelCls}>{t("dl.proxy")}</span>
             <input
               value={dl.settings.proxy}
-              onChange={(e) => dl.updateSettings({ proxy: e.target.value })}
+              onChange={(e) => dlActions.updateSettings({ proxy: e.target.value })}
               placeholder="http://127.0.0.1:7890"
               className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
             />

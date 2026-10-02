@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { canRevealInFolder, pickPaths } from "../lib/shell";
 import { tKey, useI18n } from "../i18n";
-import { useTasks } from "../contexts/TaskCenter";
+import { useTasks, useTaskActions } from "../contexts/TaskCenter";
 import { extOk } from "./FilePicker";
 import { getTool, type WorkbenchId } from "./registry";
 import { MergeIcon } from "../components/icons";
@@ -17,16 +17,17 @@ export default function MergeWorkbench({
 }) {
   const { t } = useI18n();
   const tasks = useTasks();
+  const taskActions = useTaskActions();
   const meta = getTool(tool)!;
   const accepts = meta.accepts;
   const [files, setFiles] = useState<string[]>([]);
 
   useEffect(() => {
-    tasks.registerDropHandler((paths) => {
+    taskActions.registerDropHandler((paths) => {
       const valid = paths.filter((p) => extOk(p, accepts));
       if (valid.length) setFiles((prev) => Array.from(new Set([...prev, ...valid])));
     });
-    return () => tasks.registerDropHandler(null);
+    return () => taskActions.registerDropHandler(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tool]);
 
@@ -63,7 +64,7 @@ export default function MergeWorkbench({
 
   const run = () => {
     // mergeAndStart already takes a WorkbenchId — no narrowing cast needed.
-    if (!inFlight && files.length >= 2) tasks.mergeAndStart(tool, files);
+    if (!inFlight && files.length >= 2) taskActions.mergeAndStart(tool, files);
   };
 
   return (

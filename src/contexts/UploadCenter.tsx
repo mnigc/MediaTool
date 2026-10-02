@@ -87,10 +87,17 @@ export interface OauthFlowState {
   done: boolean;
 }
 
-interface UploadCenterValue {
+/** High-frequency state: `uploads` is replaced on every transfer progress
+ *  event, so this value changes often. Components that only trigger actions
+ *  should subscribe to UploadActionsContext instead. */
+export interface UploadDataValue {
   targets: UploadTarget[];
   uploads: UploadTask[];
   oauth: OauthFlowState | null;
+}
+
+/** Stable action callbacks (useCallback + ref reads only). */
+export interface UploadActionsValue {
   saveTarget: (target: UploadTarget) => void;
   removeTarget: (id: string) => void;
   /** Queue `files` for `targetIds`: one Telegram transfer carrying them all
@@ -110,11 +117,22 @@ interface UploadCenterValue {
   cancelOauth: () => void;
 }
 
-const UploadCenterContext = createContext<UploadCenterValue | null>(null);
+const UploadCenterContext = createContext<UploadDataValue | null>(null);
+const UploadActionsContext = createContext<UploadActionsValue | null>(null);
 
-export function useUploads(): UploadCenterValue {
+/** Data half only. Re-renders the caller on every upload progress event —
+ *  pair it with useUploadActions() when actions are needed too. */
+export function useUploads(): UploadDataValue {
   const v = useContext(UploadCenterContext);
   if (!v) throw new Error("useUploads must be used within UploadCenterProvider");
+  return v;
+}
+
+/** Actions half only. Callers that only trigger actions never re-render on
+ *  upload progress events. */
+export function useUploadActions(): UploadActionsValue {
+  const v = useContext(UploadActionsContext);
+  if (!v) throw new Error("useUploadActions must be used within UploadCenterProvider");
   return v;
 }
 
@@ -520,14 +538,21 @@ export function UploadCenterProvider({
     setOauth(null);
   }, [oauth?.requestId]);
 
-  // All actions are useCallback-stable, so the value only changes when the
-  // exposed state does; without the memo every progress tick re-created it
-  // and re-rendered every consumer.
-  const value = useMemo<UploadCenterValue>(
+  // All actions are useCallback-stable, so the actions bundle only changes
+  // when cancelOauth's oauth.requestId dependency moves (start/end of a login
+  // flow); without the split every upload progress tick re-rendered every
+  // consumer.
+  const value = useMemo<UploadDataValue>(
     () => ({
       targets,
       uploads,
       oauth,
+    }),
+    [targets, uploads, oauth]
+  );
+
+  const actions = useMemo<UploadActionsValue>(
+    () => ({
       saveTarget,
       removeTarget,
       startUpload,
@@ -540,9 +565,6 @@ export function UploadCenterProvider({
       cancelOauth,
     }),
     [
-      targets,
-      uploads,
-      oauth,
       saveTarget,
       removeTarget,
       startUpload,
@@ -556,7 +578,11 @@ export function UploadCenterProvider({
     ]
   );
 
-  return <UploadCenterContext.Provider value={value}>{children}</UploadCenterContext.Provider>;
+  return (
+    <UploadCenterContext.Provider value={value}>
+      <UploadActionsContext.Provider value={actions}>{children}</UploadActionsContext.Provider>
+    </UploadCenterContext.Provider>
+  );
 }
 
 /* ── helpers ────────────────────────────────────────────────────── */

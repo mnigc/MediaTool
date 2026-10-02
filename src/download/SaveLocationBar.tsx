@@ -1,7 +1,7 @@
 import { canRevealInFolder, pickPaths } from "../lib/shell";
 import { openOutputFolder } from "../lib/engine";
 import { useI18n } from "../i18n";
-import { useDownloads } from "../contexts/DownloadCenter";
+import { useDownloads, useDownloadActions } from "../contexts/DownloadCenter";
 import { FolderIcon } from "../components/icons";
 import { Button } from "../components/ui";
 
@@ -10,11 +10,12 @@ import { Button } from "../components/ui";
 export default function SaveLocationBar() {
   const { t } = useI18n();
   const dl = useDownloads();
+  const dlActions = useDownloadActions();
   const dir = dl.settings.outputDir;
 
   const choose = async () => {
     const [d] = await pickPaths({ directory: true, title: t("dl.outputDir") });
-    if (d) dl.updateSettings({ outputDir: d });
+    if (d) dlActions.updateSettings({ outputDir: d });
   };
 
   return (

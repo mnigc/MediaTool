@@ -28,7 +28,7 @@ import {
 } from "../lib/engine";
 import { readStorage, writeStorage } from "../lib/storage";
 import { useI18n } from "../i18n";
-import { useUploads } from "./UploadCenter";
+import { useUploadActions } from "./UploadCenter";
 import { runSteps } from "../workflow/runner";
 import type { PipelineRun } from "../workflow/types";
 import type {
@@ -188,7 +188,10 @@ function loadTasks(): DownloadTask[] {
 
 /* ── Context ────────────────────────────────────────────────────── */
 
-interface DownloadCenterValue {
+/** High-frequency state: `tasks` is replaced on every download progress
+ *  event, so this value changes often. Components that only trigger actions
+ *  should subscribe to DownloadActionsContext instead. */
+export interface DownloadDataValue {
   ytdlp: YtdlpStatus | null;
   ytdlpInstalling: boolean;
   ytdlpInstallMessage: string;
@@ -197,9 +200,6 @@ interface DownloadCenterValue {
   ytdlpChecking: boolean;
   /** Latest upstream release tag found by "检查更新", or null. */
   ytdlpLatest: string | null;
-  refreshYtdlp: () => void;
-  installYtdlp: () => Promise<void>;
-  checkYtdlpUpdate: () => Promise<void>;
   /** Live-recording engine; recordings fall back to yt-dlp when it's absent. */
   streamlink: StreamlinkStatus | null;
   streamlinkInstalling: boolean;
@@ -207,13 +207,20 @@ interface DownloadCenterValue {
   streamlinkInstallPercent: number | null;
   streamlinkChecking: boolean;
   streamlinkLatest: string | null;
-  refreshStreamlink: () => void;
-  installStreamlink: () => Promise<void>;
-  checkStreamlinkUpdate: () => Promise<void>;
   tasks: DownloadTask[];
   /** Poster frames extracted from finished files, keyed by task id. */
   thumbs: Record<string, string>;
   settings: DownloadSettings;
+}
+
+/** Stable action callbacks (useCallback + ref reads only). */
+export interface DownloadActionsValue {
+  refreshYtdlp: () => void;
+  installYtdlp: () => Promise<void>;
+  checkYtdlpUpdate: () => Promise<void>;
+  refreshStreamlink: () => void;
+  installStreamlink: () => Promise<void>;
+  checkStreamlinkUpdate: () => Promise<void>;
   updateSettings: (patch: Partial<DownloadSettings>) => void;
   startDownload: (opts: {
     url: string;
@@ -236,11 +243,22 @@ interface DownloadCenterValue {
   clearAll: () => void;
 }
 
-const DownloadCenterContext = createContext<DownloadCenterValue | null>(null);
+const DownloadCenterContext = createContext<DownloadDataValue | null>(null);
+const DownloadActionsContext = createContext<DownloadActionsValue | null>(null);
 
-export function useDownloads(): DownloadCenterValue {
+/** Data half only. Re-renders the caller on every download progress event —
+ *  pair it with useDownloadActions() when actions are needed too. */
+export function useDownloads(): DownloadDataValue {
   const v = useContext(DownloadCenterContext);
   if (!v) throw new Error("useDownloads must be used within DownloadCenterProvider");
+  return v;
+}
+
+/** Actions half only. Callers that only trigger actions never re-render on
+ *  download progress events. */
+export function useDownloadActions(): DownloadActionsValue {
+  const v = useContext(DownloadActionsContext);
+  if (!v) throw new Error("useDownloadActions must be used within DownloadCenterProvider");
   return v;
 }
 
@@ -262,7 +280,7 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
 
   // Auto-upload hook: resolved once, used inside mount-only listeners.
-  const { uploadOnce } = useUploads();
+  const { uploadOnce } = useUploadActions();
   const uploadOnceRef = useRef(uploadOnce);
   uploadOnceRef.current = uploadOnce;
 
@@ -928,7 +946,7 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
     setSettings((s) => ({ ...s, ...patch }));
   }, []);
 
-  const value = useMemo<DownloadCenterValue>(
+  const value = useMemo<DownloadDataValue>(
     () => ({
       ytdlp,
       ytdlpInstalling,
@@ -936,21 +954,46 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
       ytdlpInstallPercent,
       ytdlpChecking,
       ytdlpLatest,
-      refreshYtdlp,
-      installYtdlp,
-      checkYtdlpUpdate,
       streamlink,
       streamlinkInstalling,
       streamlinkInstallMessage,
       streamlinkInstallPercent,
       streamlinkChecking,
       streamlinkLatest,
-      refreshStreamlink,
-      installStreamlink,
-      checkStreamlinkUpdate,
       tasks,
       thumbs,
       settings,
+    }),
+    [
+      ytdlp,
+      ytdlpInstalling,
+      ytdlpInstallMessage,
+      ytdlpInstallPercent,
+      ytdlpChecking,
+      ytdlpLatest,
+      streamlink,
+      streamlinkInstalling,
+      streamlinkInstallMessage,
+      streamlinkInstallPercent,
+      streamlinkChecking,
+      streamlinkLatest,
+      tasks,
+      thumbs,
+      settings,
+    ]
+  );
+
+  // Every action is useCallback-stable (ref reads only); the engine status
+  // mutators depend on their own flags, so the bundle identity only moves
+  // when an install/check flow is actually in flight.
+  const actions = useMemo<DownloadActionsValue>(
+    () => ({
+      refreshYtdlp,
+      installYtdlp,
+      checkYtdlpUpdate,
+      refreshStreamlink,
+      installStreamlink,
+      checkStreamlinkUpdate,
       updateSettings,
       startDownload,
       cancelTask,
@@ -961,27 +1004,12 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
       clearAll,
     }),
     [
-      ytdlp,
-      ytdlpInstalling,
-      ytdlpInstallMessage,
-      ytdlpInstallPercent,
-      ytdlpChecking,
-      ytdlpLatest,
       refreshYtdlp,
       installYtdlp,
       checkYtdlpUpdate,
-      streamlink,
-      streamlinkInstalling,
-      streamlinkInstallMessage,
-      streamlinkInstallPercent,
-      streamlinkChecking,
-      streamlinkLatest,
       refreshStreamlink,
       installStreamlink,
       checkStreamlinkUpdate,
-      tasks,
-      thumbs,
-      settings,
       updateSettings,
       startDownload,
       cancelTask,
@@ -993,5 +1021,9 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
     ]
   );
 
-  return <DownloadCenterContext.Provider value={value}>{children}</DownloadCenterContext.Provider>;
+  return (
+    <DownloadCenterContext.Provider value={value}>
+      <DownloadActionsContext.Provider value={actions}>{children}</DownloadActionsContext.Provider>
+    </DownloadCenterContext.Provider>
+  );
 }
