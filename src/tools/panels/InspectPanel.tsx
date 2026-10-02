@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { formatBytes } from "../../lib/engine";
-import { useI18n } from "../../i18n";
+import { useI18n, type TranslationKey } from "../../i18n";
 import type { MediaReport } from "../../types";
 
 function Row({
@@ -81,7 +81,7 @@ function fmtFrameRate(rate: string | null | undefined): string | null {
  *  ("Hw 1", "minor_version 512") the 格式体检 tool shows in full. */
 const CURATED_TAGS = ["creation_time", "encoder"] as const;
 
-const TAG_LABEL_KEY: Record<(typeof CURATED_TAGS)[number], string> = {
+const TAG_LABEL_KEY: Record<(typeof CURATED_TAGS)[number], TranslationKey> = {
   creation_time: "tool.inspect.creationTime",
   encoder: "tool.inspect.encoder",
 };
@@ -112,7 +112,7 @@ export default function InspectReport({
   tagsMode?: "all" | "curated";
 }) {
   const { t } = useI18n();
-  const kindKey: Record<string, string> = {
+  const kindKey: Record<string, TranslationKey> = {
     video: "job.type.video",
     audio: "job.type.audio",
     subtitle: "tool.inspect.subtitle",

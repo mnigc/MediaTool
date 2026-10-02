@@ -1,5 +1,5 @@
 import type { Job } from "../types";
-import { useI18n } from "../i18n";
+import { useI18n, type TranslationKey } from "../i18n";
 
 export type FilterStatus = "all" | "queued" | "running" | "done" | "error" | "cancelled" | "skipped";
 
@@ -9,7 +9,7 @@ interface FilterTabsProps {
   onChange: (filter: FilterStatus) => void;
 }
 
-const TABS: { value: FilterStatus; key: string }[] = [
+const TABS: { value: FilterStatus; key: TranslationKey }[] = [
   { value: "all", key: "app.filter.all" },
   { value: "queued", key: "app.filter.queued" },
   { value: "running", key: "app.filter.running" },

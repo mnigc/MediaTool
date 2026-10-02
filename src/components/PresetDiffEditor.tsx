@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { useI18n } from "../i18n";
+import { useI18n, type TranslationKey } from "../i18n";
 import { defaultParamsFor } from "../lib/defaults";
 import Select from "./Select";
 import { NumInput } from "../tools/panels/ui";
@@ -17,7 +17,8 @@ import type { JobParams } from "../types";
 interface Opt {
   value: string;
   label?: string;
-  labelKey?: string;
+  /** Compile-checked against the zh table; entries below are literals. */
+  labelKey?: TranslationKey;
 }
 
 type Control =
@@ -29,7 +30,8 @@ type Control =
 
 interface FieldDef {
   key: string;
-  labelKey: string;
+  /** Compile-checked against the zh table; entries below are literals. */
+  labelKey: TranslationKey;
   control: Control;
 }
 
@@ -102,7 +104,7 @@ const FIELD_TABLES: Partial<Record<PresetToolId, FieldDef[]>> = {
       labelKey: "opt.speed",
       control: {
         kind: "select",
-        options: ["veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"].map(
+        options: (["veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"] as const).map(
           (s) => ({ value: s, labelKey: `opt.speed.${s}` })
         ),
       },
@@ -155,7 +157,7 @@ const FIELD_TABLES: Partial<Record<PresetToolId, FieldDef[]>> = {
       labelKey: "tool.wm.position",
       control: {
         kind: "select",
-        options: ["tl", "tc", "tr", "ml", "mc", "mr", "bl", "bc", "br"].map((p) => ({
+        options: (["tl", "tc", "tr", "ml", "mc", "mr", "bl", "bc", "br"] as const).map((p) => ({
           value: p,
           labelKey: `opt.pos.${p}`,
         })),

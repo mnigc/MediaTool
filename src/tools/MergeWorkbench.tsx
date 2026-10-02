@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { canRevealInFolder, pickPaths } from "../lib/shell";
-import { useI18n } from "../i18n";
+import { tKey, useI18n } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
 import { extOk } from "./FilePicker";
 import { getTool, type WorkbenchId } from "./registry";
@@ -41,7 +41,8 @@ export default function MergeWorkbench({
     const selected = await pickPaths({
       multiple: true,
       title: t("merge.select"),
-      filterName: t(`dz.filter.${meta.mediaType}`),
+      // mediaType is optional on ToolMeta; the assembled key goes through tKey.
+      filterName: t(tKey(`dz.filter.${meta.mediaType}`)),
       extensions: accepts,
     });
     if (selected.length) setFiles((prev) => Array.from(new Set([...prev, ...selected])));

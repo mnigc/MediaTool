@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { useI18n } from "../i18n";
+import { tKey, useI18n } from "../i18n";
 import { useDownloads } from "../contexts/DownloadCenter";
 import { cookiesList } from "../lib/engine";
 import { InfoIcon } from "../components/icons";
@@ -177,7 +177,8 @@ export function PipelineChips({
     const p = pipelineById(id);
     if (!p) return "";
     if (p.descKey) return t(p.descKey);
-    return p.steps.map((s) => t(`tool.${s.toolId}.name`)).join(" → ");
+    // Step toolIds of custom pipelines are runtime state → tKey.
+    return p.steps.map((s) => t(tKey(`tool.${s.toolId}.name`))).join(" → ");
   };
   // One flat list: builtin atoms and the user's workflow-builder pipelines
   // are the same kind of thing — a complete chain to run when finished.

@@ -5,6 +5,7 @@ import {
   PLAYER_PREVIEW_CONTACT_PARAMS,
 } from "../lib/presets";
 import { readStorage, writeStorage } from "../lib/storage";
+import type { TranslationKey } from "../i18n/translations";
 
 /** A named processing pipeline: an ordered list of tool steps whose outputs
  *  chain into each other. Pipelines are the single shared vocabulary for
@@ -16,10 +17,11 @@ export interface Pipeline {
   /** Display name; builtins resolve through i18n via `nameKey`, customs keep
    *  the name the user typed. */
   name: string;
-  /** i18n key of the display name (builtins only). */
-  nameKey?: string;
+  /** i18n key of the display name (builtins only; compile-checked literals —
+   *  custom pipelines persisted to storage never set these). */
+  nameKey?: TranslationKey;
   /** i18n key of a one-line explanation (chip tooltip / summary detail). */
-  descKey?: string;
+  descKey?: TranslationKey;
   steps: WorkflowStepInput[];
   builtin: boolean;
   createdAt: number;
@@ -192,7 +194,7 @@ export function pipelineById(id: string): Pipeline | undefined {
  *  their stored name verbatim. */
 export function pipelineDisplayName(
   p: Pipeline,
-  t: (key: string) => string
+  t: (key: TranslationKey) => string
 ): string {
   if (p.builtin && p.nameKey) return t(p.nameKey);
   return p.name;

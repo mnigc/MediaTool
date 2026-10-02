@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import type { AudioParams, JobParams, VideoParams } from "../types";
 import PresetsBar from "./PresetsBar";
 import { presetSummary } from "../lib/presets";
-import { useI18n } from "../i18n";
+import { tKey, useI18n } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
 import Select from "./Select";
 import { inputClsSm } from "./ui";
@@ -133,7 +133,9 @@ export function VideoCompressOptions({
   };
   // The backend silently swaps libx264 for the GPU encoder when the sidebar
   // picked one — surface that here, since the codec select still says "H.264".
-  const gpuName = tasks.settings.gpu ? t(`gpu.${tasks.settings.gpu}`) : "";
+  // The gpu id is reported by the backend probe (persisted as a string),
+  // so the label key is runtime-assembled → tKey.
+  const gpuName = tasks.settings.gpu ? t(tKey(`gpu.${tasks.settings.gpu}`)) : "";
 
   return (
     <div className="space-y-2">

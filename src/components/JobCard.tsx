@@ -20,7 +20,7 @@ import {
 } from "./icons";
 import { formatBytes } from "../lib/engine";
 import { canRevealInFolder } from "../lib/shell";
-import { useI18n } from "../i18n";
+import { tKey, useI18n, type TranslationKey } from "../i18n";
 import { hasInlinePreview, isBatchEditable } from "../tools/kinds";
 import VideoPreview from "./VideoPreview";
 import { useUploads } from "../contexts/UploadCenter";
@@ -66,7 +66,7 @@ const statusClass = (phase: Job["phase"]): string => {
   }
 };
 
-function formatEta(seconds: number, t: (key: string, vars?: Record<string, string | number>) => string): string {
+function formatEta(seconds: number, t: (key: TranslationKey, vars?: Record<string, string | number>) => string): string {
   if (!isFinite(seconds) || seconds <= 0) return "";
   const s = Math.round(seconds);
   const mm = Math.floor(s / 60);
@@ -74,7 +74,7 @@ function formatEta(seconds: number, t: (key: string, vars?: Record<string, strin
   return mm > 0 ? t("job.eta.min", { m: mm, s: ss }) : t("job.eta.sec", { s: ss });
 }
 
-function getProgressDetail(job: Job, t: (key: string, vars?: Record<string, string | number>) => string): string {
+function getProgressDetail(job: Job, t: (key: TranslationKey, vars?: Record<string, string | number>) => string): string {
   const parts: string[] = [];
   if (job.speed) parts.push(job.speed);
   if (job.startedAt && job.percent > 0) {
@@ -286,9 +286,11 @@ export default function JobCard({
               {showToolBadge && (
                 <span
                   className="shrink-0 whitespace-nowrap rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-medium text-neutral-500 ring-1 ring-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:ring-neutral-700"
-                  title={t(`tool.${job.toolId}.desc`)}
+                  // toolId comes from persisted jobs (possibly older
+                  // builds), so the key is assembled at runtime → tKey.
+                  title={t(tKey(`tool.${job.toolId}.desc`))}
                 >
-                  {t(`tool.${job.toolId}.name`)}
+                  {t(tKey(`tool.${job.toolId}.name`))}
                 </span>
               )}
               {job.info.hdr && job.info.mediaType === "video" && (
@@ -476,7 +478,7 @@ export default function JobCard({
         <PipelineMiniProgress
           run={job.pipeline}
           stepName={t(
-            `tool.${job.pipelineSteps?.[job.pipeline.stepIndex]?.toolId ?? ""}.name`
+            tKey(`tool.${job.pipelineSteps?.[job.pipeline.stepIndex]?.toolId ?? ""}.name`)
           )}
         />
       )}
@@ -519,7 +521,7 @@ export default function JobCard({
         <p className="mt-2 text-[11px] text-neutral-400 dark:text-neutral-500">
           {t("job.pipeline.bound", {
             n: job.pipelineSteps!.length,
-            names: job.pipelineSteps!.map((s) => t(`tool.${s.toolId}.name`)).join(" + "),
+            names: job.pipelineSteps!.map((s) => t(tKey(`tool.${s.toolId}.name`))).join(" + "),
           })}
         </p>
       )}

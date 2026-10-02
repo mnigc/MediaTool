@@ -10,7 +10,7 @@ import { ytdlpProbe } from "../lib/engine";
 import { formatBytes, openOutputFolder } from "../lib/engine";
 import { canRevealInFolder } from "../lib/shell";
 import { friendlyError } from "../lib/errors";
-import { useI18n } from "../i18n";
+import { tKey, useI18n } from "../i18n";
 import { useDownloads } from "../contexts/DownloadCenter";
 import { useUploads } from "../contexts/UploadCenter";
 import { CopyIcon, FilmIcon, FolderIcon, MusicIcon, XIcon } from "../components/icons";
@@ -448,7 +448,8 @@ function DownloadCard({
   const running = task.phase === "running";
   const pct = Math.round(task.percent);
   const pipelineRunning = task.pipeline?.phase === "running";
-  const stepNames = task.pipelineSteps.map((s) => t(`tool.${s.toolId}.name`));
+  // Pipeline step toolIds are runtime state → tKey.
+  const stepNames = task.pipelineSteps.map((s) => t(tKey(`tool.${s.toolId}.name`)));
   // A frame grabbed from the finished file beats a hotlink-protected remote
   // thumbnail; audio-only outputs have no frames to show at all.
   const thumbSrc = dl.thumbs[task.id] ?? task.thumbnail;
@@ -483,7 +484,7 @@ function DownloadCard({
             <PhaseBadge task={task} />
             {task.quality && (
               <span className="inline-flex shrink-0 items-center whitespace-nowrap rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-medium text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
-                {t(`dl.quality.${task.quality}`) || task.quality}
+                {t(tKey(`dl.quality.${task.quality}`)) || task.quality}
               </span>
             )}
           </div>

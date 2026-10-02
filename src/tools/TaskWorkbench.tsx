@@ -11,7 +11,7 @@ import { useConfirm } from "../components/ConfirmDialog";
 import { formatBytes, openOutputFolder } from "../lib/engine";
 import { canRevealInFolder } from "../lib/shell";
 import { estimateOutputSize } from "../lib/estimate";
-import { useI18n } from "../i18n";
+import { tKey, useI18n } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
 import { useUploads } from "../contexts/UploadCenter";
 import { pipelineById, pipelineDisplayName, usePipelines } from "../workflow/pipelines";
@@ -418,7 +418,7 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
           </SidebarSection>
 
           {showGpu && (
-            <SidebarSection title={t("sidebar.gpu")} collapsible defaultOpen={false} summary={tasks.settings.gpu ? t(`gpu.${tasks.settings.gpu}`) : t("gpu.cpu")}>
+            <SidebarSection title={t("sidebar.gpu")} collapsible defaultOpen={false} summary={tasks.settings.gpu ? t(tKey(`gpu.${tasks.settings.gpu}`)) : t("gpu.cpu")}>
               <Select
                 value={tasks.settings.gpu}
                 onChange={(v) => tasks.setGpu(v)}
@@ -429,7 +429,8 @@ export default function TaskWorkbench({ toolId, onBack }: TaskWorkbenchProps) {
                 <option value="">{t("gpu.cpu")}</option>
                 {tasks.gpuInfo.backends.map((b) => (
                   <option key={b.id} value={b.id}>
-                    {t(`gpu.${b.id}`)}
+                    {/* b.id comes from the backend probe → runtime key. */}
+                    {t(tKey(`gpu.${b.id}`))}
                   </option>
                 ))}
               </Select>

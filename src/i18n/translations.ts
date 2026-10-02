@@ -9,7 +9,10 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 
 type Dict = Record<string, string>;
 
-const zh: Dict = {
+/** No `: Dict` annotation here on purpose: the literal keys must be inferred
+ *  so `TranslationKey` below is a precise union instead of `string`. zh is
+ *  the source of truth for the key set. */
+const zh = {
   "app.startAll.title": "全部开始",
   "app.startAll.msg": "确定要立即开始处理所选的 {n} 个待处理任务吗？",
   "app.startAll.confirm": "开始",
@@ -881,7 +884,15 @@ const zh: Dict = {
   "rc.errEmpty": "粗剪时间线为空：请先添加素材片段",
 };
 
-const en: Dict = {
+/** Every valid translation key (e.g. "download.title"), derived from the zh
+ *  table. Static t() arguments must be one of these; keys assembled at
+ *  runtime go through `tKey`. */
+export type TranslationKey = keyof typeof zh;
+
+/** Annotated against `TranslationKey`, so a key present in zh but missing in
+ *  en (or a typo'd extra key) is a compile error — the two tables can never
+ *  drift apart. */
+const en: Record<TranslationKey, string> = {
   "app.startAll.title": "Start All",
   "app.startAll.msg": "Start processing all {n} queued tasks now?",
   "app.startAll.confirm": "Start",
@@ -1753,3 +1764,15 @@ const en: Dict = {
 };
 
 export const translations: Record<Locale, Dict> = { zh, en };
+
+/** Escape hatch for translation keys that only exist at runtime (assembled
+ *  from backend data or persisted settings, e.g. `tool.${toolId}.name`). It
+ *  validates against the zh table and warns in dev builds; translate()
+ *  itself already falls back to the zh string and finally to the raw key, so
+ *  an unknown key can never crash or render `undefined`. */
+export function tKey(key: string): TranslationKey {
+  if (import.meta.env.DEV && !(key in translations.zh)) {
+    console.warn(`[i18n] missing translation key "${key}", rendering fallback`);
+  }
+  return key as TranslationKey;
+}

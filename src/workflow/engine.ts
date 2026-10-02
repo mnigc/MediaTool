@@ -6,6 +6,7 @@ import {
   startWorkflow as startWorkflowRust,
 } from "../lib/engine";
 import type { JobRequest } from "../types";
+import type { TranslateFn } from "./runner";
 import type {
   RunSettings,
   StepRun,
@@ -125,7 +126,7 @@ function runMerged(
     output?: string | null,
     note?: string | null
   ) => void,
-  t: (key: string, vars?: Record<string, string | number>) => string
+  t: TranslateFn
 ): Promise<void> {
   return new Promise<void>((resolve) => {
     let settled = false;
@@ -196,7 +197,7 @@ export function startWorkflow(opts: {
     output?: string | null,
     note?: string | null
   ) => void;
-  t: (key: string, vars?: Record<string, string | number>) => string;
+  t: TranslateFn;
 }): WorkflowRunHandle {
   const { input, steps, settings, onUpdate, onFinish, t } = opts;
   const allowCopyFallback = opts.allowCopyFallback === true;

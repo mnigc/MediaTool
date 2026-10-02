@@ -2,7 +2,7 @@ import type { PipelineRunTask } from "../workflow/types";
 import { openOutputFolder } from "../lib/engine";
 import { canRevealInFolder } from "../lib/shell";
 import { basename } from "../lib/path";
-import { useI18n } from "../i18n";
+import { tKey, useI18n } from "../i18n";
 import { FilmIcon, FolderIcon, SpinnerIcon, XIcon } from "./icons";
 
 /** Task-center card for a pipeline-center run (workflow page batches). The
@@ -89,7 +89,8 @@ export default function PipelineRunCard({
             {run.phase === "done" && ` · ${t("workflow.run.done")}`}
             {failed > 0 && ` · ${t("workflow.run.failedCount", { n: failed })}`}
             {run.steps.length > 0 &&
-              ` · ${run.steps.map((s) => t(`tool.${s.toolId}.name`)).join(" + ")}`}
+              // Step toolIds are runtime state → keys assembled here go through tKey.
+              ` · ${run.steps.map((s) => t(tKey(`tool.${s.toolId}.name`))).join(" + ")}`}
           </p>
         </div>
 
@@ -147,7 +148,7 @@ export default function PipelineRunCard({
             <span className="ml-auto tabular-nums">
               {t("workflow.run.step", {
                 name: t(
-                  `tool.${run.steps[runningFile?.stepIndex ?? 0]?.toolId ?? run.steps[0]?.toolId ?? ""}.name`
+                  tKey(`tool.${run.steps[runningFile?.stepIndex ?? 0]?.toolId ?? run.steps[0]?.toolId ?? ""}.name`)
                 ),
               })}
             </span>

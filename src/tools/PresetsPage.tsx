@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useI18n } from "../i18n";
+import { tKey, useI18n } from "../i18n";
 import {
   presetDisplayName,
   presetSummary,
@@ -66,7 +66,8 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
     () =>
       groups.map((g) => ({
         id: secId(g.toolId),
-        label: t(`tool.${g.toolId}.name`),
+        // Preset.toolId is persisted, so the group key is runtime data.
+        label: t(tKey(`tool.${g.toolId}.name`)),
         count: g.presets.length,
       })),
     [groups, t]
@@ -166,7 +167,7 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
             <div key={g.toolId} id={secId(g.toolId)} className="scroll-mt-3">
               <div className="mb-2 flex items-center gap-2">
                 <span className="text-sm font-semibold text-neutral-800 dark:text-neutral-100">
-                  {t(`tool.${g.toolId}.name`)}
+                  {t(tKey(`tool.${g.toolId}.name`))}
                 </span>
                 <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-medium text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
                   {g.presets.length}

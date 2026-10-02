@@ -14,13 +14,13 @@ import type { GpuInfo, RoughCutClip, RoughCutParams, VideoParams } from "../../t
 import { checkConcatCompat, type CompatResult } from "./compat";
 import { totalDuration, type SourceInfo } from "./model";
 
-const QUALITY_TIERS: Array<{ id: number; key: string }> = [
+const QUALITY_TIERS = [
   { id: CRF.vlossless, key: "vlossless" },
   { id: CRF.high, key: "high" },
   { id: CRF.balanced, key: "balanced" },
   { id: CRF.social, key: "social" },
   { id: CRF.compact, key: "compact" },
-];
+] as const;
 
 // memo: the playhead state lives in the workbench, so without this the whole
 // encoding form re-renders at 60fps during playback for nothing.

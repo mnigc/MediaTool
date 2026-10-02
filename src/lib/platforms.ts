@@ -1,8 +1,12 @@
+import type { TranslationKey } from "../i18n/translations";
+
 /** Sites we can name. An unmapped room keeps its bare host: inventing a
  *  friendly label for an extractor we don't know would mislead more than a
  *  domain does. Keys are registrable domains, matched the same way the
- *  backend matches per-platform cookies (exact or as a parent domain). */
-const PLATFORMS: { host: string; key: string }[] = [
+ *  backend matches per-platform cookies (exact or as a parent domain). The
+ *  i18n key is picked by platform at runtime, but every value is an authored
+ *  literal, so they are compile-checked against the zh table. */
+const PLATFORMS: { host: string; key: TranslationKey }[] = [
   { host: "douyin.com", key: "platform.douyin" },
   { host: "tiktok.com", key: "platform.tiktok" },
   { host: "bilibili.com", key: "platform.bilibili" },
@@ -25,7 +29,7 @@ export function roomHost(url: string): string {
   return authority.replace(/:\d+$/, "").replace(/\.+$/, "").replace(/^www\./i, "").toLowerCase();
 }
 
-export function platformLabel(url: string, t: (key: string) => string): string {
+export function platformLabel(url: string, t: (key: TranslationKey) => string): string {
   const host = roomHost(url);
   if (!host) return "";
   const known = PLATFORMS.find((p) => host === p.host || host.endsWith(`.${p.host}`));

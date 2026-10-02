@@ -1,4 +1,4 @@
-import { useI18n } from "../i18n";
+import { useI18n, type TranslationKey } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
 import {
   cardsOfModule,
@@ -9,7 +9,7 @@ import {
 } from "./registry";
 import { SearchIcon } from "../components/icons";
 
-const MODULE_TITLE: Record<ModuleId, string> = {
+const MODULE_TITLE: Record<ModuleId, TranslationKey> = {
   download: "nav.module.download",
   record: "nav.module.record",
   video: "module.video.title",

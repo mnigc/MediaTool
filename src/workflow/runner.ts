@@ -2,9 +2,10 @@ import { deleteFile } from "../lib/engine";
 import { startWorkflow } from "./engine";
 import type { RunSettings, WorkflowStep } from "./types";
 import type { WorkflowStepInput } from "../types";
+import type { TranslationKey } from "../i18n/translations";
 
 export type TranslateFn = (
-  key: string,
+  key: TranslationKey,
   vars?: Record<string, string | number>
 ) => string;
 

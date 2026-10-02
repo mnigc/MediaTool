@@ -1,4 +1,6 @@
-type Translate = (key: string, vars?: Record<string, string | number>) => string;
+import type { TranslationKey } from "../i18n/translations";
+
+type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
 
 /** Map a raw FFmpeg stderr string to a short, user-readable summary.
  *  The raw log is preserved separately for the "view details" view. */

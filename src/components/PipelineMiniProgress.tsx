@@ -1,5 +1,5 @@
 import type { PipelineRun } from "../workflow/types";
-import { useI18n } from "../i18n";
+import { useI18n, type TranslationKey } from "../i18n";
 
 /** Inline sub-progress for a bound post-processing pipeline, rendered on the
  *  card of the task it is attached to (job cards and download cards alike).
@@ -14,7 +14,7 @@ export default function PipelineMiniProgress({
   /** Display name of the running step, already resolved by the caller. */
   stepName: string;
   /** i18n key of the label template; each domain keeps its own copy. */
-  labelKey?: string;
+  labelKey?: TranslationKey;
 }) {
   const { t } = useI18n();
   const pct = Math.round(run.percent);

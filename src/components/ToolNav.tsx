@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import { useI18n } from "../i18n";
+import { useI18n, type TranslationKey } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
 import { useDownloads } from "../contexts/DownloadCenter";
 import { MODULES, toolToModule, type ModuleId, type Route } from "../tools/registry";
@@ -27,7 +27,7 @@ const MODULE_ICONS: Record<ModuleId, ComponentType<{ className?: string }>> = {
   about: InfoIcon,
 };
 
-const MODULE_LABEL: Record<ModuleId, string> = {
+const MODULE_LABEL: Record<ModuleId, TranslationKey> = {
   download: "nav.module.download",
   record: "nav.module.record",
   video: "nav.module.video",

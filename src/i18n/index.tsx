@@ -8,7 +8,16 @@ import {
   type ReactNode,
 } from "react";
 import { readStorage, writeStorage } from "../lib/storage";
-import { LOCALES, translations, type Locale } from "./translations";
+import {
+  LOCALES,
+  translations,
+  tKey,
+  type Locale,
+  type TranslationKey,
+} from "./translations";
+
+export { tKey };
+export type { TranslationKey };
 
 const STORAGE_KEY = "mediatool.lang";
 
@@ -28,7 +37,9 @@ type Vars = Record<string, string | number>;
 interface I18nContextValue {
   locale: Locale;
   setLocale: (l: Locale) => void;
-  t: (key: string, vars?: Vars) => string;
+  /** Key is compile-checked against the zh table (`TranslationKey`); keys
+   *  assembled at runtime go through `tKey` and arrive here pre-cast. */
+  t: (key: TranslationKey, vars?: Vars) => string;
 }
 
 const I18nContext = createContext<I18nContextValue | null>(null);
@@ -61,7 +72,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const t = useCallback(
-    (key: string, vars?: Vars) => translate(locale, key, vars),
+    (key: TranslationKey, vars?: Vars) => translate(locale, key, vars),
     [locale]
   );
 

@@ -11,6 +11,7 @@ import type {
 import { defaultParamsFor } from "./defaults";
 import { readStorage, writeStorage } from "./storage";
 import { CRF } from "./quality";
+import { tKey, type TranslationKey } from "../i18n/translations";
 
 export interface Preset {
   name: string;
@@ -47,8 +48,9 @@ const CODEC_LABEL: Record<string, string> = {
 
 /** Map builtin preset names (stored as stable Chinese identifiers) to i18n
  *  keys, so builtin preset labels follow the active UI language. Custom
- *  presets keep the name the user typed. */
-const BUILTIN_NAME_KEYS: Record<string, string> = {
+ *  presets keep the name the user typed. Values are compile-checked against
+ *  the zh table; the lookup itself is runtime (stored preset name). */
+const BUILTIN_NAME_KEYS: Record<string, TranslationKey> = {
   "均衡通用": "preset.p_balanced",
   "高压缩 (H.264)": "preset.p_high_h264",
   "视觉无损": "preset.p_vlossless",
@@ -165,7 +167,7 @@ export const PLAYER_PREVIEW_CONTACT_PARAMS: ContactSheetParams = {
  *  custom presets render their stored name verbatim. */
 export function presetDisplayName(
   p: Preset,
-  t: (key: string) => string
+  t: (key: TranslationKey) => string
 ): string {
   if (p.builtin) {
     const key = BUILTIN_NAME_KEYS[p.name];
@@ -177,7 +179,7 @@ export function presetDisplayName(
 /** One-line human summary of what a preset sets (chip tooltip). */
 export function presetSummary(
   p: Preset,
-  t: (key: string, vars?: Record<string, string | number>) => string
+  t: (key: TranslationKey, vars?: Record<string, string | number>) => string
 ): string {
   const q = p.params as Record<string, unknown>;
   const parts: string[] = [];
@@ -223,7 +225,9 @@ export function presetSummary(
       break;
     }
     case "watermark": {
-      if (q.position) parts.push(t(`opt.pos.${q.position}`));
+      // Position is stored as a raw string in persisted presets, so the key
+      // is assembled at runtime and validated by tKey.
+      if (q.position) parts.push(t(tKey(`opt.pos.${String(q.position)}`)));
       if (q.scalePercent !== undefined) parts.push(`${q.scalePercent}%`);
       if (q.opacity !== undefined) parts.push(`${Math.round(Number(q.opacity) * 100)}%`);
       break;

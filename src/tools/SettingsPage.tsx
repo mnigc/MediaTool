@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ComponentType } from "react";
 import { isDesktop, pickPaths } from "../lib/shell";
-import { useI18n } from "../i18n";
+import { tKey, useI18n } from "../i18n";
 import { friendlyError } from "../lib/errors";
 import { LOCALES, LOCALE_NAMES } from "../i18n/translations";
 import { useConfirm } from "../components/ConfirmDialog";
@@ -505,7 +505,7 @@ function CacheSection() {
             <li key={b.key} className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
-                  <span>{t(b.labelKey)}</span>
+                  <span>{t(tKey(b.labelKey))}</span>
                   <span
                     className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium ${
                       b.removable

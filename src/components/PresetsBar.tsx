@@ -9,7 +9,7 @@ import {
   removePreset,
   usePresets,
 } from "../lib/presets";
-import { useI18n } from "../i18n";
+import { tKey, useI18n } from "../i18n";
 import { usePrompt } from "./PromptDialog";
 import Select from "./Select";
 import type { JobParams } from "../types";
@@ -74,7 +74,8 @@ export default function PresetsBar({
   const save = async () => {
     const name = await prompt({
       title: t("pm.presetName"),
-      initialValue: `${t(`tool.${toolId}.name`)} ${t("pm.presetName")}`,
+      // toolId is the bar’s plain-string prop → runtime-assembled key.
+      initialValue: `${t(tKey(`tool.${toolId}.name`))} ${t("pm.presetName")}`,
     });
     if (!name) return;
     addPreset({ name, toolId, params });

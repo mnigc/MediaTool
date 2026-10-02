@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { pickPaths } from "../lib/shell";
-import { useI18n } from "../i18n";
+import { tKey, useI18n } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
 import { usePipelineRuns } from "../contexts/PipelineCenter";
 import {
@@ -152,7 +152,8 @@ export default function WorkflowPage({ onOpenTasks }: { onOpenTasks?: () => void
   const hasTerminal = steps.some((s) => TERMINAL_STEP_TOOLS.includes(s.toolId));
   const runName =
     linkedPipeline?.name ??
-    steps.map((s) => t(`tool.${s.toolId}.name`)).join(" + ");
+    // WorkflowStep.toolId is runtime state → tKey.
+    steps.map((s) => t(tKey(`tool.${s.toolId}.name`))).join(" + ");
 
   const canRun = files.length > 0 && steps.length > 0;
 
@@ -347,10 +348,10 @@ export default function WorkflowPage({ onOpenTasks }: { onOpenTasks?: () => void
                     {t("workflow.terminalHint")}
                   </p>
                 )}
-                {[
+                {([
                   { labelKey: "workflow.stepGroup.chain", ids: WORKFLOW_STEP_TOOLS.filter((id) => !TERMINAL_STEP_TOOLS.includes(id)) },
                   { labelKey: "workflow.stepGroup.final", ids: WORKFLOW_STEP_TOOLS.filter((id) => TERMINAL_STEP_TOOLS.includes(id)) },
-                ].map((group, gi) => (
+                ] as const).map((group, gi) => (
                   <div key={group.labelKey}>
                     {gi > 0 && <div className="mx-1 my-1 h-px bg-neutral-200 dark:bg-neutral-700" />}
                     <p className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold text-neutral-500 dark:text-neutral-400">
@@ -368,7 +369,7 @@ export default function WorkflowPage({ onOpenTasks }: { onOpenTasks?: () => void
                           className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent dark:text-neutral-200 dark:hover:bg-neutral-800"
                         >
                           {Icon && <Icon className="h-4 w-4 shrink-0 text-neutral-500 dark:text-neutral-400" />}
-                          <span>{t(`tool.${toolId}.name`)}</span>
+                          <span>{t(tKey(`tool.${toolId}.name`))}</span>
                         </button>
                       );
                     })}
@@ -395,7 +396,7 @@ export default function WorkflowPage({ onOpenTasks }: { onOpenTasks?: () => void
                     {i + 1}
                   </span>
                   <span className="min-w-0 flex-1 truncate text-sm font-medium text-neutral-800 dark:text-neutral-100">
-                    {t(`tool.${st.toolId}.name`)}
+                    {t(tKey(`tool.${st.toolId}.name`))}
                   </span>
                   <button
                     type="button"

@@ -13,7 +13,7 @@ import {
 } from "../lib/engine";
 import { canRevealInFolder, openExternal } from "../lib/shell";
 import { friendlyError } from "../lib/errors";
-import { useI18n } from "../i18n";
+import { useI18n, type TranslationKey } from "../i18n";
 import { useDownloads } from "../contexts/DownloadCenter";
 import { useUploads } from "../contexts/UploadCenter";
 import { useToasts } from "../hooks/useToasts";
@@ -39,7 +39,7 @@ const FILTER_MIN = 4;
 
 type StatusFilter = "all" | "recording" | "watching" | "stopped" | "live";
 
-const STATUS_FILTERS: { value: StatusFilter; key: string }[] = [
+const STATUS_FILTERS: { value: StatusFilter; key: TranslationKey }[] = [
   { value: "all", key: "app.filter.all" },
   { value: "recording", key: "dl.monitor.recording" },
   { value: "watching", key: "dl.monitor.watching" },
@@ -67,7 +67,9 @@ function matchesQuery(m: MonitorInfo, q: string, platform: string): boolean {
     .filter(Boolean)
     .some((field) => field!.toLowerCase().includes(q));
 }
-function liveBadge(live?: string | null): { cls: string; key: string } | null {
+/** Badge per backend-reported liveStatus; the whitelist below means every
+ *  returned key is an authored, compile-checked literal. */
+function liveBadge(live?: string | null): { cls: string; key: TranslationKey } | null {
   switch (live) {
     case "is_live":
       return {
@@ -94,7 +96,7 @@ function liveBadge(live?: string | null): { cls: string; key: string } | null {
   }
 }
 
-function statusBadge(m: MonitorInfo, t: (k: string) => string): { cls: string; label: string } {
+function statusBadge(m: MonitorInfo, t: (k: TranslationKey) => string): { cls: string; label: string } {
   if (m.status === "recording") {
     return {
       cls: "bg-error-500 text-white animate-pulse",
