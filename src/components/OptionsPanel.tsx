@@ -183,6 +183,9 @@ export function VideoCompressOptions({
               <span className="shrink-0 text-xs font-medium text-neutral-600 dark:text-neutral-300">
                 {t("opt.crfQuality", { n: v.crf ?? 28 })}
               </span>
+              {/* Scrubbing works now that JobCard cancels drags originating
+                  from form controls; the draggable/onDragStart hack this input
+                  used to carry is gone with it. */}
               <input
                 type="range"
                 min={18}
@@ -190,13 +193,6 @@ export function VideoCompressOptions({
                 value={v.crf ?? 28}
                 onChange={(e) => set({ crf: Number(e.target.value) })}
                 className={range}
-                // The job card is natively draggable for reordering, which
-                // hijacks scrubbing into a card drag — clicks still landed but
-                // the thumb never followed the pointer. Claiming draggable here
-                // makes the slider the drag source, and cancelling the drag
-                // hands mouse moves back to the range control.
-                draggable={true}
-                onDragStart={(e) => e.preventDefault()}
               />
             </div>
             <div className="mt-0.5 flex justify-between text-[10px] text-neutral-400 dark:text-neutral-500">

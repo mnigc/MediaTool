@@ -144,6 +144,9 @@ export default function Player({
   useEffect(() => {
     const at = locate(clips, sources, playhead);
     if (!at) {
+      // locate() is null only on an empty timeline (all clips deleted while
+      // playing): clear the source AND reset the transport, or the button
+      // would keep showing the pause icon over a dead player.
       if (activeRef.current !== null) {
         activeRef.current = null;
         const v = ref.current;
@@ -152,6 +155,7 @@ export default function Player({
           v.load();
         }
       }
+      onPlayState(false);
       return;
     }
     const v = ref.current;

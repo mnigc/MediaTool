@@ -12,11 +12,14 @@ import {
   openOutputFolder,
 } from "../lib/engine";
 import { canRevealInFolder, openExternal } from "../lib/shell";
+import { friendlyError } from "../lib/errors";
 import { useI18n } from "../i18n";
 import { useDownloads } from "../contexts/DownloadCenter";
 import { useUploads } from "../contexts/UploadCenter";
+import { useToasts } from "../hooks/useToasts";
 import UploadTargetChips from "../components/UploadTargetChips";
 import Select from "../components/Select";
+import ToastContainer from "../components/ToastContainer";
 import { Button } from "../components/ui";
 import EmptyState from "../components/EmptyState";
 import { EditIcon, FolderIcon, MoreIcon, SearchIcon, TrashIcon } from "../components/icons";
@@ -159,7 +162,7 @@ function AddMonitorForm({
       setName("");
       onAdded();
     } catch (e) {
-      setError(String(e));
+      setError(friendlyError(String(e), t));
     } finally {
       setBusy(false);
     }
@@ -318,7 +321,13 @@ function ActionMenu({ label, items }: { label: string; items: ActionItem[] }) {
 
 /* ── monitor card ───────────────────────────────────────────────── */
 
-function AutoRecordSwitch({ m }: { m: MonitorInfo }) {
+function AutoRecordSwitch({
+  m,
+  pushToast,
+}: {
+  m: MonitorInfo;
+  pushToast: (type: "success" | "error" | "info", msg: string) => void;
+}) {
   const { t } = useI18n();
   const [busy, setBusy] = useState(false);
   const on = m.autoRecord;
@@ -326,6 +335,10 @@ function AutoRecordSwitch({ m }: { m: MonitorInfo }) {
     setBusy(true);
     try {
       await monitorUpdate(m.id, { autoRecord: !on });
+    } catch {
+      // The switch is driven by the monitor list; without feedback a failed
+      // toggle just snapped back silently.
+      pushToast("error", t("dl.monitor.autoRecordFailed"));
     } finally {
       setBusy(false);
     }
@@ -444,6 +457,14 @@ function NotifySection() {
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The "saved" flash timer can outlive the section (collapsible); cancel it.
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (savedTimer.current !== null) clearTimeout(savedTimer.current);
+    },
+    []
+  );
 
   useEffect(() => {
     notifyGet().then(setTargets).catch(() => setTargets([]));
@@ -461,9 +482,10 @@ function NotifySection() {
       await notifySet(clean);
       setTargets(clean);
       setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      if (savedTimer.current !== null) clearTimeout(savedTimer.current);
+      savedTimer.current = setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setError(String(e));
+      setError(friendlyError(String(e), t));
     } finally {
       setBusy(false);
     }
@@ -522,7 +544,7 @@ function EditMonitorForm({
       });
       onDone();
     } catch (e) {
-      setError(String(e));
+      setError(friendlyError(String(e), t));
     } finally {
       setBusy(false);
     }
@@ -574,7 +596,15 @@ function EditMonitorForm({
   );
 }
 
-function MonitorCard({ m, onChanged }: { m: MonitorInfo; onChanged: () => void }) {
+function MonitorCard({
+  m,
+  onChanged,
+  pushToast,
+}: {
+  m: MonitorInfo;
+  onChanged: () => void;
+  pushToast: (type: "success" | "error" | "info", msg: string) => void;
+}) {
   const { t } = useI18n();
   const { confirm, dialog } = useConfirm();
   const [removing, setRemoving] = useState(false);
@@ -645,13 +675,20 @@ function MonitorCard({ m, onChanged }: { m: MonitorInfo; onChanged: () => void }
         <div className="flex shrink-0 items-center gap-1.5">
           {m.status !== "recording" && m.liveStatus === "is_live" && (
             <button
-              onClick={() => void monitorRecordNow(m.id).then(onChanged).catch(() => {})}
+              onClick={() =>
+                void monitorRecordNow(m.id)
+                  .then(onChanged)
+                  .catch(() => {
+                    // Used to be swallowed: the button did nothing visible on failure.
+                    pushToast("error", t("dl.monitor.recordNowFailed"));
+                  })
+              }
               className="rounded-lg border border-error-200 bg-error-50 px-2.5 py-1 text-[11px] font-medium text-error-600 transition hover:bg-error-100 dark:border-error-800 dark:bg-error-950/30 dark:text-error-400 dark:hover:bg-error-900/50"
             >
               {t("dl.monitor.recordNow")}
             </button>
           )}
-          <AutoRecordSwitch m={m} />
+          <AutoRecordSwitch m={m} pushToast={pushToast} />
           <ActionMenu
             label={t("dl.monitor.more")}
             items={[
@@ -697,6 +734,9 @@ export default function RecordPage({ onOpenSettings }: { onOpenSettings: () => v
   const { t } = useI18n();
   const dl = useDownloads();
   const uploads = useUploads();
+  // This page owns its toast channel: App's onToast prop isn't threaded here,
+  // and a bare useToasts() would push into a list nothing renders.
+  const { toasts, pushToast, dismissToast } = useToasts();
   const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
   // Sidebar selections persist through DownloadCenter settings so they
   // survive page switches (and restarts) instead of snapping back to defaults.
@@ -739,7 +779,8 @@ export default function RecordPage({ onOpenSettings }: { onOpenSettings: () => v
         matchesStatus(m, status) &&
         (!q || matchesQuery(m, q, platformLabel(m.url, t)))
     );
-  }, [monitors, query, status]);
+    // t is a real dependency: platformLabel() translates through it.
+  }, [monitors, query, status, t]);
 
   const pipelineSummary = pipelineIds
     .map((id) => {
@@ -820,7 +861,7 @@ export default function RecordPage({ onOpenSettings }: { onOpenSettings: () => v
             </div>
             <div className="divide-y divide-neutral-100 rounded-2xl bg-white shadow-card ring-1 ring-neutral-200 dark:divide-neutral-800 dark:bg-neutral-900 dark:ring-neutral-800">
               {visible.map((m) => (
-                <MonitorCard key={m.id} m={m} onChanged={refresh} />
+                <MonitorCard key={m.id} m={m} onChanged={refresh} pushToast={pushToast} />
               ))}
               {visible.length === 0 && (
                 <p className="px-4 py-6 text-center text-xs text-neutral-400 dark:text-neutral-500">
@@ -895,6 +936,7 @@ export default function RecordPage({ onOpenSettings }: { onOpenSettings: () => v
         <NetworkSection onOpenSettings={onOpenSettings} />
       </ConfigSidebar>
       </div>
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

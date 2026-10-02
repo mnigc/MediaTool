@@ -1,13 +1,9 @@
 import type { PipelineRunTask } from "../workflow/types";
 import { openOutputFolder } from "../lib/engine";
 import { canRevealInFolder } from "../lib/shell";
+import { basename } from "../lib/path";
 import { useI18n } from "../i18n";
 import { FilmIcon, FolderIcon, SpinnerIcon, XIcon } from "./icons";
-
-function basename(p: string): string {
-  const norm = p.replace(/\\/g, "/");
-  return norm.slice(norm.lastIndexOf("/") + 1);
-}
 
 /** Task-center card for a pipeline-center run (workflow page batches). The
  *  run keeps executing when the workflow page is closed; this card is its

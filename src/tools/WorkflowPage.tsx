@@ -13,6 +13,7 @@ import {
 import type { Pipeline } from "../workflow/pipelines";
 import { TOOL_ICONS, VIDEO_EXTS } from "./registry";
 import { defaultParamsFor } from "../lib/defaults";
+import { basename } from "../lib/path";
 import { useConfirm } from "../components/ConfirmDialog";
 import UploadTargetChips from "../components/UploadTargetChips";
 import JobParamsEditor from "./JobParamsEditor";
@@ -26,11 +27,6 @@ const newStepId = () => `step-${++stepCounter}`;
 function isVideo(p: string): boolean {
   const ext = p.replace(/\\/g, "/").split(".").pop()?.toLowerCase() ?? "";
   return VIDEO_EXTS.includes(ext);
-}
-
-function basename(p: string): string {
-  const norm = p.replace(/\\/g, "/");
-  return norm.slice(norm.lastIndexOf("/") + 1);
 }
 
 type NameModal =

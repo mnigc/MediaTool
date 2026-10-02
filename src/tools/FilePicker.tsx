@@ -1,14 +1,10 @@
 import { useEffect, useState } from "react";
 import { pickPaths } from "../lib/shell";
 import { getThumbnail } from "../lib/engine";
+import { basename } from "../lib/path";
 import { useI18n } from "../i18n";
 import { useToasts } from "../hooks/useToasts";
 import type { ToolMeta } from "./registry";
-
-function basename(p: string): string {
-  const norm = p.replace(/\\/g, "/");
-  return norm.slice(norm.lastIndexOf("/") + 1);
-}
 
 export function extOk(path: string, accepts: string[]): boolean {
   const norm = path.replace(/\\/g, "/").toLowerCase();

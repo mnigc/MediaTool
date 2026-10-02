@@ -303,6 +303,9 @@ export interface StartWorkflowResult {
   /** true when the output already existed and the policy was "skip", so
    *  nothing was encoded and the run should be treated as finished. */
   skipped?: boolean;
+  /** The already-existing output file when `skipped` is true (also set on a
+   *  completed merged run's done event, not through here). */
+  output?: string | null;
   /** Non-fatal adjustment the backend made while preparing (remux fallback). */
   note?: string | null;
 }

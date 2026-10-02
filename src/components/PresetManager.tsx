@@ -1,29 +1,17 @@
 import { useState } from "react";
-import type { JobParams, ToolId } from "../types";
 import {
-  hasCustomPreset,
   presetDisplayName,
   removePreset,
   restoreBuiltin,
-  saveBuiltinOverride,
-  saveCustomPreset,
   usePresets,
   type Preset,
 } from "../lib/presets";
 import { defaultParamsFor } from "../lib/defaults";
-import PresetDiffEditor from "./PresetDiffEditor";
+import { PRESET_TOOLS } from "../tools/kinds";
+import { PresetEditForm } from "./PresetEditModal";
 import { useConfirm } from "./ConfirmDialog";
-import Select from "./Select";
 import { XIcon } from "./icons";
 import { useI18n } from "../i18n";
-
-const PRESET_TOOLS: ToolId[] = [
-  "video-compress",
-  "audio-compress",
-  "watermark",
-  "extract-audio",
-  "video-contact",
-];
 
 interface PresetManagerProps {
   open: boolean;
@@ -37,34 +25,23 @@ export default function PresetManager({ open, onClose }: PresetManagerProps) {
   const { confirm, dialog: confirmDialog } = useConfirm();
   const [editing, setEditing] = useState<Preset | null>(null);
   const [isNew, setIsNew] = useState(false);
-  /** Name the edited preset was stored under — set when a rename should move
-   *  (instead of collide with) the existing entry. */
-  const [origName, setOrigName] = useState<string | null>(null);
-  /** The preset's stored params when editing began — the diff editor's
-   *  per-field 恢复 baseline. */
-  const [origParams, setOrigParams] = useState<JobParams>({});
 
   if (!open) return null;
 
   const startNew = () => {
     const toolId = PRESET_TOOLS[0];
-    const params = defaultParamsFor(toolId);
     setEditing({
       name: "",
       toolId,
-      params,
+      params: defaultParamsFor(toolId),
       builtin: false,
     });
     setIsNew(true);
-    setOrigName(null);
-    setOrigParams(params);
   };
 
   const startEdit = (p: Preset) => {
     setEditing({ ...p });
     setIsNew(false);
-    setOrigName(p.name);
-    setOrigParams(p.params);
   };
 
   const handleDelete = async (p: Preset) => {
@@ -79,41 +56,8 @@ export default function PresetManager({ open, onClose }: PresetManagerProps) {
     if (ok) removePreset(p.toolId, p.name);
   };
 
-  const handleSave = async () => {
-    if (!editing) return;
-    const name = editing.name.trim();
-    if (!name) return;
-    if (editing.builtin) {
-      saveBuiltinOverride(editing.toolId, name, editing.params);
-    } else {
-      if (hasCustomPreset(editing.toolId, name) && name !== origName) {
-        const ok = await confirm({
-          title: t("pm.conflictTitle"),
-          message: t("pm.conflictMsg", { name }),
-          confirmLabel: t("pm.save"),
-          cancelLabel: t("confirm.cancel"),
-          danger: true,
-        });
-        if (!ok) return;
-      }
-      saveCustomPreset(editing.toolId, origName ?? name, { name, params: editing.params });
-    }
-    setEditing(null);
-  };
-
   const handleRestore = (p: Preset) => {
     restoreBuiltin(p.toolId, p.name);
-  };
-
-  const handleToolChange = (toolId: ToolId) => {
-    if (!editing) return;
-    const params = defaultParamsFor(toolId);
-    setEditing({ ...editing, toolId, params });
-    setOrigParams(params);
-  };
-
-  const handleParamsChange = (p: JobParams) => {
-    if (editing) setEditing({ ...editing, params: p });
   };
 
   return (
@@ -138,14 +82,13 @@ export default function PresetManager({ open, onClose }: PresetManagerProps) {
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           {editing ? (
-            <PresetEditor
+            /* The editor form lives in PresetEditModal.tsx — shared verbatim
+               with the presets page. key resets its per-open baseline state. */
+            <PresetEditForm
+              key={isNew ? "new" : `${editing.toolId}::${editing.name}`}
               preset={editing}
-              original={origParams}
               isNew={isNew}
-              onNameChange={(name) => setEditing({ ...editing, name })}
-              onToolChange={handleToolChange}
-              onParamsChange={handleParamsChange}
-              onSave={handleSave}
+              onSaved={() => setEditing(null)}
               onCancel={() => setEditing(null)}
             />
           ) : (
@@ -226,90 +169,6 @@ export default function PresetManager({ open, onClose }: PresetManagerProps) {
         </div>
       </div>
       {confirmDialog}
-    </div>
-  );
-}
-
-interface PresetEditorProps {
-  preset: Preset;
-  original: JobParams;
-  isNew: boolean;
-  onNameChange: (name: string) => void;
-  onToolChange: (toolId: ToolId) => void;
-  onParamsChange: (p: JobParams) => void;
-  onSave: () => void;
-  onCancel: () => void;
-}
-
-function PresetEditor({
-  preset,
-  original,
-  isNew,
-  onNameChange,
-  onToolChange,
-  onParamsChange,
-  onSave,
-  onCancel,
-}: PresetEditorProps) {
-  const { t } = useI18n();
-  return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3">
-        <label className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
-            {t("pm.name")}
-          </span>
-          <input
-            value={preset.builtin ? presetDisplayName(preset, t) : preset.name}
-            onChange={(e) => onNameChange(e.target.value)}
-            placeholder={t("pm.presetName")}
-            disabled={preset.builtin}
-            className="rounded-lg border border-neutral-300 bg-white px-2 py-1 text-sm text-neutral-700 shadow-sm focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-100 disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
-          />
-        </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
-            {t("pm.toolType")}
-          </span>
-          <Select
-            value={preset.toolId}
-            onChange={(v) => onToolChange(v as ToolId)}
-            disabled={!isNew}
-            className="w-full"
-            triggerClassName="text-sm py-1.5"
-          >
-            {PRESET_TOOLS.map((toolId) => (
-              <option key={toolId} value={toolId}>
-                {t(`tool.${toolId}.name`)}
-              </option>
-            ))}
-          </Select>
-        </label>
-      </div>
-
-      <div className="rounded-xl border border-neutral-100 bg-neutral-50/40 p-3 dark:border-neutral-700/60 dark:bg-neutral-800/30">
-        <PresetDiffEditor
-          toolId={preset.toolId}
-          params={preset.params}
-          original={original}
-          onChange={onParamsChange}
-        />
-      </div>
-
-      <div className="flex justify-end gap-2">
-          <button
-            onClick={onCancel}
-            className="rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-sm font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
-          >
-            {t("pm.cancel")}
-          </button>
-          <button
-            onClick={onSave}
-            className="rounded-lg bg-brand-500 px-4 py-1.5 text-sm font-medium text-white shadow-sm transition hover:bg-brand-600 dark:bg-brand-600 dark:hover:bg-brand-700"
-          >
-            {t("pm.save")}
-          </button>
-      </div>
     </div>
   );
 }

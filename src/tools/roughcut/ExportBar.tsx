@@ -4,7 +4,7 @@
 //! keyframe-aligned cuts, no per-clip audio/speed tweaks, and the concat
 //! compatibility pre-check.
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useI18n } from "../../i18n";
 import { useTasks } from "../../contexts/TaskCenter";
 import Select from "../../components/Select";
@@ -22,17 +22,17 @@ const QUALITY_TIERS: Array<{ id: number; key: string }> = [
   { id: CRF.compact, key: "compact" },
 ];
 
-export default function ExportBar({
+// memo: the playhead state lives in the workbench, so without this the whole
+// encoding form re-renders at 60fps during playback for nothing.
+const ExportBar = memo(function ExportBar({
   clips,
   sources,
   gpuInfo,
-  disabled,
   onExport,
 }: {
   clips: RoughCutClip[];
   sources: Map<string, SourceInfo>;
   gpuInfo: GpuInfo;
-  disabled: boolean;
   onExport: (params: RoughCutParams) => void;
 }) {
   const { t } = useI18n();
@@ -193,7 +193,7 @@ export default function ExportBar({
         <button
           type="button"
           onClick={exportNow}
-          disabled={disabled || clips.length === 0}
+          disabled={clips.length === 0}
           className="shrink-0 rounded-lg bg-brand-500 px-4 py-1.5 text-sm font-medium text-white shadow-sm transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-brand-600"
         >
           {t("rc.export")}
@@ -260,4 +260,6 @@ export default function ExportBar({
       )}
     </div>
   );
-}
+});
+
+export default ExportBar;

@@ -3,6 +3,7 @@ import { formatBytes, fsList } from "../lib/engine";
 import { isDesktop, registerFilePicker, type PickOptions } from "../lib/shell";
 import type { DirListing, FsEntry } from "../types";
 import { useI18n } from "../i18n";
+import { friendlyError } from "../lib/errors";
 import { Button, inputCls } from "./ui";
 import {
   CheckIcon,
@@ -80,7 +81,7 @@ function FileBrowser({ options, onDone }: { options: PickOptions; onDone: (paths
     setError(null);
     fsList(path)
       .then((l) => !cancelled && setListing(l))
-      .catch((e) => !cancelled && setError(String(e)))
+      .catch((e) => !cancelled && setError(friendlyError(String(e), t)))
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
@@ -105,6 +106,15 @@ function FileBrowser({ options, onDone }: { options: PickOptions; onDone: (paths
       return;
     }
     setSelected([entry.path]);
+  };
+
+  /** Enter another directory (sub folder, parent, roots). In single-select the
+   *  previous directory's pick is dropped: it is no longer on screen, yet the
+   *  confirm button would still hand it to the caller. Multi-select keeps its
+   *  deliberate cross-directory accumulation. */
+  const navigate = (next: string) => {
+    if (!options.multiple) setSelected([]);
+    setPath(next);
   };
 
   const entries = listing?.entries ?? [];
@@ -137,12 +147,12 @@ function FileBrowser({ options, onDone }: { options: PickOptions; onDone: (paths
 
         {/* Where we are, and the two ways out of it. */}
         <div className="mt-3 flex items-center gap-2">
-          <Button size="sm" onClick={() => setPath("")} title={t("fb.roots")}>
+          <Button size="sm" onClick={() => navigate("")} title={t("fb.roots")}>
             <GridIcon className="h-3.5 w-3.5" />
           </Button>
           <Button
             size="sm"
-            onClick={() => setPath(listing?.parent ?? "")}
+            onClick={() => navigate(listing?.parent ?? "")}
             disabled={!listing?.parent}
             title={t("fb.up")}
           >
@@ -189,7 +199,7 @@ function FileBrowser({ options, onDone }: { options: PickOptions; onDone: (paths
                       // A directory is always entered — in folder-picking mode
                       // that is how you reach the folder you meant to choose.
                       onClick={() =>
-                        e.isDir ? setPath(e.path) : toggle(e)
+                        e.isDir ? navigate(e.path) : toggle(e)
                       }
                       disabled={disabled}
                       className={`flex w-full items-center gap-2.5 border-b border-neutral-100 px-3 py-2 text-left text-sm last:border-b-0 dark:border-neutral-800 ${

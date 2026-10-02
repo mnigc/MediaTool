@@ -1,23 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../i18n";
 import {
-  hasCustomPreset,
   presetDisplayName,
   presetSummary,
   removePreset,
   restoreBuiltin,
-  saveBuiltinOverride,
-  saveCustomPreset,
   usePresets,
   type Preset,
 } from "../lib/presets";
 import { defaultParamsFor } from "../lib/defaults";
-import PresetDiffEditor from "../components/PresetDiffEditor";
 import { useConfirm } from "../components/ConfirmDialog";
-import Select from "../components/Select";
-import { XIcon } from "../components/icons";
-import type { JobParams, ToolId } from "../types";
-import type { WorkbenchId } from "./registry";
+import PresetEditModal from "../components/PresetEditModal";
+import { isWorkbenchId, type WorkbenchId } from "./registry";
+import type { PresetToolId } from "./kinds";
 
 interface Group {
   toolId: string;
@@ -25,7 +20,7 @@ interface Group {
 }
 
 // Tools that own presets, in display order. All support the param editor.
-const ORDER: string[] = [
+const ORDER: PresetToolId[] = [
   "video-compress",
   "audio-compress",
   "watermark",
@@ -41,12 +36,6 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
   const { confirm, dialog: confirmDialog } = useConfirm();
   const [editing, setEditing] = useState<Preset | null>(null);
   const [isNew, setIsNew] = useState(false);
-  /** Name the edited preset was stored under — set when a rename should move
-   *  (instead of collide with) the existing entry. */
-  const [origName, setOrigName] = useState<string | null>(null);
-  /** The preset's stored params when editing began — the diff editor's
-   *  per-field 恢复 baseline. */
-  const [origParams, setOrigParams] = useState<JobParams>({});
   const [activeSec, setActiveSec] = useState<string>("");
   // Set while a nav click scrolls to its section, so the observer doesn't
   // bounce the highlight back to the section still in view mid-scroll.
@@ -125,51 +114,13 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
 
   const startNew = () => {
     const toolId = ORDER[0];
-    const params = defaultParamsFor(toolId as ToolId);
-    setEditing({ name: "", toolId, params, builtin: false });
+    setEditing({ name: "", toolId, params: defaultParamsFor(toolId), builtin: false });
     setIsNew(true);
-    setOrigName(null);
-    setOrigParams(params);
   };
 
   const startEdit = (p: Preset) => {
     setEditing({ ...p });
     setIsNew(false);
-    setOrigName(p.name);
-    setOrigParams(p.params);
-  };
-
-  const handleToolChange = (toolId: string) => {
-    if (!editing) return;
-    const params = defaultParamsFor(toolId as ToolId);
-    setEditing({ ...editing, toolId, params });
-    setOrigParams(params);
-  };
-
-  const handleParamsChange = (p: JobParams) => {
-    if (editing) setEditing({ ...editing, params: p });
-  };
-
-  const handleSave = async () => {
-    if (!editing) return;
-    const name = editing.name.trim();
-    if (!name) return;
-    if (editing.builtin) {
-      saveBuiltinOverride(editing.toolId, name, editing.params);
-    } else {
-      if (hasCustomPreset(editing.toolId, name) && name !== origName) {
-        const ok = await confirm({
-          title: t("pm.conflictTitle"),
-          message: t("pm.conflictMsg", { name }),
-          confirmLabel: t("pm.save"),
-          cancelLabel: t("confirm.cancel"),
-          danger: true,
-        });
-        if (!ok) return;
-      }
-      saveCustomPreset(editing.toolId, origName ?? name, { name, params: editing.params });
-    }
-    setEditing(null);
   };
 
   return (
@@ -227,11 +178,15 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
                     key={`${g.toolId}::${p.name}`}
                     role={onOpenTool ? "button" : undefined}
                     tabIndex={onOpenTool ? 0 : undefined}
-                    onClick={() => onOpenTool?.(g.toolId as WorkbenchId)}
+                    onClick={() => {
+                      // Runtime guard instead of a cast: stored tool ids are
+                      // plain strings and must not reach the router unchecked.
+                      if (isWorkbenchId(g.toolId)) onOpenTool?.(g.toolId);
+                    }}
                     onKeyDown={(e) => {
                       if (onOpenTool && (e.key === "Enter" || e.key === " ")) {
                         e.preventDefault();
-                        onOpenTool(g.toolId as WorkbenchId);
+                        if (isWorkbenchId(g.toolId)) onOpenTool(g.toolId);
                       }
                     }}
                     className="group flex items-center gap-2 px-3 py-2.5 transition hover:bg-neutral-50 dark:hover:bg-neutral-800/40"
@@ -315,99 +270,17 @@ export default function PresetsPage({ onOpenTool }: { onOpenTool?: (tool: Workbe
       </div>
 
       {editing && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setEditing(null)} />
-          <div className="relative z-10 flex max-h-[85vh] w-full min-w-0 max-w-lg flex-col rounded-2xl bg-white shadow-2xl ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-700 slide-up">
-            <div className="flex items-center justify-between border-b border-neutral-100 px-5 py-4 dark:border-neutral-700/60">
-              <h2 className="break-words text-base font-semibold text-neutral-800 dark:text-neutral-100">
-                {isNew ? t("pm.new") : t("pm.edit")}
-              </h2>
-              <button
-                onClick={() => setEditing(null)}
-                className="rounded-lg p-1.5 text-neutral-300 transition hover:bg-neutral-100 hover:text-neutral-600 dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-neutral-300"
-                aria-label={t("pm.close")}
-              >
-                <XIcon className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-3">
-                  <label className="flex flex-col gap-1">
-                    <span className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
-                      {t("pm.name")}
-                    </span>
-                    <input
-                      value={editing.builtin ? presetDisplayName(editing, t) : editing.name}
-                      onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-                      placeholder={t("pm.presetName")}
-                      disabled={editing.builtin}
-                      className="rounded-lg border border-neutral-300 bg-white px-2 py-1 text-sm text-neutral-700 shadow-sm focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-100 disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1">
-                    <span className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
-                      {t("pm.toolType")}
-                    </span>
-                    <Select
-                      value={editing.toolId}
-                      onChange={(v) => handleToolChange(v)}
-                      disabled={!isNew}
-                      className="w-full"
-                      triggerClassName="text-sm py-1.5"
-                    >
-                      {ORDER.map((toolId) => (
-                        <option key={toolId} value={toolId}>
-                          {t(`tool.${toolId}.name`)}
-                        </option>
-                      ))}
-                    </Select>
-                  </label>
-                </div>
-
-                <div className="rounded-xl border border-neutral-100 bg-neutral-50/40 p-3 dark:border-neutral-700/60 dark:bg-neutral-800/30">
-                  <PresetDiffEditor
-                    toolId={editing.toolId}
-                    params={editing.params}
-                    original={origParams}
-                    onChange={handleParamsChange}
-                  />
-                </div>
-
-                {editing.builtin && editing.modified && (
-                  <div className="flex items-center justify-end gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        restore(editing.toolId, editing.name);
-                        setEditing(null);
-                      }}
-                      className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-1.5 text-sm font-medium text-brand-600 transition hover:bg-brand-100 dark:border-brand-800 dark:bg-brand-950/30 dark:text-brand-300 dark:hover:bg-brand-900/50"
-                    >
-                      {t("pm.restore")}
-                    </button>
-                  </div>
-                )}
-
-                <div className="flex justify-end gap-2">
-                  <button
-                    onClick={() => setEditing(null)}
-                    className="rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-sm font-medium text-neutral-600 transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
-                  >
-                    {t("pm.cancel")}
-                  </button>
-                  <button
-                    onClick={handleSave}
-                    className="rounded-lg bg-brand-500 px-4 py-1.5 text-sm font-medium text-white shadow-sm transition hover:bg-brand-600 dark:bg-brand-600 dark:hover:bg-brand-700"
-                  >
-                    {t("pm.save")}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <PresetEditModal
+          key={isNew ? "new" : `${editing.toolId}::${editing.name}`}
+          preset={editing}
+          isNew={isNew}
+          onSaved={() => setEditing(null)}
+          onCancel={() => setEditing(null)}
+          onRestore={(p) => {
+            restore(p.toolId, p.name);
+            setEditing(null);
+          }}
+        />
       )}
       {confirmDialog}
     </div>

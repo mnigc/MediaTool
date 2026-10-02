@@ -4,9 +4,11 @@
 //! restart. Export submits through the shared task queue — progress, cancel
 //! and output handling come for free from the existing job machinery.
 
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { canRevealInFolder, pickPaths } from "../../lib/shell";
 import { getThumbnail, openOutputFolder, probeFile } from "../../lib/engine";
+import { friendlyError } from "../../lib/errors";
+import { basename } from "../../lib/path";
 import { useI18n } from "../../i18n";
 import { useTasks } from "../../contexts/TaskCenter";
 import { useConfirm } from "../../components/ConfirmDialog";
@@ -50,10 +52,6 @@ import ExportBar from "./ExportBar";
 
 const TOOL = "roughcut" as const;
 
-function sourceName(path: string): string {
-  return path.split(/[\\/]/).pop() ?? path;
-}
-
 // 0.05 px/s = one pixel per 20s, so even hours-long footage fits the viewport
 // without scrolling; the ruler coarsens its ticks (up to 30/60-min) to match.
 const ZOOM_MIN = 0.05;
@@ -79,6 +77,20 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
   const { t } = useI18n();
   const tasks = useTasks();
   const { confirm, dialog } = useConfirm();
+  // useConfirm doesn't expose its open state, so in-flight dialogs are counted
+  // here: the global keyboard handler must not split/delete clips behind a
+  // modal that is asking its question.
+  const pendingConfirms = useRef(0);
+  /** `confirm` plus the modal-open bookkeeping the keyboard guard reads. */
+  const askConfirm = useCallback(
+    (opts: Parameters<typeof confirm>[0]) => {
+      pendingConfirms.current += 1;
+      return confirm(opts).finally(() => {
+        pendingConfirms.current -= 1;
+      });
+    },
+    [confirm]
+  );
   const meta = getTool(TOOL)!;
   const accepts = meta.accepts;
 
@@ -233,14 +245,20 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
     const src = sources.get(path);
     // A source whose probe never came back has no length to cut a clip from.
     if (!src || src.durationSecs <= 0) return;
-    edit((cs) => [...cs, clipForSource(src)]);
-    setSelected(clipsRef.current.length);
+    edit((cs) => {
+      const next = [...cs, clipForSource(src)];
+      // Select the new clip by its index in the array actually being dispatched:
+      // reading the render-time length lagged one click behind on rapid clicks
+      // and left the selection on the previous clip.
+      setSelected(next.length - 1);
+      return next;
+    });
   };
 
   const removeSource = async (path: string) => {
     const clipsOfSource = clips.filter((c) => c.path === path).length;
     if (clipsOfSource > 0) {
-      const ok = await confirm({
+      const ok = await askConfirm({
         title: t("rc.removeSourceTitle"),
         message: t("rc.removeSourceMsg", { n: clipsOfSource }),
         danger: true,
@@ -290,7 +308,7 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
     // `reset` drops the undo stack and the autosave overwrites the restored
     // timeline, so unsaved work is gone for good — ask before replacing it.
     if (unsavedEdits) {
-      const ok = await confirm({
+      const ok = await askConfirm({
         title: t("rc.projectOpenTitle"),
         message: t("rc.projectOpenMsg", { name: p.name }),
         danger: true,
@@ -334,7 +352,7 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
   };
 
   const dropProject = async (p: RoughCutProject) => {
-    const ok = await confirm({
+    const ok = await askConfirm({
       title: t("rc.projectDeleteTitle"),
       message: t("rc.projectDeleteMsg", { name: p.name }),
       danger: true,
@@ -365,24 +383,32 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
   };
 
   const selectedClip = selected !== null ? clips[selected] : null;
-  const patchSelected = (patch: Partial<RoughCutClip>, tag?: string) => {
-    if (selected === null) return;
-    const idx = selected;
-    edit(
-      (cs) => (cs[idx] ? cs.map((c, i) => (i === idx ? { ...c, ...patch } : c)) : cs),
-      tag
-    );
-  };
+  // useCallback (stable references): ClipInspector is memo'd, so these must not
+  // change identity every render or the memo would be pointless.
+  const patchSelected = useCallback(
+    (patch: Partial<RoughCutClip>, tag?: string) => {
+      if (selected === null) return;
+      const idx = selected;
+      edit(
+        (cs) => (cs[idx] ? cs.map((c, i) => (i === idx ? { ...c, ...patch } : c)) : cs),
+        tag
+      );
+    },
+    [selected, edit]
+  );
 
   /** Move the selected clip one slot along the track (see Timeline's note on why
    *  reordering is not a drag). */
-  const moveSelected = (delta: number) => {
-    if (selected === null) return;
-    const to = selected + delta;
-    if (to < 0 || to >= clips.length) return;
-    edit((cs) => moveClip(cs, selected, to));
-    setSelected(to);
-  };
+  const moveSelected = useCallback(
+    (delta: number) => {
+      if (selected === null) return;
+      const to = selected + delta;
+      if (to < 0 || to >= clips.length) return;
+      edit((cs) => moveClip(cs, selected, to));
+      setSelected(to);
+    },
+    [selected, clips.length, edit]
+  );
 
   // Keyboard: space play/pause, S split, Del remove, arrows step, Ctrl+Z/Y.
   // The body reads fresh state through a ref so the listener is attached once
@@ -391,6 +417,18 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
   onKeyRef.current = (e: KeyboardEvent) => {
     const el = e.target as HTMLElement | null;
     if (el && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName)) return;
+    // Guard 1: a modal owns the keyboard — split/delete firing behind the
+    // confirm dialog edited clips the user couldn't see.
+    if (pendingConfirms.current > 0) return;
+    // Guard 2: auto-repeat — holding S/Delete/Space kept splitting, removing
+    // or flickering playback. Arrows and undo stay repeatable on purpose
+    // (held-key scrubbing / multi-step undo is useful).
+    if (
+      e.repeat &&
+      (e.key === " " || e.key === "s" || e.key === "S" || e.key === "Delete" || e.key === "Backspace")
+    ) {
+      return;
+    }
     if (e.key === " ") {
       e.preventDefault();
       setPlaying((p) => !p);
@@ -419,7 +457,11 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
 
   /* ── export ──────────────────────────────────────────────────── */
 
-  const doExport = (params: RoughCutParams) => void tasks.startRoughCut(params);
+  // Stable reference so the memo'd ExportBar doesn't re-render every frame.
+  const doExport = useCallback(
+    (params: RoughCutParams) => void tasks.startRoughCut(params),
+    [tasks]
+  );
 
   const job = useMemo(() => {
     return tasks.jobs
@@ -445,6 +487,20 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
     (activeIdx !== undefined ? sources.get(clips[activeIdx]?.path ?? "") : undefined) ??
     (sources.size === 1 ? Array.from(sources.values())[0] : undefined) ??
     null;
+
+  // Stable reference so the memo'd Timeline's trim handler doesn't change
+  // identity every render.
+  const onTrimClip = useCallback(
+    (idx: number, edge: "in" | "out", secs: number) =>
+      edit((cs, ss) => trimEdge(cs, ss, idx, edge, secs), `trim:${idx}:${edge}`),
+    [edit]
+  );
+
+  // Stable load-error reporter for the Player.
+  const showLoadError = useCallback(
+    (failed: boolean) => setError(failed ? t("rc.previewError") : null),
+    [t]
+  );
 
   return (
     <div className="mx-auto flex max-w-[1400px] flex-col gap-2.5">
@@ -504,7 +560,7 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
                     )}
                     <span className="min-w-0 flex-1 leading-tight">
                       <span className="block truncate text-[11px] text-neutral-700 dark:text-neutral-200">
-                        {sourceName(s.path)}
+                        {basename(s.path)}
                       </span>
                       <span className="text-[10px] tabular-nums text-neutral-400">
                         {formatTime(s.durationSecs)}
@@ -613,7 +669,7 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
                   muted={muted}
                   onPlayhead={setPlayhead}
                   onPlayState={setPlaying}
-                  onLoadError={(f) => setError(f ? t("rc.previewError") : null)}
+                  onLoadError={showLoadError}
                 />
                 {clips.length === 0 && (
                   <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-1 text-center">
@@ -681,9 +737,7 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
             selected={selected}
             onSeek={seek}
             onSelect={setSelected}
-            onTrim={(idx, edge, secs) =>
-              edit((cs, ss) => trimEdge(cs, ss, idx, edge, secs), `trim:${idx}:${edge}`)
-            }
+            onTrim={onTrimClip}
             header={
               <>
                 <TransportButton label={t("rc.split")} onClick={doSplit} disabled={!canEdit}>
@@ -766,7 +820,7 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
               )
             )}
 
-            <ExportBar clips={clips} sources={sources} gpuInfo={tasks.gpuInfo} disabled={false} onExport={doExport} />
+            <ExportBar clips={clips} sources={sources} gpuInfo={tasks.gpuInfo} onExport={doExport} />
 
             {/* export status */}
             {job && (
@@ -833,7 +887,9 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
                   </div>
                 )}
                 {job.phase === "error" && (
-                  <span className="text-sm text-error-600 dark:text-error-400">{job.error}</span>
+                  <span className="text-sm text-error-600 dark:text-error-400">
+                    {friendlyError(job.error, t)}
+                  </span>
                 )}
               </div>
             )}
@@ -846,8 +902,10 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
 }
 
 /** The selected clip's parameters, as a section of the card under the timeline.
- *  The fields share grid columns so labels and controls line up. */
-function ClipInspector({
+ *  The fields share grid columns so labels and controls line up.
+ *  memo: the playhead lives in the workbench, so playback would otherwise
+ *  re-render this whole form at 60fps. */
+const ClipInspector = memo(function ClipInspector({
   clip,
   index,
   count,
@@ -868,7 +926,7 @@ function ClipInspector({
     <div className="flex flex-col gap-2 px-3 py-2.5">
       <div className="flex items-center gap-1.5">
         <span className="min-w-0 flex-1 truncate text-xs font-semibold text-neutral-700 dark:text-neutral-200">
-          {t("rc.clipN", { n: index + 1 })} · {sourceName(clip.path)}
+          {t("rc.clipN", { n: index + 1 })} · {basename(clip.path)}
         </span>
         {/* position in the track — what the move buttons step through */}
         <span className="shrink-0 text-[10px] tabular-nums text-neutral-400 dark:text-neutral-500">
@@ -969,12 +1027,13 @@ function ClipInspector({
       </div>
     </div>
   );
-}
+});
 
 /** The file being previewed, described in full: the same report the 格式体检
  *  tool renders, served from the concat check's probe cache so a source on the
- *  timeline costs no extra ffprobe. Scrolls inside the player's height. */
-function SourceMeta({ path }: { path: string | null }) {
+ *  timeline costs no extra ffprobe. Scrolls inside the player's height.
+ *  memo: playback only moves the playhead, the inspected file doesn't change. */
+const SourceMeta = memo(function SourceMeta({ path }: { path: string | null }) {
   const { t } = useI18n();
   const [report, setReport] = useState<MediaReport | null>(null);
   const [failed, setFailed] = useState(false);
@@ -1011,7 +1070,7 @@ function SourceMeta({ path }: { path: string | null }) {
             className="min-w-0 truncate text-xs text-neutral-600 dark:text-neutral-400"
             title={path ?? undefined}
           >
-            {path ? sourceName(path) : "—"}
+            {path ? basename(path) : "—"}
           </span>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
@@ -1034,7 +1093,7 @@ function SourceMeta({ path }: { path: string | null }) {
       </div>
     </div>
   );
-}
+});
 
 /** The encoding rationale is a footnote, so it hides behind an ⓘ on the title
  *  rather than costing the workbench a permanent line below the fold. */

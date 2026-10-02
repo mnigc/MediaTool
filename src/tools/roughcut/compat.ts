@@ -47,18 +47,35 @@ interface MediaReportLike {
 const cmp = (a: unknown, b: unknown) => String(a ?? "") !== String(b ?? "");
 
 // Session-lifetime probe cache: the auto-check re-runs on every source-set
-// change, and source files don't change underneath a running session.
-const reportCache = new Map<string, MediaReport>();
+// change, and source files don't change underneath a running session. The
+// promise (not the result) is cached so concurrent probes of the same path
+// dedupe into one inspectMedia call; the cap evicts the least recently used
+// so a long session can't grow the map without bound.
+const REPORT_CACHE_MAX = 12;
+const reportCache = new Map<string, Promise<MediaReport>>();
 
 /** The full ffprobe report for one source, served from the cache the
  *  compatibility check already fills — so the spec panel costs no extra probe
  *  for anything on the timeline. */
 export async function inspectCached(path: string): Promise<MediaReport> {
   const cached = reportCache.get(path);
-  if (cached) return cached;
-  const report = await inspectMedia(path);
-  reportCache.set(path, report);
-  return report;
+  if (cached) {
+    // Re-insert to refresh recency order (Map iterates oldest first).
+    reportCache.delete(path);
+    reportCache.set(path, cached);
+    return cached;
+  }
+  const p = inspectMedia(path).catch((e) => {
+    // A failed probe must not squat on the key: the next call retries.
+    reportCache.delete(path);
+    throw e;
+  });
+  reportCache.set(path, p);
+  if (reportCache.size > REPORT_CACHE_MAX) {
+    const oldest = reportCache.keys().next();
+    if (!oldest.done) reportCache.delete(oldest.value);
+  }
+  return p;
 }
 
 /** Compare every unique source against the first clip's source. Cheap fields

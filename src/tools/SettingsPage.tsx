@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ComponentType } from "react";
 import { isDesktop, pickPaths } from "../lib/shell";
 import { useI18n } from "../i18n";
+import { friendlyError } from "../lib/errors";
 import { LOCALES, LOCALE_NAMES } from "../i18n/translations";
 import { useConfirm } from "../components/ConfirmDialog";
 import { cacheClean, cacheReport, closeActionGet, closeActionSet, cookiesList, cookiesRemove, cookiesSet, formatBytes } from "../lib/engine";
@@ -255,7 +256,7 @@ function PlatformCookiesSection() {
       setEditingOf(null);
       refresh();
     } catch (e) {
-      setError(String(e));
+      setError(friendlyError(String(e), t));
     } finally {
       setBusy(false);
     }

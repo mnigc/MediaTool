@@ -1,6 +1,7 @@
 import type { UploadTargetKind, UploadTask } from "../types";
 import { formatBytes, openOutputFolder } from "../lib/engine";
 import { canRevealInFolder, openExternal } from "../lib/shell";
+import { basename } from "../lib/path";
 import {
   CheckIcon,
   UploadIcon,
@@ -74,9 +75,9 @@ export default function UploadCard({ task, onCancel, onRetry, onRemove }: Props)
             </span>
             <span
               className="truncate text-sm font-medium text-neutral-900 dark:text-neutral-100"
-              title={task.filePaths.map(baseName).join("\n")}
+              title={task.filePaths.map(basename).join("\n")}
             >
-              {baseName(task.filePaths[0] ?? "")}
+              {basename(task.filePaths[0] ?? "")}
             </span>
             {task.filePaths.length > 1 && (
               <span className="shrink-0 text-xs text-neutral-400 dark:text-neutral-500">
@@ -202,9 +203,4 @@ export default function UploadCard({ task, onCancel, onRetry, onRemove }: Props)
       )}
     </div>
   );
-}
-
-function baseName(p: string): string {
-  const norm = p.replace(/\\/g, "/");
-  return norm.slice(norm.lastIndexOf("/") + 1);
 }

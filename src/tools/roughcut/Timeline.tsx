@@ -7,7 +7,7 @@
 //! HTML5 drag and drop in the desktop build. The horizontal drag math is all
 //! "pixels / pxPerSec → seconds".
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { getFilmstrip } from "../../lib/engine";
 import { MuteIcon } from "../../components/icons";
 import type { RoughCutClip } from "../../types";
@@ -21,10 +21,44 @@ import {
   type SourceInfo,
 } from "./model";
 
-/** One fetch per source, shared by every clip cut from it. */
-const stripCache = new Map<string, string[]>();
+/** Cache capacity in sources; beyond that the least recently used strip is
+ *  dropped so a long session can't grow the map without bound. */
+const STRIP_CACHE_MAX = 12;
 
-function Filmstrip({
+/** One fetch per source, shared by every clip cut from it. The promise (not
+ *  the result) is cached so several clips of one source mounting in the same
+ *  frame dedupe into a single getFilmstrip call instead of racing duplicates. */
+const stripCache = new Map<string, Promise<string[]>>();
+
+function loadStrip(path: string, sourceDur: number): Promise<string[]> {
+  const cached = stripCache.get(path);
+  if (cached) {
+    // Re-insert to refresh recency order (Map iterates oldest first).
+    stripCache.delete(path);
+    stripCache.set(path, cached);
+    return cached;
+  }
+  const p = getFilmstrip(path, 24, 320, sourceDur > 0 ? sourceDur : null)
+    .then((urls) => {
+      // An empty extraction is no strip at all — forget it so a later mount
+      // can retry once the source has a real duration.
+      if (urls.length === 0) stripCache.delete(path);
+      return urls;
+    })
+    .catch((e) => {
+      // Never let a failed fetch squat on the key: the next mount must retry.
+      stripCache.delete(path);
+      throw e;
+    });
+  stripCache.set(path, p);
+  if (stripCache.size > STRIP_CACHE_MAX) {
+    const oldest = stripCache.keys().next();
+    if (!oldest.done) stripCache.delete(oldest.value);
+  }
+  return p;
+}
+
+const Filmstrip = memo(function Filmstrip({
   path,
   sourceDur,
   startTime,
@@ -37,15 +71,12 @@ function Filmstrip({
   speed: number;
   pxPerSec: number;
 }) {
-  const [frames, setFrames] = useState<string[] | null>(() => stripCache.get(path) ?? null);
+  const [frames, setFrames] = useState<string[] | null>(null);
   useEffect(() => {
-    if (stripCache.has(path)) return;
     let alive = true;
-    getFilmstrip(path, 24, 320, sourceDur > 0 ? sourceDur : null)
+    loadStrip(path, sourceDur)
       .then((urls) => {
-        if (urls.length === 0) return;
-        stripCache.set(path, urls);
-        if (alive) setFrames(urls);
+        if (alive && urls.length > 0) setFrames(urls);
       })
       .catch(() => {});
     return () => {
@@ -78,11 +109,11 @@ function Filmstrip({
       </div>
     </div>
   );
-}
+});
 
 const RULER_STEPS = [0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600];
 
-export default function Timeline({
+const Timeline = memo(function Timeline({
   clips,
   sources,
   playhead,
@@ -238,7 +269,10 @@ export default function Timeline({
                 const name = clip.path.split(/[\\/]/).pop() ?? clip.path;
                 return (
                   <div
-                    key={`${clip.path}-${clip.startTime}-${i}`}
+                    // Index key only: baking startTime into the key made every
+                    // trim-drag frame unmount and remount the clip subtree
+                    // (filmstrip imgs included) instead of updating in place.
+                    key={i}
                     data-clip={i}
                     className={`absolute bottom-0 top-1 overflow-hidden ring-1 transition-shadow ${
                       selected === i
@@ -293,4 +327,6 @@ export default function Timeline({
       </div>
     </div>
   );
-}
+});
+
+export default Timeline;

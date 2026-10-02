@@ -4,6 +4,8 @@ import JobParamsEditor from "../tools/JobParamsEditor";
 import { getThumbnail } from "../lib/engine";
 import { estimateOutputSize } from "../lib/estimate";
 import { friendlyError } from "../lib/errors";
+import { basename } from "../lib/path";
+import PipelineMiniProgress from "./PipelineMiniProgress";
 import {
   CheckIcon,
   CopyIcon,
@@ -63,11 +65,6 @@ const statusClass = (phase: Job["phase"]): string => {
     default: return "status-bar-cancelled";
   }
 };
-
-function basename(p: string): string {
-  const norm = p.replace(/\\/g, "/");
-  return norm.slice(norm.lastIndexOf("/") + 1);
-}
 
 function formatEta(seconds: number, t: (key: string, vars?: Record<string, string | number>) => string): string {
   if (!isFinite(seconds) || seconds <= 0) return "";
@@ -148,6 +145,15 @@ export default function JobCard({
   const [thumb, setThumb] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [showLog, setShowLog] = useState(false);
+  // ETA is derived from Date.now() at render time; without a re-render it
+  // froze until the next progress event and then jumped. Tick once a second
+  // while running only.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!isRunning) return;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [isRunning]);
 
   const copyText = async (text: string) => {
     try {
@@ -174,6 +180,10 @@ export default function JobCard({
   useEffect(() => {
     let cancelled = false;
     if (job.info.mediaType === "image" || job.info.mediaType === "video") {
+      // Drop the old frame first: when the probe lands after the first grab
+      // (durationSecs flips from null to real) that grab is often a black
+      // frame, and the old image must not linger while the better one loads.
+      setThumb(null);
       getThumbnail(job.info.path, job.info.mediaType, job.info.durationSecs ?? null)
         .then((t) => {
           if (!cancelled) setThumb(t);
@@ -183,7 +193,7 @@ export default function JobCard({
     return () => {
       cancelled = true;
     };
-  }, [job.info.path, job.info.mediaType]);
+  }, [job.info.path, job.info.mediaType, job.info.durationSecs]);
 
   const savings =
     job.outputSize != null && job.info.sizeBytes && job.info.sizeBytes > 0
@@ -207,6 +217,18 @@ export default function JobCard({
       draggable={draggable}
       tabIndex={isQueued ? 0 : -1}
       onDragStart={(e) => {
+        // The card is natively draggable for reordering, which hijacks
+        // scrubbing on sliders/selects inside it: cancel any drag that
+        // originates from a form control (or an explicit [data-nodrag]
+        // region) so the control keeps the pointer instead.
+        const target = e.target as HTMLElement;
+        if (
+          /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName) ||
+          target.closest("[data-nodrag]")
+        ) {
+          e.preventDefault();
+          return;
+        }
         if (!onReorderStart) return;
         e.dataTransfer.effectAllowed = "move";
         onReorderStart(job.uiId);
@@ -404,7 +426,7 @@ export default function JobCard({
               {job.percent.toFixed(1)}%
               {job.startedAt
                 ? (() => {
-                    const elapsed = (Date.now() - job.startedAt) / 1000;
+                    const elapsed = (now - job.startedAt) / 1000;
                     const eta = elapsed * (100 - job.percent) / Math.max(job.percent, 0.5);
                     return <span className="ml-2 text-neutral-400 dark:text-neutral-500">{formatEta(eta, t)}</span>;
                   })()
@@ -451,22 +473,12 @@ export default function JobCard({
       {/* Bound post-processing pipeline (mirrors the download cards): inline
           sub-progress that runs after the encode itself has finished. */}
       {job.pipeline?.phase === "running" && (
-        <div className="mt-2.5">
-          <div className="mb-1 flex items-center justify-between text-[11px] text-neutral-400 dark:text-neutral-500">
-            <span className="font-medium text-neutral-600 dark:text-neutral-300">
-              {t("job.pipeline.step", {
-                name: t(`tool.${job.pipelineSteps?.[job.pipeline.stepIndex]?.toolId ?? ""}.name`),
-              })}
-            </span>
-            <span className="tabular-nums">{Math.round(job.pipeline.percent)}%</span>
-          </div>
-          <div className="h-1.5 overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
-            <div
-              className="h-full rounded-full bg-brand-500 transition-all duration-300"
-              style={{ width: `${Math.max(Math.round(job.pipeline.percent), 2)}%` }}
-            />
-          </div>
-        </div>
+        <PipelineMiniProgress
+          run={job.pipeline}
+          stepName={t(
+            `tool.${job.pipelineSteps?.[job.pipeline.stepIndex]?.toolId ?? ""}.name`
+          )}
+        />
       )}
 
       {job.pipeline?.phase === "done" && (
@@ -518,7 +530,6 @@ export default function JobCard({
           onChange={(e) => {
             if (!e.target.value) return;
             onRunPipeline(job.uiId, e.target.value);
-            e.target.value = "";
           }}
           className="mt-2 w-full rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
           aria-label={t("job.pipeline.runSelect")}
@@ -540,7 +551,6 @@ export default function JobCard({
               const targetId = e.target.value;
               if (!targetId) return;
               uploads.startUpload(deliverables, [targetId]);
-              e.target.value = "";
             }}
             className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
             aria-label={t("upload.card.uploadTo")}

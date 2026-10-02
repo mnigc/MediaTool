@@ -133,6 +133,12 @@ export function getTool(id: WorkbenchId): ToolMeta | undefined {
   return TOOLS.find((t) => t.id === id);
 }
 
+/** Runtime check mirroring the WorkbenchId union: callers holding a plain
+ *  string (stored preset tool ids, route params) validate instead of casting. */
+export function isWorkbenchId(id: string): id is WorkbenchId {
+  return id === "inspect" || TOOLS.some((t) => t.id === id);
+}
+
 /** The top-level module a tool belongs to. */
 export function toolToModule(tool: WorkbenchId): ModuleId {
   return categoryToModule(getTool(tool)?.category ?? "video");

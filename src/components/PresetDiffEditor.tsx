@@ -1,9 +1,10 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useI18n } from "../i18n";
 import { defaultParamsFor } from "../lib/defaults";
 import Select from "./Select";
 import { NumInput } from "../tools/panels/ui";
-import type { JobParams, ToolId } from "../types";
+import { isPresetTool, type PresetToolId } from "../tools/kinds";
+import type { JobParams } from "../types";
 
 /* Preset editing as a diff view: instead of re-showing the whole tool panel,
  * list only the fields the preset overrides (vs the tool defaults), with an
@@ -40,7 +41,10 @@ const AUDIO_FORMATS_PLAIN: Opt[] = [
   { value: "flac", label: "FLAC" },
 ];
 
-const FIELD_TABLES: Record<string, FieldDef[]> = {
+// Keyed by the preset tool set (see kinds.ts), not an open string map: a
+// misspelled or renamed tool key is now a compile error instead of a silently
+// empty editor.
+const FIELD_TABLES: Partial<Record<PresetToolId, FieldDef[]>> = {
   "video-compress": [
     {
       key: "videoCodec",
@@ -199,11 +203,20 @@ export default function PresetDiffEditor({
   /** Fields kept visible even while equal to the tool default: ones the user
    *  added from the menu, so the add action is never a no-op surprise. */
   const [kept, setKept] = useState<string[]>([]);
+  // Switching tools invalidates the kept list: those names belong to the
+  // previous tool's field table and would leak stale rows into the new tool.
+  useEffect(() => {
+    setKept([]);
+  }, [toolId]);
   const defaults = useMemo(
-    () => defaultParamsFor(toolId as ToolId) as Record<string, unknown>,
+    () =>
+      defaultParamsFor(isPresetTool(toolId) ? toolId : "video-compress") as Record<
+        string,
+        unknown
+      >,
     [toolId]
   );
-  const fields = FIELD_TABLES[toolId] ?? [];
+  const fields = (isPresetTool(toolId) ? FIELD_TABLES[toolId] : undefined) ?? [];
   const p = params as Record<string, unknown>;
   const base = original as Record<string, unknown>;
   const norm = (v: unknown) => (v === undefined || v === null ? "" : String(v));

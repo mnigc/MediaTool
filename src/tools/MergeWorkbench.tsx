@@ -6,6 +6,7 @@ import { extOk } from "./FilePicker";
 import { getTool, type WorkbenchId } from "./registry";
 import { MergeIcon } from "../components/icons";
 import { openOutputFolder } from "../lib/engine";
+import { friendlyError } from "../lib/errors";
 
 export default function MergeWorkbench({
   tool,
@@ -60,7 +61,8 @@ export default function MergeWorkbench({
   };
 
   const run = () => {
-    if (!inFlight && files.length >= 2) tasks.mergeAndStart(tool as never, files);
+    // mergeAndStart already takes a WorkbenchId — no narrowing cast needed.
+    if (!inFlight && files.length >= 2) tasks.mergeAndStart(tool, files);
   };
 
   return (
@@ -186,7 +188,9 @@ export default function MergeWorkbench({
             </div>
           )}
           {job.phase === "error" && (
-            <span className="text-sm text-error-600 dark:text-error-400">{job.error}</span>
+            <span className="text-sm text-error-600 dark:text-error-400">
+              {friendlyError(job.error, t)}
+            </span>
           )}
         </div>
       )}

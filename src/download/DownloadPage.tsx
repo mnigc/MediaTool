@@ -9,10 +9,12 @@ import {
 import { ytdlpProbe } from "../lib/engine";
 import { formatBytes, openOutputFolder } from "../lib/engine";
 import { canRevealInFolder } from "../lib/shell";
+import { friendlyError } from "../lib/errors";
 import { useI18n } from "../i18n";
 import { useDownloads } from "../contexts/DownloadCenter";
 import { useUploads } from "../contexts/UploadCenter";
 import { CopyIcon, FilmIcon, FolderIcon, MusicIcon, XIcon } from "../components/icons";
+import PipelineMiniProgress from "../components/PipelineMiniProgress";
 import Select from "../components/Select";
 import UploadTargetChips from "../components/UploadTargetChips";
 import { Button } from "../components/ui";
@@ -283,12 +285,21 @@ function ErrorBox({ text }: { text: string }) {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
+  // The dismiss timer outlives a fast unmount; cancel it on the way out.
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (copiedTimer.current !== null) clearTimeout(copiedTimer.current);
+    },
+    []
+  );
 
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      if (copiedTimer.current !== null) clearTimeout(copiedTimer.current);
+      copiedTimer.current = setTimeout(() => setCopied(false), 1500);
     } catch {
       /* clipboard unavailable */
     }
@@ -311,13 +322,20 @@ function ErrorBox({ text }: { text: string }) {
           {expanded ? t("dl.collapse") : t("dl.expand")}
         </button>
       </div>
+      {/* Headline is the friendly mapping (same as the job cards); the raw log
+          stays one expand away, and copy still takes the raw text. */}
       <p
         className={`whitespace-pre-wrap break-all text-[11px] leading-relaxed text-error-600 dark:text-error-400 ${
           expanded ? "" : "line-clamp-3"
         }`}
       >
-        {text}
+        {friendlyError(text, t)}
       </p>
+      {expanded && text.trim() && (
+        <p className="mt-1 whitespace-pre-wrap break-all border-t border-error-200/60 pt-1 text-[11px] leading-relaxed text-error-500/90 dark:border-error-900/50 dark:text-error-400/80">
+          {text}
+        </p>
+      )}
     </div>
   );
 }
@@ -546,22 +564,11 @@ function DownloadCard({
       {/* Bound post-processing (sprite sheet etc.) rendered inline as a
           sub-progress of this task instead of a separate workflow card. */}
       {pipelineRunning && task.pipeline && (
-        <div className="mt-2.5">
-          <div className="h-1.5 overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
-            <div
-              className="h-full rounded-full bg-brand-500 transition-all duration-300"
-              style={{ width: `${Math.max(Math.round(task.pipeline.percent), 2)}%` }}
-            />
-          </div>
-          <div className="mt-1 flex items-center gap-2 text-[11px] text-neutral-400 dark:text-neutral-500">
-            <span className="font-medium text-neutral-600 dark:text-neutral-300">
-              {t("dl.pipeline.step", {
-                name: stepNames[task.pipeline.stepIndex] ?? "",
-              })}
-            </span>
-            <span className="tabular-nums">{Math.round(task.pipeline.percent)}%</span>
-          </div>
-        </div>
+        <PipelineMiniProgress
+          run={task.pipeline}
+          labelKey="dl.pipeline.step"
+          stepName={stepNames[task.pipeline.stepIndex] ?? ""}
+        />
       )}
 
       {task.pipeline?.phase === "done" && (

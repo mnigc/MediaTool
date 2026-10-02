@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { inspectMedia } from "../lib/engine";
+import { friendlyError } from "../lib/errors";
 import { useI18n } from "../i18n";
 import { useTasks } from "../contexts/TaskCenter";
 import { useConfirm } from "../components/ConfirmDialog";
@@ -75,7 +76,7 @@ function InspectWorkbench({ onBack }: { onBack?: () => void }) {
     setReport(null);
     inspectMedia(file)
       .then((r) => !cancelled && setReport(r))
-      .catch((e) => !cancelled && setError(String(e)))
+      .catch((e) => !cancelled && setError(friendlyError(String(e), t)))
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
