@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -143,13 +144,30 @@ export function UploadCenterProvider({
 
   // Draft a login is running for; on success its refresh token is merged in.
   const oauthDraftRef = useRef<UploadTarget | null>(null);
+  // RequestId of the login flow we actually started, mirrored outside state
+  // so the mount-only result listener can compare it synchronously and drop
+  // results for cancelled/superseded flows.
+  const oauthRequestIdRef = useRef<string | null>(null);
 
   const pendingQueue = useRef<string[]>([]);
   const runningCount = useRef(0);
+  // Uploads that currently hold a pool slot; pairing claim/release through
+  // this set keeps the count exact when a cancel's immediate release is
+  // followed by the backend's trailing done event (same pattern as
+  // TaskCenter's concurrency slots).
+  const slotHolders = useRef<Set<string>>(new Set());
   const startingRef = useRef<Set<string>>(new Set());
   const autoUploaded = useRef<Set<string>>(new Set());
   // Speed estimation needs the previous sample per transfer.
   const lastTick = useRef<Record<string, { bytes: number; at: number }>>({});
+
+  // Exactly-once slot release, paired with drainQueue's claim: a duplicate
+  // done event or an already-released upload can never decrement twice.
+  const releaseSlot = useCallback((id: string) => {
+    if (slotHolders.current.delete(id)) {
+      runningCount.current = Math.max(0, runningCount.current - 1);
+    }
+  }, []);
 
   useEffect(() => {
     writeStorage(TARGETS_KEY, JSON.stringify(targets));
@@ -187,6 +205,11 @@ export function UploadCenterProvider({
       const next = pendingQueue.current.shift()!;
       const task = uploadsRef.current.find((u) => u.id === next);
       if (task && task.phase === "queued") {
+        // Claim the slot synchronously, before dispatch: incrementing only
+        // inside dispatchOne (after the IPC round-trip) let this loop start
+        // the whole queue at once and blow past MAX_CONCURRENT.
+        slotHolders.current.add(next);
+        runningCount.current += 1;
         void dispatchOne(next);
       }
     }
@@ -194,28 +217,47 @@ export function UploadCenterProvider({
   }, []);
 
   async function dispatchOne(id: string) {
+    // The slot was claimed by drainQueue before dispatch; every early return
+    // below must give it back or the pool leaks capacity.
+    const release = () => releaseSlot(id);
     const task = uploadsRef.current.find((u) => u.id === id);
-    if (!task || task.phase !== "queued") return;
-    if (startingRef.current.has(id)) return;
+    if (!task || task.phase !== "queued" || startingRef.current.has(id)) {
+      release();
+      return;
+    }
     startingRef.current.add(id);
     try {
       const target = targetsRef.current.find((x) => x.id === task.targetId);
       if (!target) {
         patchTask(id, { phase: "error", error: tRef.current("upload.err.noTarget") });
+        release();
         drainQueue();
         return;
       }
       const { id: _tid, name: _n, ...config } = target;
-      const res = await uploadStart({
-        target: config as unknown as Record<string, unknown>,
-        filePaths: task.filePaths,
-      });
-      runningCount.current += 1;
+      let res;
+      try {
+        res = await uploadStart({
+          target: config as unknown as Record<string, unknown>,
+          filePaths: task.filePaths,
+        });
+      } catch (err) {
+        patchTask(id, { phase: "error", error: String(err) });
+        release();
+        drainQueue();
+        return;
+      }
+      // Cancelled (or removed) while uploadStart was in flight: adopting the
+      // transfer would flip the card back to "running". Release the slot and
+      // tear the just-created transfer down on the backend instead.
+      const current = uploadsRef.current.find((u) => u.id === id);
+      if (!current || current.phase !== "queued") {
+        release();
+        void cancelUpload(res.id);
+        return;
+      }
       lastTick.current[res.id] = { bytes: 0, at: Date.now() };
       patchTask(id, { rustId: res.id, phase: "running", percent: 0 });
-    } catch (err) {
-      patchTask(id, { phase: "error", error: String(err) });
-      drainQueue();
     } finally {
       startingRef.current.delete(id);
     }
@@ -249,9 +291,9 @@ export function UploadCenterProvider({
     const doneUn = onUploadDone((e) => {
       const task = uploadsRef.current.find((u) => u.rustId === e.id);
       delete lastTick.current[e.id];
-      if (task && task.phase === "running") {
-        runningCount.current = Math.max(0, runningCount.current - 1);
-      }
+      // Exactly-once release, paired with drainQueue's claim: a cancel's
+      // earlier release (or a duplicated terminal event) can't double-count.
+      if (task) releaseSlot(task.id);
       if (task) {
         patchTask(task.id, {
           phase: e.ok ? "done" : e.cancelled ? "cancelled" : "error",
@@ -283,16 +325,19 @@ export function UploadCenterProvider({
     });
 
     const oauthUn = onOauthResult((e) => {
-      setOauth((prev) => {
-        if (!prev || prev.requestId !== e.requestId) return prev;
-        return { ...prev, done: true, error: e.ok ? null : e.error ?? null };
-      });
+      // A late result from a cancelled or superseded flow must neither touch
+      // the current flow state nor merge its token into the wrong target.
+      if (oauthRequestIdRef.current !== e.requestId) return;
       const draft = oauthDraftRef.current;
       oauthDraftRef.current = null;
       if (!e.ok) {
         const msg = e.error ?? tRef.current("upload.oauth.failed");
         onToastRef.current?.("error", msg);
-        setOauth((prev) => (prev && prev.requestId === e.requestId ? { ...prev, done: true, error: msg } : prev));
+        setOauth((prev) =>
+          prev && prev.requestId === e.requestId
+            ? { ...prev, done: true, error: msg }
+            : prev
+        );
         return;
       }
       if (draft) {
@@ -304,6 +349,9 @@ export function UploadCenterProvider({
             : [...targets, merged];
         });
       }
+      setOauth((prev) =>
+        prev && prev.requestId === e.requestId ? { ...prev, done: true, error: null } : prev
+      );
       onToastRef.current?.("success", tRef.current("upload.oauth.success"));
     });
 
@@ -395,13 +443,13 @@ export function UploadCenterProvider({
     (id: string) => {
       const task = uploadsRef.current.find((u) => u.id === id);
       if (task?.rustId) void cancelUpload(task.rustId);
-      if (task?.phase === "running") {
-        runningCount.current = Math.max(0, runningCount.current - 1);
-      }
+      // Release through the paired path: only an upload that still holds its
+      // slot decrements, so the trailing done event releases nothing.
+      if (task) releaseSlot(task.id);
       pendingQueue.current = pendingQueue.current.filter((x) => x !== id);
       patchTask(id, { phase: "cancelled" });
     },
-    [patchTask]
+    [patchTask, releaseSlot]
   );
 
   const retryUploadTask = useCallback(
@@ -420,12 +468,12 @@ export function UploadCenterProvider({
       const task = uploadsRef.current.find((u) => u.id === id);
       if (task?.phase === "running" && task.rustId) {
         void cancelUpload(task.rustId);
-        runningCount.current = Math.max(0, runningCount.current - 1);
       }
+      releaseSlot(id);
       pendingQueue.current = pendingQueue.current.filter((x) => x !== id);
       setUploads((prev) => prev.filter((u) => u.id !== id));
     },
-    []
+    [releaseSlot]
   );
 
   const clearFinishedUploads = useCallback(() => {
@@ -450,6 +498,7 @@ export function UploadCenterProvider({
       return;
     }
     oauthDraftRef.current = draft;
+    oauthRequestIdRef.current = req.requestId;
     setOauth({
       requestId: req.requestId,
       kind: draft.kind,
@@ -466,24 +515,46 @@ export function UploadCenterProvider({
   const cancelOauth = useCallback(() => {
     if (oauth?.requestId) void oauthCancel(oauth.requestId);
     oauthDraftRef.current = null;
+    // A result trailing the cancel is now dropped by the requestId guard.
+    oauthRequestIdRef.current = null;
     setOauth(null);
   }, [oauth?.requestId]);
 
-  const value: UploadCenterValue = {
-    targets,
-    uploads,
-    oauth,
-    saveTarget,
-    removeTarget,
-    startUpload,
-    uploadOnce,
-    cancelUploadTask,
-    retryUploadTask,
-    removeUploadTask,
-    clearFinishedUploads,
-    beginOauth,
-    cancelOauth,
-  };
+  // All actions are useCallback-stable, so the value only changes when the
+  // exposed state does; without the memo every progress tick re-created it
+  // and re-rendered every consumer.
+  const value = useMemo<UploadCenterValue>(
+    () => ({
+      targets,
+      uploads,
+      oauth,
+      saveTarget,
+      removeTarget,
+      startUpload,
+      uploadOnce,
+      cancelUploadTask,
+      retryUploadTask,
+      removeUploadTask,
+      clearFinishedUploads,
+      beginOauth,
+      cancelOauth,
+    }),
+    [
+      targets,
+      uploads,
+      oauth,
+      saveTarget,
+      removeTarget,
+      startUpload,
+      uploadOnce,
+      cancelUploadTask,
+      retryUploadTask,
+      removeUploadTask,
+      clearFinishedUploads,
+      beginOauth,
+      cancelOauth,
+    ]
+  );
 
   return <UploadCenterContext.Provider value={value}>{children}</UploadCenterContext.Provider>;
 }

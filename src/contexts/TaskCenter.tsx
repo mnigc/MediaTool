@@ -59,6 +59,10 @@ function sanitizePersisted(j: Job): Job | null {
     logs: j.logs ?? null,
     resultFiles: j.resultFiles ?? undefined,
     pipelineSteps: Array.isArray(j.pipelineSteps) ? j.pipelineSteps : [],
+    // uploadTo is persisted configuration (like pipelineSteps), not runtime
+    // state — dropping it meant a restored job finished without ever pushing
+    // its product to the auto-upload targets it was created with.
+    uploadTo: j.uploadTo ?? [],
     // transient fields are intentionally dropped:
     // rustId, speed, sizeEstimate, estimating, pipeline (runtime state)
   };
@@ -231,6 +235,11 @@ export function TaskCenterProvider({
 
   const pendingQueue = useRef<string[]>([]);
   const runningCount = useRef(0);
+  // Jobs that currently hold a concurrency slot. Claim/release is paired
+  // through this set so releases are exactly-once no matter the ordering of
+  // cancel/remove/done events (previously cancelOne decremented immediately
+  // and the trailing done event decremented again, drifting the count).
+  const slotHolders = useRef<Set<string>>(new Set());
   // Jobs with an in-flight startJob call (double-click guard).
   const startingRef = useRef<Set<string>>(new Set());
   // In-flight bound-pipeline runs keyed by job uiId.
@@ -242,6 +251,34 @@ export function TaskCenterProvider({
   // Refined size-estimate (real sample encode) state.
   const estimateTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const estimateTokens = useRef<Record<string, number>>({});
+
+  // Single release path for concurrency slots, paired with startOne's claim.
+  // Only a job that still holds its slot can decrement, so a cancel's earlier
+  // release or a duplicated terminal event can never double-count.
+  function releaseSlot(uiId: string) {
+    if (slotHolders.current.delete(uiId)) {
+      runningCount.current = Math.max(0, runningCount.current - 1);
+    }
+  }
+
+  // Drop a job's pending size-estimate bookkeeping (timer + generation token)
+  // so nothing fires for a job that is gone.
+  function clearEstimate(uiId: string) {
+    const timer = estimateTimers.current[uiId];
+    if (timer) clearTimeout(timer);
+    delete estimateTimers.current[uiId];
+    delete estimateTokens.current[uiId];
+  }
+
+  // Nothing may outlive the provider: pending estimate timers would fire
+  // into unmounted state after it is torn down.
+  useEffect(() => {
+    return () => {
+      for (const timer of Object.values(estimateTimers.current)) clearTimeout(timer);
+      estimateTimers.current = {};
+      estimateTokens.current = {};
+    };
+  }, []);
 
   // Window-level drops are routed to the active tool's workbench.
   const dropHandlerRef = useRef<((paths: string[]) => void) | null>(null);
@@ -272,11 +309,10 @@ export function TaskCenterProvider({
 
     const doneUn = onDone((e) => {
       const finished = jobsRef.current.find((j) => j.rustId === e.id);
-      // Only running jobs hold a concurrency slot; stale events (job already
-      // removed/cleared) must not decrement.
-      if (finished && finished.phase === "running") {
-        runningCount.current = Math.max(0, runningCount.current - 1);
-      }
+      // Exactly-once slot release, paired with startOne's claim: only a job
+      // that still holds its slot decrements here, so a cancel's earlier
+      // release (or a duplicated terminal event) can't decrement twice.
+      if (finished) releaseSlot(finished.uiId);
       const phase: Job["phase"] = e.ok ? "done" : e.cancelled ? "cancelled" : "error";
       setJobs((prev) =>
         prev.map((j) =>
@@ -371,7 +407,9 @@ export function TaskCenterProvider({
   }, []);
 
   function optsToast(type: "success" | "error" | "info", msg: string) {
-    onToast?.(type, msg);
+    // Through the ref so the actions bundle below can stay referentially
+    // stable even when the onToast prop identity changes.
+    onToastRef.current?.(type, msg);
   }
 
   async function addCompressFiles(
@@ -403,11 +441,11 @@ export function TaskCenterProvider({
           uploadTo,
           pipeline: null,
         };
-        if (info.mediaType === "unknown") job.error = t("job.unknownError");
+        if (info.mediaType === "unknown") job.error = tRef.current("job.unknownError");
         setJobs((prev) => [...prev, job]);
         if (info.mediaType !== "unknown") scheduleEstimate(job.uiId);
       } catch (err) {
-        setError(t("err.read", { error: String(err) }));
+        setError(tRef.current("err.read", { error: String(err) }));
       }
     }
   }
@@ -440,10 +478,10 @@ export function TaskCenterProvider({
           uploadTo,
           pipeline: null,
         };
-        if (info.mediaType === "unknown") job.error = t("job.unknownError");
+        if (info.mediaType === "unknown") job.error = tRef.current("job.unknownError");
         setJobs((prev) => [...prev, job]);
       } catch (err) {
-        setError(t("err.read", { error: String(err) }));
+        setError(tRef.current("err.read", { error: String(err) }));
       }
     }
   }
@@ -451,7 +489,7 @@ export function TaskCenterProvider({
   async function pickFiles(filters?: Array<{ name: string; extensions: string[] }>) {
     const selected = await pickPaths({
       multiple: true,
-      title: t("opt.selectFiles"),
+      title: tRef.current("opt.selectFiles"),
       filterName: filters?.[0]?.name,
       extensions: filters?.[0]?.extensions,
     });
@@ -463,7 +501,7 @@ export function TaskCenterProvider({
     setError(null);
     const valid = paths.filter((p) => extOk(p, getTool(toolId)?.accepts ?? []));
     if (valid.length < 2) {
-      setError(t("err.mergeMin"));
+      setError(tRef.current("err.mergeMin"));
       return;
     }
     try {
@@ -482,15 +520,20 @@ export function TaskCenterProvider({
         outputSize: null,
         createdAt: Date.now(),
       };
-      setJobs((prev) => [...prev, job]);
+      // Mirror the job into the ref synchronously: `startOne` looks the job
+      // up in `jobsRef` before React re-renders with the new state, and a
+      // stale ref made the lookup silently fail (the merge never started).
+      const next = [...jobsRef.current, job];
+      jobsRef.current = next;
+      setJobs(next);
       await startOne(job.uiId);
     } catch (err) {
-      setError(t("err.read", { error: String(err) }));
+      setError(tRef.current("err.read", { error: String(err) }));
     }
   }
 
   async function chooseOutput() {
-    const [dir] = await pickPaths({ directory: true, title: t("sidebar.changeOutput") });
+    const [dir] = await pickPaths({ directory: true, title: tRef.current("sidebar.changeOutput") });
     if (dir) setSettings((s) => ({ ...s, outputDir: dir }));
   }
 
@@ -501,7 +544,7 @@ export function TaskCenterProvider({
     setError(null);
     const first = params.clips[0]?.path;
     if (!first) {
-      setError(t("rc.errEmpty"));
+      setError(tRef.current("rc.errEmpty"));
       return;
     }
     try {
@@ -525,7 +568,7 @@ export function TaskCenterProvider({
       setJobs(next);
       await startOne(job.uiId);
     } catch (err) {
-      setError(t("err.read", { error: String(err) }));
+      setError(tRef.current("err.read", { error: String(err) }));
     }
   }
 
@@ -649,11 +692,12 @@ export function TaskCenterProvider({
               : j
           )
         );
-        optsToast("info", t("job.skipped"));
+        optsToast("info", tRef.current("job.skipped"));
         return;
       }
-      // Take the concurrency slot synchronously: incrementing only after the
-      // IPC round-trip would let rapid terminal events over-subscribe.
+      // Claim the concurrency slot synchronously (before the state flip) and
+      // record the holder so the matching release stays exactly-once.
+      slotHolders.current.add(uiId);
       runningCount.current += 1;
       setJobs((prev) =>
         prev.map((j) =>
@@ -669,7 +713,14 @@ export function TaskCenterProvider({
         )
       );
     } catch (err) {
-      setError(t("err.start", { error: String(err) }));
+      // Surface the failure on the job itself: leaving it "queued" would
+      // create a phantom entry that never runs and can't be retried.
+      setError(tRef.current("err.start", { error: String(err) }));
+      setJobs((prev) =>
+        prev.map((j) =>
+          j.uiId === uiId ? { ...j, phase: "error", error: String(err) } : j
+        )
+      );
     } finally {
       startingRef.current.delete(uiId);
     }
@@ -699,11 +750,10 @@ export function TaskCenterProvider({
     if (job?.rustId) cancelJob(job.rustId);
     // A finished job may still be running its bound pipeline.
     pipelineHandles.current.get(uiId)?.();
-    // Release the concurrency slot now; the backend's done event for this
-    // (already "cancelled") job won't decrement again.
-    if (job?.phase === "running") {
-      runningCount.current = Math.max(0, runningCount.current - 1);
-    }
+    // Release the slot through the paired path; the backend's trailing done
+    // event for this job releases nothing (the slot is already given back),
+    // so the count can no longer drift downwards on cancel.
+    releaseSlot(uiId);
     setJobs((prev) =>
       prev.map((j) =>
         j.uiId === uiId
@@ -724,12 +774,12 @@ export function TaskCenterProvider({
     // Removing a running card must also stop the process — otherwise ffmpeg
     // keeps encoding with no UI left to cancel it. Same for its pipeline.
     const job = jobsRef.current.find((j) => j.uiId === uiId);
-    if (job?.phase === "running" && job.rustId) {
-      cancelJob(job.rustId);
-      runningCount.current = Math.max(0, runningCount.current - 1);
-    }
+    if (job?.phase === "running" && job.rustId) cancelJob(job.rustId);
+    releaseSlot(uiId);
     pipelineHandles.current.get(uiId)?.();
     pipelineHandles.current.delete(uiId);
+    // The card is gone: a pending size-estimate must not fire for it.
+    clearEstimate(uiId);
     setJobs((prev) => prev.filter((j) => j.uiId !== uiId));
   }
 
@@ -803,17 +853,23 @@ export function TaskCenterProvider({
   function syncParamsToAll(uiId: string) {
     const source = jobsRef.current.find((j) => j.uiId === uiId);
     if (!source || source.phase !== "queued") return;
-    const targets: string[] = [];
+    // Compute the affected ids from the mirrored ref BEFORE the updater:
+    // side effects inside a setState updater run twice under StrictMode
+    // (double-invoked updaters), which duplicated the estimate scheduling.
+    const targetIds = jobsRef.current
+      .filter(
+        (j) =>
+          j.phase === "queued" &&
+          j.info.mediaType === source.info.mediaType &&
+          j.toolId === source.toolId
+      )
+      .map((j) => j.uiId);
     setJobs((prev) =>
-      prev.map((j) => {
-        if (j.phase === "queued" && j.info.mediaType === source.info.mediaType && j.toolId === source.toolId) {
-          targets.push(j.uiId);
-          return { ...j, params: source.params };
-        }
-        return j;
-      })
+      prev.map((j) =>
+        targetIds.includes(j.uiId) ? { ...j, params: source.params } : j
+      )
     );
-    targets.forEach((id) => scheduleEstimate(id));
+    targetIds.forEach((id) => scheduleEstimate(id));
   }
 
   function clearFinished() {
@@ -842,6 +898,8 @@ export function TaskCenterProvider({
       cancel();
       pipelineHandles.current.delete(uiId);
     }
+    for (const uiId of Object.keys(estimateTimers.current)) clearEstimate(uiId);
+    slotHolders.current.clear();
     runningCount.current = 0;
     setJobs([]);
   }
@@ -894,49 +952,64 @@ export function TaskCenterProvider({
     () => (totalIn > 0 ? 1 - totalOut / totalIn : 0),
     [totalIn, totalOut]
   );
+  // "Skipped" is a terminal state too: a list holding skipped jobs (overwrite
+  // policy = skip) is finished and must still show the all-done banner.
   const allDone = useMemo(
-    () => jobs.length > 0 && jobs.every((j) => j.phase === "done"),
+    () =>
+      jobs.length > 0 &&
+      jobs.every((j) => j.phase === "done" || j.phase === "skipped"),
     [jobs]
   );
 
-  const value: TaskCenterValue = {
-    jobs,
-    loading,
-    error,
-    settings,
-    gpuInfo,
-    stats,
-    allDone,
-    overall,
-    totalIn,
-    totalOut,
-    registerDropHandler,
-    addCompressFiles,
-    mergeAndStart,
-    startRoughCut,
-    pickFiles,
-    chooseOutput,
-    setOutputDir: (dir) => setSettings((s) => ({ ...s, outputDir: dir })),
-    setOutputSuffix: (suffix) => setSettings((s) => ({ ...s, outputSuffix: suffix })),
-    setMaxConcurrent: (n) => setSettings((s) => ({ ...s, maxConcurrent: n })),
-    setGpu: (gpu) => setSettings((s) => ({ ...s, gpu })),
-    setOverwritePolicy: (v) => setSettings((s) => ({ ...s, overwritePolicy: v })),
-    startOne,
-    startAll,
-    cancelOne,
-    removeOne,
-    retryOne,
-    retryAllFailed,
-    changeParams,
-    syncParamsToAll,
-    clearFinished,
-    clearAll,
-    reorderStart,
-    reorderOver,
-    reorderDrop,
-    addTasks,
-    runJobPipeline,
-  };
+  // The context value is rebuilt only when the state it exposes changes:
+  // every action reads refs / setState only (t and onToast go through their
+  // refs), so the function identities are stable across renders. Without the
+  // memo, each high-frequency progress tick re-created the value and
+  // re-rendered every consumer of the context.
+  const value = useMemo<TaskCenterValue>(
+    () => ({
+      jobs,
+      loading,
+      error,
+      settings,
+      gpuInfo,
+      stats,
+      allDone,
+      overall,
+      totalIn,
+      totalOut,
+      registerDropHandler,
+      addCompressFiles,
+      mergeAndStart,
+      startRoughCut,
+      pickFiles,
+      chooseOutput,
+      setOutputDir: (dir) => setSettings((s) => ({ ...s, outputDir: dir })),
+      setOutputSuffix: (suffix) => setSettings((s) => ({ ...s, outputSuffix: suffix })),
+      setMaxConcurrent: (n) => setSettings((s) => ({ ...s, maxConcurrent: n })),
+      setGpu: (gpu) => setSettings((s) => ({ ...s, gpu })),
+      setOverwritePolicy: (v) => setSettings((s) => ({ ...s, overwritePolicy: v })),
+      startOne,
+      startAll,
+      cancelOne,
+      removeOne,
+      retryOne,
+      retryAllFailed,
+      changeParams,
+      syncParamsToAll,
+      clearFinished,
+      clearAll,
+      reorderStart,
+      reorderOver,
+      reorderDrop,
+      addTasks,
+      runJobPipeline,
+    }),
+    // The action functions are intentionally not listed: they never change
+    // identity (see the comment above).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [jobs, loading, error, settings, gpuInfo, stats, allDone, overall, totalIn, totalOut]
+  );
 
   return <TaskCenterContext.Provider value={value}>{children}</TaskCenterContext.Provider>;
 }

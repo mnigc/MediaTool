@@ -88,7 +88,9 @@ async function rpc<T>(command: string, args?: Record<string, unknown>): Promise<
   });
   if (res.status === 401 || res.status === 403) {
     unauthorizedListeners.forEach((cb) => cb());
-    throw new Error("访问令牌无效");
+    // errors.ts only maps FFmpeg stderr and this module has no i18n channel,
+    // so keep the message neutral English instead of hardcoding a locale.
+    throw new Error("invalid or missing access token");
   }
   const body: unknown = await res.json().catch(() => null);
   if (!res.ok) {
@@ -138,7 +140,20 @@ export function listen<T>(event: string, cb: (payload: T) => void): Promise<Unli
   set.add(wrapped);
   openSocket();
   return Promise.resolve(() => {
-    handlers.get(event)?.delete(wrapped);
+    const set = handlers.get(event);
+    if (!set) return;
+    set.delete(wrapped);
+    if (set.size === 0) handlers.delete(event);
+    // Last listener gone: close the socket too, so a page with no live
+    // subscriptions doesn't hold the server's event stream open. retryAt
+    // resets so the next listen() reconnects immediately; the socket's own
+    // onclose stays quiet because `socket` was already cleared.
+    if (handlers.size === 0 && socket) {
+      const ws = socket;
+      socket = null;
+      retryAt = 0;
+      ws.close();
+    }
   });
 }
 

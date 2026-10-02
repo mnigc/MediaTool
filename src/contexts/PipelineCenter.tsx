@@ -160,6 +160,28 @@ export function PipelineCenterProvider({ children }: { children: ReactNode }) {
         onFinish: (ok, error, output, note) => {
           handles.current.delete(runId);
           const status: PipelineFileStatus = ok ? "done" : error === tRef.current("job.cancelled") ? "cancelled" : "error";
+          // Mirror the settled file into runsRef synchronously: settle() and
+          // advance() read the ref before patchFile's setState commits, so
+          // the last file's failure was still read as "running" and the run
+          // was settled as "done" (the startRoughCut pattern in TaskCenter).
+          const currentRun = runsRef.current.find((r) => r.id === runId);
+          if (currentRun) {
+            const nextFiles = currentRun.files.map((f, i) =>
+              i === index
+                ? {
+                    ...f,
+                    status,
+                    percent: ok ? 100 : 0,
+                    output: output ?? null,
+                    error: error ?? null,
+                    note: note ?? null,
+                  }
+                : f
+            );
+            runsRef.current = runsRef.current.map((r) =>
+              r.id === runId ? { ...currentRun, files: nextFiles } : r
+            );
+          }
           patchFile(runId, index, {
             status,
             percent: ok ? 100 : 0,

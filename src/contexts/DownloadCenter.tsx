@@ -304,15 +304,46 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
   const cancelRequestedRef = useRef(new Set<string>());
 
   /* persist tasks (terminal only) + settings */
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /* Flush-on-unmount effect, declared before the debounced one so its cleanup
+     runs first on teardown, while the pending timer id is still alive. */
   useEffect(() => {
-    try {
-      writeStorage(
-        TASKS_KEY,
-        JSON.stringify(tasks.filter((x) => x.phase !== "running").slice(-100))
-      );
-    } catch {
-      /* ignore quota errors */
-    }
+    return () => {
+      if (saveTimer.current == null) return;
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+      try {
+        writeStorage(
+          TASKS_KEY,
+          JSON.stringify(
+            tasksRef.current.filter((x) => x.phase !== "running").slice(-100)
+          )
+        );
+      } catch {
+        /* ignore quota errors */
+      }
+    };
+  }, []);
+
+  // Debounced: download progress events land far too often to stringify and
+  // write localStorage synchronously on every tick.
+  useEffect(() => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      saveTimer.current = null;
+      try {
+        writeStorage(
+          TASKS_KEY,
+          JSON.stringify(tasks.filter((x) => x.phase !== "running").slice(-100))
+        );
+      } catch {
+        /* ignore quota errors */
+      }
+    }, 600);
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+    };
   }, [tasks]);
 
   useEffect(() => {
@@ -624,6 +655,9 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
 
     unlistens.push(
       onDownloadDone((e) => {
+        // The task just reached a terminal state, so a cancel request recorded
+        // for it is obsolete — drop it or the set grows forever.
+        cancelRequestedRef.current.delete(e.id);
         const existing = tasksRef.current.find((x) => x.id === e.id);
         // Batch items start with the URL as their title; once the real file
         // exists, show the produced filename instead.
@@ -880,6 +914,8 @@ export function DownloadCenterProvider({ children }: { children: ReactNode }) {
         void cancelJob(x.id);
       }
     }
+    // Recorded cancel requests are reaped by the done listener as each task
+    // reaches its terminal state; entries stay only until then.
     for (const [id, cancel] of pipelineHandles.current) {
       cancel();
       pipelineHandles.current.delete(id);

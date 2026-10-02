@@ -38,7 +38,11 @@ function translate(locale: Locale, key: string, vars?: Vars): string {
   let str = dict[key] ?? translations.zh[key] ?? key;
   if (vars) {
     for (const [k, v] of Object.entries(vars)) {
-      str = str.replace(new RegExp(`\\{${k}\\}`, "g"), String(v));
+      // split/join instead of replace(new RegExp, v): the replacement value
+      // may contain `$&`-style sequences that replace() would interpolate
+      // into the output, and building a RegExp per call is wasteful on this
+      // hot path (t runs on every render of translated text).
+      str = str.split(`{${k}}`).join(String(v));
     }
   }
   return str;

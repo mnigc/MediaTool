@@ -244,10 +244,15 @@ export function startWorkflow(opts: {
           // Output already existed + policy = "skip": the backend started no
           // process and emits no done event, so finish here immediately
           // (otherwise the merge runner would hang waiting for an event).
+          // The backend reports the existing file like StartJobResult does
+          // for single jobs; finishing with a null output used to lose the
+          // product, so downstream auto-upload and delete-source had nothing
+          // to act on.
+          const skippedOutput = res.output ?? null;
           for (let i = 0; i < steps.length; i++) {
-            onUpdate({ index: i, status: "done", percent: 100 });
+            onUpdate({ index: i, status: "done", percent: 100, output: skippedOutput ?? undefined });
           }
-          finish(true, null, null, res.note ?? null);
+          finish(true, null, skippedOutput, res.note ?? null);
         } else {
           mergedId = res.id;
           await runMerged(
