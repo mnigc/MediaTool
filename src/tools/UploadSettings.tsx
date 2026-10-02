@@ -400,6 +400,9 @@ export default function UploadSection() {
       <p className="mt-3 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
         {t("upload.settings.privacyNote")}
       </p>
+      <p className="mt-1.5 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
+        {t("upload.settings.stabilityNote")}
+      </p>
 
       {confirmDialog}
     </section>

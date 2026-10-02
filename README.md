@@ -78,6 +78,17 @@
 - **Auto-updates** keep you current without reinstalling.
 - **Bilingual interface** (中文 / English) with light & dark themes.
 
+## 🧪 Stability notes
+
+A few features are implemented and covered by unit tests, but have never been verified end-to-end against real accounts or services. Please keep that in mind:
+
+- **Auto-upload when done (WebDAV / Google Drive / OneDrive / Telegram)** — OAuth sign-in has only been tested against a local mock server. Interrupted large uploads do **not** resume; a failed transfer starts over from the beginning.
+- **Live push notifications (Telegram / webhook)** — never tested with real Telegram credentials.
+- **Cookie sign-in for downloads** — cookies are stored in plain text on your machine (file permissions are tightened on Unix). Export formats differ between browsers, so a pasted cookie file may need adjusting.
+- **Web / LAN mode** — the security model was recently tightened: every command is confined to the directories listed in the config's `roots`. If a path is rejected, add its folder to `roots`.
+
+The core download / transcode / merge / rough-cut features are thoroughly tested and considered stable. If one of the features above misbehaves for you, an issue report is always welcome.
+
 ---
 
 <p align="center">

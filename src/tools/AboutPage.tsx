@@ -539,6 +539,19 @@ export default function AboutPage({ currentVersion, updater, onToast }: AboutPag
         )}
       </section>
 
+      {/* Known limitations */}
+      <section className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-800">
+        <h2 className="text-sm font-semibold text-neutral-600 dark:text-neutral-300">
+          {t("about.stability.title")}
+        </h2>
+        <p className="mt-3 text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
+          {t("about.stability.body")}
+        </p>
+        <p className="mt-2 text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
+          {t("about.stability.web")}
+        </p>
+      </section>
+
       {/* Disclaimer */}
       <section className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-neutral-200 dark:bg-neutral-900 dark:ring-neutral-800">
         <h2 className="text-sm font-semibold text-neutral-600 dark:text-neutral-300">

@@ -447,6 +447,7 @@ function NotifyEditor({
         </div>
       )}
       <p className="mt-1.5 text-[11px] text-neutral-400 dark:text-neutral-500">{t("dl.notify.hint")}</p>
+      <p className="mt-1.5 text-[11px] text-neutral-400 dark:text-neutral-500">{t("dl.notify.stabilityNote")}</p>
     </div>
   );
 }

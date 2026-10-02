@@ -202,6 +202,9 @@ export default function SettingsPage({ themeMode, onThemeChange }: SettingsPageP
             <p className="text-xs text-neutral-400 dark:text-neutral-500">
               {t("settings.cookiesHint")}
             </p>
+            <p className="text-xs text-neutral-400 dark:text-neutral-500">
+              {t("settings.cookiesStabilityNote")}
+            </p>
           </div>
           <div className={row}>
             <span className={labelCls}>{t("dl.proxy")}</span>
