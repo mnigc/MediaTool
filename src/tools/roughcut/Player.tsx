@@ -8,7 +8,7 @@
 //! The element always runs in *source* time (`currentTime` is a position in
 //! the file), while the playhead is *timeline* time: a clip cut from the
 //! middle of a file starts at its `startTime`, and a sped-up clip walks its
-//! source faster. Every mapping between the two goes through `sourceTime`.
+//! source faster. Every mapping between the two goes through `sourceTimeOf`.
 
 import { useEffect, useRef } from "react";
 import { mediaStreamUrl } from "../../lib/shell";
@@ -18,32 +18,27 @@ import {
   globalStartOf,
   locate,
   sourceEnd,
+  sourceTimeOf,
   speedOf,
   type SourceInfo,
 } from "./model";
-
-/** Timeline seconds inside a clip → seconds within its source file. */
-function sourceTime(clip: RoughCutClip, local: number): number {
-  return clip.startTime + local * speedOf(clip);
-}
+// The playhead is read and written through the store, never through props:
+// the element chases it via a subscription (below), and playback writes it
+// once per animation frame.
+import { getPlayhead, setPlayhead, subscribePlayhead } from "./playhead";
 
 export default function Player({
   clips,
   sources,
-  playhead,
   playing,
   muted,
-  onPlayhead,
   onPlayState,
   onLoadError,
 }: {
   clips: RoughCutClip[];
   sources: Map<string, SourceInfo>;
-  playhead: number;
   playing: boolean;
   muted: boolean;
-  /** Continuous playhead updates while playing, and seeks from outside. */
-  onPlayhead: (secs: number) => void;
   onPlayState: (playing: boolean) => void;
   /** Load failed for good after retries (true) or recovered (false). */
   onLoadError: (failed: boolean) => void;
@@ -76,7 +71,7 @@ export default function Player({
   const seekTo = (v: HTMLVideoElement, clip: RoughCutClip, local: number) => {
     const s0 = clip.startTime;
     const s1 = sourceEnd(clip, sourcesRef.current);
-    const t = sourceTime(clip, local);
+    const t = sourceTimeOf(clip, local);
     try {
       v.currentTime = Math.max(0, Math.min(t, Math.max(s0, s1 - 0.01)));
     } catch {
@@ -138,39 +133,48 @@ export default function Player({
     });
   };
 
-  // External seeks (timeline clicks, transport buttons): jump to the clip
-  // under the playhead. During playback this effect also fires every frame
-  // but the distance guard keeps it from re-seeking.
+  // External seeks (timeline clicks, transport buttons): jump the element to
+  // the clip under the playhead. This listens to the playhead store instead of
+  // re-rendering on a `playhead` prop — playback writes the store every frame,
+  // and a render per frame just to run the distance guard below would defeat
+  // sinking the playhead in the first place. Re-runs on clips/sources changes
+  // too: an edit re-maps the loaded position through the new windows.
   useEffect(() => {
-    const at = locate(clips, sources, playhead);
-    if (!at) {
-      // locate() is null only on an empty timeline (all clips deleted while
-      // playing): clear the source AND reset the transport, or the button
-      // would keep showing the pause icon over a dead player.
-      if (activeRef.current !== null) {
-        activeRef.current = null;
-        const v = ref.current;
-        if (v) {
-          v.removeAttribute("src");
-          v.load();
+    const sync = () => {
+      const cs = clipsRef.current;
+      const srcs = sourcesRef.current;
+      const at = locate(cs, srcs, getPlayhead());
+      if (!at) {
+        // locate() is null only on an empty timeline (all clips deleted while
+        // playing): clear the source AND reset the transport, or the button
+        // would keep showing the pause icon over a dead player.
+        if (activeRef.current !== null) {
+          activeRef.current = null;
+          const v = ref.current;
+          if (v) {
+            v.removeAttribute("src");
+            v.load();
+          }
         }
+        onPlayState(false);
+        return;
       }
-      onPlayState(false);
-      return;
-    }
-    const v = ref.current;
-    if (!v) return;
-    const clip = clips[at.index];
-    if (activeRef.current !== at.index) {
-      activate(at.index, at.local, playing);
-    } else if (
-      v.readyState >= 1 &&
-      Math.abs(v.currentTime - sourceTime(clip, at.local)) > 0.2 * speedOf(clip)
-    ) {
-      seekTo(v, clip, at.local);
-    }
+      const v = ref.current;
+      if (!v) return;
+      const clip = cs[at.index];
+      if (activeRef.current !== at.index) {
+        activate(at.index, at.local, playingRef.current);
+      } else if (
+        v.readyState >= 1 &&
+        Math.abs(v.currentTime - sourceTimeOf(clip, at.local)) > 0.2 * speedOf(clip)
+      ) {
+        seekTo(v, clip, at.local);
+      }
+    };
+    sync();
+    return subscribePlayhead(sync);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playhead, clips, sources]);
+  }, [clips, sources]);
 
   // Play/pause. A forgotten clip (failed load) gets a fresh full load for
   // whatever sits under the playhead — play() alone would just reject on an
@@ -180,7 +184,7 @@ export default function Player({
     if (!v) return;
     if (playing) {
       if (activeRef.current === null) {
-        const at = locate(clipsRef.current, sourcesRef.current, playhead);
+        const at = locate(clipsRef.current, sourcesRef.current, getPlayhead());
         if (at) {
           activate(at.index, at.local, true);
           return;
@@ -203,8 +207,9 @@ export default function Player({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [muted, clips]);
 
-  // The playback loop: advance the global playhead from the element's own
-  // clock, and swap sources at clip seams.
+  // The playback loop: advance the global playhead (the store — a write per
+  // frame is exactly what the store is for; no component re-renders unless it
+  // subscribes) from the element's own clock, and swap sources at clip seams.
   useEffect(() => {
     if (!playing) return;
     let raf = 0;
@@ -222,14 +227,14 @@ export default function Player({
         if (v.currentTime >= sourceEnd(clip, srcs) - 0.04 * speed) {
           if (idx + 1 < cs.length) {
             activate(idx + 1, 0, true);
-            onPlayhead(globalStartOf(cs, srcs, idx + 1));
+            setPlayhead(globalStartOf(cs, srcs, idx + 1));
           } else {
-            onPlayhead(g0 + clipDuration(clip, srcs));
+            setPlayhead(g0 + clipDuration(clip, srcs));
             onPlayState(false);
             return; // stop the loop; the effect re-runs when playing flips
           }
         } else {
-          onPlayhead(g0 + (v.currentTime - clip.startTime) / speed);
+          setPlayhead(g0 + (v.currentTime - clip.startTime) / speed);
         }
       }
       raf = requestAnimationFrame(tick);

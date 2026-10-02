@@ -92,14 +92,20 @@ export function saveBin(paths: string[]): void {
 let cache: RoughCutProject[] | null = null;
 const listeners = new Set<() => void>();
 
+/** Pure core of the project-list read: keep well-shaped entries, drop the
+ *  rest, newest first. Split from the localStorage access so the shape
+ *  checking and ordering are unit-testable with zero DOM. */
+export function parseProjects(parsed: unknown): RoughCutProject[] {
+  return (Array.isArray(parsed) ? parsed.filter((p) => isProject(p)) : []).sort(
+    (a, b) => b.savedAt - a.savedAt
+  );
+}
+
 function loadProjects(): RoughCutProject[] {
   if (cache) return cache;
   try {
     const raw = localStorage.getItem(PROJECTS_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
-    cache = (Array.isArray(parsed) ? parsed.filter((p) => isProject(p)) : []).sort(
-      (a, b) => b.savedAt - a.savedAt
-    );
+    cache = parseProjects(raw ? JSON.parse(raw) : []);
   } catch {
     cache = [];
   }

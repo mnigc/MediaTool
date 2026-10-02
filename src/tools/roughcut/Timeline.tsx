@@ -7,7 +7,7 @@
 //! HTML5 drag and drop in the desktop build. The horizontal drag math is all
 //! "pixels / pxPerSec → seconds".
 
-import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { getFilmstrip } from "../../lib/engine";
 import { MuteIcon } from "../../components/icons";
 import type { RoughCutClip } from "../../types";
@@ -20,6 +20,8 @@ import {
   totalDuration,
   type SourceInfo,
 } from "./model";
+import { usePlayhead } from "./playhead";
+import { dragToSourceSecs, rulerStep, rulerTicks } from "./viewMath";
 
 /** Cache capacity in sources; beyond that the least recently used strip is
  *  dropped so a long session can't grow the map without bound. */
@@ -111,12 +113,9 @@ const Filmstrip = memo(function Filmstrip({
   );
 });
 
-const RULER_STEPS = [0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600];
-
 const Timeline = memo(function Timeline({
   clips,
   sources,
-  playhead,
   pxPerSec,
   selected,
   header,
@@ -126,7 +125,6 @@ const Timeline = memo(function Timeline({
 }: {
   clips: RoughCutClip[];
   sources: Map<string, SourceInfo>;
-  playhead: number;
   pxPerSec: number;
   selected: number | null;
   /** Edit toolbar rendered inside the card, above the ruler. */
@@ -140,19 +138,8 @@ const Timeline = memo(function Timeline({
 
   const total = totalDuration(clips, sources);
   const width = Math.max(total * pxPerSec, 200);
-  const step = RULER_STEPS.find((s) => s * pxPerSec >= 56) ?? 3600;
-  const ticks: number[] = [];
-  for (let s = 0; s <= total + step; s += step) ticks.push(s);
-
-  // Keep the playhead in view while scrubbing / playing.
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const x = playhead * pxPerSec;
-    const pad = 48;
-    if (x < el.scrollLeft + pad) el.scrollLeft = Math.max(0, x - pad);
-    else if (x > el.scrollLeft + el.clientWidth - pad) el.scrollLeft = x - el.clientWidth + pad;
-  }, [playhead, pxPerSec]);
+  const step = rulerStep(pxPerSec);
+  const ticks = rulerTicks(total, step);
 
   const secsAt = (clientX: number): number => {
     const el = scrollRef.current;
@@ -207,7 +194,7 @@ const Timeline = memo(function Timeline({
       onSelect(idx);
       e.preventDefault();
       trackPointer((ev) =>
-        onTrim(idx, edge, grabSecs + ((ev.clientX - grabX) / pxPerSec) * speed)
+        onTrim(idx, edge, dragToSourceSecs(grabSecs, ev.clientX - grabX, pxPerSec, speed))
       );
       return;
     }
@@ -314,13 +301,9 @@ const Timeline = memo(function Timeline({
               {/* the empty-track hint lives in the workbench's player overlay,
                   so an empty lane stays bare */}
 
-              {/* playhead */}
-              <div
-                className="pointer-events-none absolute bottom-0 top-0 z-30 w-0.5 bg-error-500"
-                style={{ left: playhead * pxPerSec }}
-              >
-                <div className="absolute -left-[3px] top-0 h-2 w-2 rounded-full bg-error-500" />
-              </div>
+              {/* playhead — the timeline's only per-frame subscriber; the clip
+                  blocks and ruler around it never re-render during playback */}
+              <Playhead pxPerSec={pxPerSec} scrollRef={scrollRef} />
             </div>
           </div>
       </div>
@@ -328,5 +311,37 @@ const Timeline = memo(function Timeline({
     </div>
   );
 });
+
+/** The playhead indicator line, plus the keep-in-view scrolling that follows
+ *  it. This is the timeline's only subscriber to the playhead store — the
+ *  clip blocks and the ruler around it sit still for the whole playback. */
+function Playhead({
+  pxPerSec,
+  scrollRef,
+}: {
+  pxPerSec: number;
+  scrollRef: RefObject<HTMLDivElement | null>;
+}) {
+  const playhead = usePlayhead();
+
+  // Keep the playhead in view while scrubbing / playing.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const x = playhead * pxPerSec;
+    const pad = 48;
+    if (x < el.scrollLeft + pad) el.scrollLeft = Math.max(0, x - pad);
+    else if (x > el.scrollLeft + el.clientWidth - pad) el.scrollLeft = x - el.clientWidth + pad;
+  }, [playhead, pxPerSec, scrollRef]);
+
+  return (
+    <div
+      className="pointer-events-none absolute bottom-0 top-0 z-30 w-0.5 bg-error-500"
+      style={{ left: playhead * pxPerSec }}
+    >
+      <div className="absolute -left-[3px] top-0 h-2 w-2 rounded-full bg-error-500" />
+    </div>
+  );
+}
 
 export default Timeline;

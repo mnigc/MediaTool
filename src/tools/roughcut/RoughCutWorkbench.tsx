@@ -4,7 +4,16 @@
 //! restart. Export submits through the shared task queue — progress, cancel
 //! and output handling come for free from the existing job machinery.
 
-import { memo, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { canRevealInFolder, pickPaths } from "../../lib/shell";
 import { getThumbnail, openOutputFolder, probeFile } from "../../lib/engine";
 import { friendlyError } from "../../lib/errors";
@@ -45,28 +54,24 @@ import {
   type TimelineState,
 } from "./model";
 import { inspectCached } from "./compat";
-import { clearCurrent, loadBin, loadCurrent, removeProject, saveBin, saveCurrent, saveProject, useRoughCutProjects, type RoughCutProject } from "./store";
+import {
+  clearCurrent,
+  loadBin,
+  loadCurrent,
+  removeProject,
+  saveBin,
+  saveCurrent,
+  saveProject,
+  useRoughCutProjects,
+  type RoughCutProject,
+} from "./store";
+import { getPlayhead, setPlayhead, subscribePlayhead, usePlayhead } from "./playhead";
+import { zoomToSlider, sliderToZoom } from "./viewMath";
 import Timeline from "./Timeline";
 import Player from "./Player";
 import ExportBar from "./ExportBar";
 
 const TOOL = "roughcut" as const;
-
-// 0.05 px/s = one pixel per 20s, so even hours-long footage fits the viewport
-// without scrolling; the ruler coarsens its ticks (up to 30/60-min) to match.
-const ZOOM_MIN = 0.05;
-const ZOOM_MAX = 200;
-
-/** Zoom level <-> slider position on a geometric scale: the track's pixels are
- *  seconds-per-unit, so a linear slider would crowd the whole useful range into
- *  its first few percent. */
-function zoomToSlider(pxPerSec: number): number {
-  return (Math.log(pxPerSec / ZOOM_MIN) / Math.log(ZOOM_MAX / ZOOM_MIN)) * 100;
-}
-
-function sliderToZoom(pos: number): number {
-  return ZOOM_MIN * Math.exp((pos / 100) * Math.log(ZOOM_MAX / ZOOM_MIN));
-}
 
 /** Tells `mp-range` where the thumb sits so it can paint the filled part. */
 function rangeFill(value: number, min: number, max: number): React.CSSProperties {
@@ -104,7 +109,10 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
   const clips = state.clips;
   const [sources, setSources] = useState<Map<string, SourceInfo>>(new Map());
   const [thumbs, setThumbs] = useState<Map<string, string>>(new Map());
-  const [playhead, setPlayhead] = useState(0);
+  // The playhead lives in the external store (./playhead), not in state: only
+  // the timeline line and the transport timecode subscribe to it, so playback
+  // never re-renders this shell. Reads go through getPlayhead(), writes
+  // through seek()/setPlayhead().
   const [playing, setPlaying] = useState(false);
   // 1 px/s centres the thumb on the log slider (~36% between 0.05 and 200).
   const [pxPerSec, setPxPerSec] = useState(1);
@@ -182,8 +190,16 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
     saveBin(Array.from(sources.keys()));
   }, [sources]);
 
-  // An unmount can land mid-debounce; write the latest timeline out then.
-  useEffect(() => () => saveCurrent(clipsRef.current), []);
+  // An unmount can land mid-debounce; write the latest timeline out then. The
+  // playhead resets too: as React state it always remounted at 0, and the
+  // module-level store would otherwise leak a position into the next visit.
+  useEffect(
+    () => () => {
+      saveCurrent(clipsRef.current);
+      setPlayhead(0);
+    },
+    []
+  );
 
   /* ── sources ─────────────────────────────────────────────────── */
 
@@ -368,20 +384,25 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
   const total = totalDuration(clips, sources);
   const seek = useCallback((secs: number) => setPlayhead(Math.max(0, Math.min(secs, total))), [total]);
 
-  const doSplit = () => {
-    const next = splitAt(clips, sources, playhead);
+  const doSplit = useCallback(() => {
+    // The playhead comes from the store, not a render closure: the toolbar
+    // button and the attach-once keyboard handler must cut at the live
+    // position, even mid-drag or right after a seek that has not rendered yet.
+    const ph = getPlayhead();
+    const next = splitAt(clipsRef.current, sourcesRef.current, ph);
     if (!next) return;
-    const at = locate(next, sources, playhead);
+    const at = locate(next, sourcesRef.current, ph);
     edit(() => next);
     setSelected(at ? at.index : null);
-  };
+  }, [edit]);
 
-  const doDelete = () => {
-    const idx = selected ?? locate(clips, sources, playhead)?.index ?? null;
+  const doDelete = useCallback(() => {
+    const idx =
+      selected ?? locate(clipsRef.current, sourcesRef.current, getPlayhead())?.index ?? null;
     if (idx === null) return;
     edit((cs) => removeClip(cs, idx));
     setSelected(null);
-  };
+  }, [selected, edit]);
 
   const selectedClip = selected !== null ? clips[selected] : null;
   // useCallback (stable references): ClipInspector is memo'd, so these must not
@@ -438,9 +459,9 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
     } else if (e.key === "Delete" || e.key === "Backspace") {
       doDelete();
     } else if (e.key === "ArrowLeft") {
-      seek(playhead - (e.shiftKey ? 5 : 0.5));
+      seek(getPlayhead() - (e.shiftKey ? 5 : 0.5));
     } else if (e.key === "ArrowRight") {
-      seek(playhead + (e.shiftKey ? 5 : 0.5));
+      seek(getPlayhead() + (e.shiftKey ? 5 : 0.5));
     } else if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) {
       e.preventDefault();
       dispatch({ type: e.shiftKey ? "redo" : "undo" });
@@ -481,14 +502,6 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
 
   const canEdit = clips.length > 0;
 
-  /** The file the spec panel describes: the selected clip's source, else the
-   *  clip under the playhead, else the lone staged source. */
-  const activeIdx = selected ?? locate(clips, sources, playhead)?.index;
-  const metaSource =
-    (activeIdx !== undefined ? sources.get(clips[activeIdx]?.path ?? "") : undefined) ??
-    (sources.size === 1 ? Array.from(sources.values())[0] : undefined) ??
-    null;
-
   // Stable reference so the memo'd Timeline's trim handler doesn't change
   // identity every render.
   const onTrimClip = useCallback(
@@ -501,6 +514,73 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
   const showLoadError = useCallback(
     (failed: boolean) => setError(failed ? t("rc.previewError") : null),
     [t]
+  );
+
+  // The edit toolbar, memoized: it renders inside the Timeline card, and a
+  // fresh fragment identity on every workbench render (a keystroke in the
+  // project field, a hover elsewhere) would defeat the Timeline's memo.
+  const header = useMemo(
+    () => (
+      <>
+        <TransportButton label={t("rc.split")} onClick={doSplit} disabled={!canEdit}>
+          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+            <path d="M12 3v18" />
+            <path d="m8 7-4 5 4 5M16 7l4 5-4 5" />
+          </svg>
+        </TransportButton>
+        <TransportButton label={t("rc.delete")} onClick={doDelete} disabled={!canEdit}>
+          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" />
+          </svg>
+        </TransportButton>
+        <span className="mx-1 h-4 w-px bg-neutral-200 dark:bg-neutral-700" aria-hidden />
+        <TransportButton
+          label={t("rc.undo")}
+          onClick={() => dispatch({ type: "undo" })}
+          disabled={state.past.length === 0}
+        >
+          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9 14 4 9l5-5" />
+            <path d="M4 9h11a5 5 0 0 1 0 10h-4" />
+          </svg>
+        </TransportButton>
+        <TransportButton
+          label={t("rc.redo")}
+          onClick={() => dispatch({ type: "redo" })}
+          disabled={state.future.length === 0}
+        >
+          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="m15 14 5-5-5-5" />
+            <path d="M20 9H9a5 5 0 0 0 0 10h4" />
+          </svg>
+        </TransportButton>
+        <span className="ml-auto flex items-center gap-1.5 pr-0.5">
+          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0 text-neutral-400" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+            <circle cx="11" cy="11" r="7" />
+            <path d="m20 20-3.5-3.5M8 11h6M11 8v6" />
+          </svg>
+          {/* mp-range pins width:100%, so the fixed width lives on this
+              wrapper — and the wrapper has to be a flex box, or the
+              slider sits on the text baseline instead of centring on the
+              row and lands a few pixels off the icon. */}
+          <span className="flex w-24 items-center">
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={0.5}
+              value={zoomToSlider(pxPerSec)}
+              onChange={(e) => setPxPerSec(sliderToZoom(Number(e.target.value)))}
+              style={rangeFill(zoomToSlider(pxPerSec), 0, 100)}
+              title={t("rc.zoom")}
+              aria-label={t("rc.zoom")}
+              className="mp-range"
+            />
+          </span>
+        </span>
+      </>
+    ),
+    [t, doSplit, doDelete, canEdit, state.past.length, state.future.length, pxPerSec, dispatch]
   );
 
   return (
@@ -665,10 +745,8 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
                 <Player
                   clips={clips}
                   sources={sources}
-                  playhead={playhead}
                   playing={playing}
                   muted={muted}
-                  onPlayhead={setPlayhead}
                   onPlayState={setPlaying}
                   onLoadError={showLoadError}
                 />
@@ -680,7 +758,7 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
                 )}
               </div>
               <div className="flex items-center gap-1 border-t border-white/10 px-1.5 py-1">
-                <TransportButton tone="dark" label={t("rc.back10")} onClick={() => seek(playhead - 10)} disabled={!canEdit}>
+                <TransportButton tone="dark" label={t("rc.back10")} onClick={() => seek(getPlayhead() - 10)} disabled={!canEdit}>
                   <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="currentColor">
                     <path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z" />
                   </svg>
@@ -700,14 +778,12 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
                     <PlayIcon className="h-3.5 w-3.5" />
                   )}
                 </TransportButton>
-                <TransportButton tone="dark" label={t("rc.fwd10")} onClick={() => seek(playhead + 10)} disabled={!canEdit}>
+                <TransportButton tone="dark" label={t("rc.fwd10")} onClick={() => seek(getPlayhead() + 10)} disabled={!canEdit}>
                   <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="currentColor">
                     <path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" />
                   </svg>
                 </TransportButton>
-                <span className="mx-1 min-w-28 text-center text-xs tabular-nums text-neutral-300">
-                  {formatTime(playhead)} / {formatTime(total)}
-                </span>
+                <Timecode total={total} />
                 <span className="ml-auto">
                   <TransportButton
                     tone="dark"
@@ -720,7 +796,7 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
               </div>
             </div>
 
-            <SourceMeta path={metaSource?.path ?? null} />
+            <ActiveMeta clips={clips} sources={sources} selected={selected} />
           </div>
 
           {error && (
@@ -733,72 +809,12 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
           <Timeline
             clips={clips}
             sources={sources}
-            playhead={playhead}
             pxPerSec={pxPerSec}
             selected={selected}
             onSeek={seek}
             onSelect={setSelected}
             onTrim={onTrimClip}
-            header={
-              <>
-                <TransportButton label={t("rc.split")} onClick={doSplit} disabled={!canEdit}>
-                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-                    <path d="M12 3v18" />
-                    <path d="m8 7-4 5 4 5M16 7l4 5-4 5" />
-                  </svg>
-                </TransportButton>
-                <TransportButton label={t("rc.delete")} onClick={doDelete} disabled={!canEdit}>
-                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" />
-                  </svg>
-                </TransportButton>
-                <span className="mx-1 h-4 w-px bg-neutral-200 dark:bg-neutral-700" aria-hidden />
-                <TransportButton
-                  label={t("rc.undo")}
-                  onClick={() => dispatch({ type: "undo" })}
-                  disabled={state.past.length === 0}
-                >
-                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M9 14 4 9l5-5" />
-                    <path d="M4 9h11a5 5 0 0 1 0 10h-4" />
-                  </svg>
-                </TransportButton>
-                <TransportButton
-                  label={t("rc.redo")}
-                  onClick={() => dispatch({ type: "redo" })}
-                  disabled={state.future.length === 0}
-                >
-                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="m15 14 5-5-5-5" />
-                    <path d="M20 9H9a5 5 0 0 0 0 10h4" />
-                  </svg>
-                </TransportButton>
-                <span className="ml-auto flex items-center gap-1.5 pr-0.5">
-                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0 text-neutral-400" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-                    <circle cx="11" cy="11" r="7" />
-                    <path d="m20 20-3.5-3.5M8 11h6M11 8v6" />
-                  </svg>
-                  {/* mp-range pins width:100%, so the fixed width lives on this
-                      wrapper — and the wrapper has to be a flex box, or the
-                      slider sits on the text baseline instead of centring on the
-                      row and lands a few pixels off the icon. */}
-                  <span className="flex w-24 items-center">
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      step={0.5}
-                      value={zoomToSlider(pxPerSec)}
-                      onChange={(e) => setPxPerSec(sliderToZoom(Number(e.target.value)))}
-                      style={rangeFill(zoomToSlider(pxPerSec), 0, 100)}
-                      title={t("rc.zoom")}
-                      aria-label={t("rc.zoom")}
-                      className="mp-range"
-                    />
-                  </span>
-                </span>
-              </>
-            }
+            header={header}
           />
 
           <div className="divide-y divide-neutral-100 rounded-lg bg-white ring-1 ring-neutral-200 dark:divide-neutral-800 dark:bg-neutral-900 dark:ring-neutral-800">
@@ -902,10 +918,50 @@ export default function RoughCutWorkbench({ onBack }: { onBack?: () => void }) {
   );
 }
 
+/** The transport readout. Subscribes to the playhead store directly: it is the
+ *  one piece of the shell that must repaint on every frame of playback, and
+ *  the only one besides the timeline's playhead line — keeping this readout
+ *  out of the workbench's render scope is what lets the shell sit still while
+ *  the clock runs. */
+function Timecode({ total }: { total: number }) {
+  const playhead = usePlayhead();
+  return (
+    <span className="mx-1 min-w-28 text-center text-xs tabular-nums text-neutral-300">
+      {formatTime(playhead)} / {formatTime(total)}
+    </span>
+  );
+}
+
+/** The file the spec panel describes: the selected clip's source, else the
+ *  clip under the playhead, else the lone staged source. The playhead-driven
+ *  resolution subscribes to the store through a derived snapshot — the
+ *  resolved path — so during playback this re-renders only when the clip under
+ *  the playhead (and with it the panel's file) actually changes, and the
+ *  workbench around it never does. */
+const ActiveMeta = memo(function ActiveMeta({
+  clips,
+  sources,
+  selected,
+}: {
+  clips: RoughCutClip[];
+  sources: Map<string, SourceInfo>;
+  selected: number | null;
+}) {
+  const path = useSyncExternalStore(subscribePlayhead, () => {
+    const at = selected ?? locate(clips, sources, getPlayhead())?.index;
+    return (
+      (at !== undefined ? sources.get(clips[at]?.path ?? "") : undefined) ??
+      (sources.size === 1 ? Array.from(sources.values())[0] : undefined)
+    )?.path ?? null;
+  });
+  return <SourceMeta path={path} />;
+});
+
 /** The selected clip's parameters, as a section of the card under the timeline.
  *  The fields share grid columns so labels and controls line up.
- *  memo: the playhead lives in the workbench, so playback would otherwise
- *  re-render this whole form at 60fps. */
+ *  memo: playback writes the playhead store many times a second, so anything
+ *  in this shell without a stable props contract would be re-rendered for
+ *  nothing; this form only depends on the selected clip. */
 const ClipInspector = memo(function ClipInspector({
   clip,
   index,
@@ -1033,7 +1089,8 @@ const ClipInspector = memo(function ClipInspector({
 /** The file being previewed, described in full: the same report the 格式体检
  *  tool renders, served from the concat check's probe cache so a source on the
  *  timeline costs no extra ffprobe. Scrolls inside the player's height.
- *  memo: playback only moves the playhead, the inspected file doesn't change. */
+ *  memo: playback only moves the playhead, the inspected file doesn't change —
+ *  and ActiveMeta above hands it a new path only when that stops holding. */
 const SourceMeta = memo(function SourceMeta({ path }: { path: string | null }) {
   const { t } = useI18n();
   const [report, setReport] = useState<MediaReport | null>(null);

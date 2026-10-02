@@ -22,8 +22,9 @@ const QUALITY_TIERS = [
   { id: CRF.compact, key: "compact" },
 ] as const;
 
-// memo: the playhead state lives in the workbench, so without this the whole
-// encoding form re-renders at 60fps during playback for nothing.
+// memo: the workbench re-renders on every selection/keystroke, and this form
+// must not follow it — the playhead itself lives in an external store
+// (./playhead) and never reaches this component at all.
 const ExportBar = memo(function ExportBar({
   clips,
   sources,

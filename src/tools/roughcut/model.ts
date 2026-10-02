@@ -45,6 +45,13 @@ export function formatTime(secs: number, coarse = false): string {
   return coarse ? core : `${core}.${Math.floor((s * 10) % 10)}`;
 }
 
+/** Timeline seconds inside a clip → seconds within its source file. The
+ *  playhead reads in timeline time, but a position in the preview is a
+ *  position in the file, and a sped-up clip covers its window faster. */
+export function sourceTimeOf(clip: RoughCutClip, local: number): number {
+  return clip.startTime + local * speedOf(clip);
+}
+
 /** Timeline length of one clip: its source window at that clip's speed. */
 export function clipDuration(clip: RoughCutClip, sources: Map<string, SourceInfo>): number {
   return Math.max(0, (sourceEnd(clip, sources) - clip.startTime) / speedOf(clip));
@@ -94,9 +101,8 @@ export function splitAt(
   if (!at) return null;
   const clip = clips[at.index];
   const end = sourceEnd(clip, sources);
-  // The playhead reads in timeline seconds; the cut is a position in the
-  // source, which a sped-up clip covers faster.
-  const cut = clip.startTime + at.local * speedOf(clip);
+  // The cut is a position in the source, which a sped-up clip covers faster.
+  const cut = sourceTimeOf(clip, at.local);
   if (cut - clip.startTime < MIN_SLICE || end - cut < MIN_SLICE) return null;
   const left: RoughCutClip = { ...clip, endTime: cut };
   const right: RoughCutClip = { ...clip, startTime: cut, endTime: end };

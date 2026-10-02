@@ -2,28 +2,20 @@
 //! mode. The backend hard-fails on codec-family / resolution mismatches; this
 //! check adds the softer signals ffprobe has but MediaInfo drops (fps, pixel
 //! format, profile, audio rate), so the user learns about a problem before
-//! encoding instead of from a glitchy output file.
+//! encoding instead of from a glitchy output file. The field comparison
+//! itself lives in `compatCore.ts`, pure and unit-tested; this module fetches
+//! and caches the reports around it.
 
 import { inspectMedia } from "../../lib/engine";
-import type { MediaReport, StreamReport } from "../../types";
+import type { MediaReport } from "../../types";
+import {
+  compareReports,
+  type CompatField,
+  type CompatProblem,
+  type MediaReportLike,
+} from "./compatCore";
 
-export type CompatField =
-  | "videoCodec"
-  | "profile"
-  | "pixFmt"
-  | "size"
-  | "fps"
-  | "audioCodec"
-  | "sampleRate"
-  | "channels";
-
-export interface CompatProblem {
-  /** Source file (unique path) that differs from the first clip's source. */
-  source: string;
-  field: CompatField;
-  first: string;
-  other: string;
-}
+export type { CompatField, CompatProblem };
 
 export interface CompatResult {
   ok: boolean;
@@ -31,20 +23,6 @@ export interface CompatResult {
   /** Failed probes (unreadable / non-media files). */
   unreadable: string[];
 }
-
-function videoStream(report: MediaReportLike): StreamReport | null {
-  return report.streams.find((s) => s.kind === "video") ?? null;
-}
-
-function audioStream(report: MediaReportLike): StreamReport | null {
-  return report.streams.find((s) => s.kind === "audio") ?? null;
-}
-
-interface MediaReportLike {
-  streams: StreamReport[];
-}
-
-const cmp = (a: unknown, b: unknown) => String(a ?? "") !== String(b ?? "");
 
 // Session-lifetime probe cache: the auto-check re-runs on every source-set
 // change, and source files don't change underneath a running session. The
@@ -78,8 +56,8 @@ export async function inspectCached(path: string): Promise<MediaReport> {
   return p;
 }
 
-/** Compare every unique source against the first clip's source. Cheap fields
- *  first; all mismatches are reported so the user can decide. */
+/** Probe every unique source, then hand the readable reports to the pure
+ *  comparison in compatCore. */
 export async function checkConcatCompat(paths: string[]): Promise<CompatResult> {
   const unique = Array.from(new Set(paths));
   const reports = new Map<string, MediaReportLike>();
@@ -94,40 +72,10 @@ export async function checkConcatCompat(paths: string[]): Promise<CompatResult> 
     })
   );
 
-  const problems: CompatProblem[] = [];
-  const firstPath = unique.find((p) => reports.has(p));
-  if (!firstPath) return { ok: false, problems, unreadable };
-  const first = reports.get(firstPath)!;
-  const fv = videoStream(first);
-  const fa = audioStream(first);
-
-  for (const p of unique) {
-    if (p === firstPath) continue;
-    const report = reports.get(p);
-    if (!report) continue;
-    const v = videoStream(report);
-    const a = audioStream(report);
-    const push = (field: CompatField, other: unknown, base: unknown) =>
-      problems.push({ source: p, field, first: String(base ?? ""), other: String(other ?? "") });
-    if (!v || !fv) {
-      push("videoCodec", v?.codecName ?? null, fv?.codecName);
-      continue;
-    }
-    if (cmp(v.codecName, fv.codecName)) push("videoCodec", v.codecName, fv.codecName);
-    else {
-      if (cmp(v.profile, fv.profile)) push("profile", v.profile, fv.profile);
-      if (cmp(v.pixFmt, fv.pixFmt)) push("pixFmt", v.pixFmt, fv.pixFmt);
-      if (cmp(v.avgFrameRate, fv.avgFrameRate)) push("fps", v.avgFrameRate, fv.avgFrameRate);
-    }
-    if (v.width !== fv.width || v.height !== fv.height) {
-      push("size", `${v.width ?? "?"}x${v.height ?? "?"}`, `${fv.width ?? "?"}x${fv.height ?? "?"}`);
-    }
-    if (fa && a) {
-      if (cmp(a.codecName, fa.codecName)) push("audioCodec", a.codecName, fa.codecName);
-      if (cmp(a.sampleRate, fa.sampleRate)) push("sampleRate", a.sampleRate, fa.sampleRate);
-      if (cmp(a.channels, fa.channels)) push("channels", a.channels, fa.channels);
-    }
-  }
-
-  return { ok: problems.length === 0 && unreadable.length === 0, problems, unreadable };
+  const { problems, firstPath } = compareReports(unique, reports);
+  return {
+    ok: firstPath !== undefined && problems.length === 0 && unreadable.length === 0,
+    problems,
+    unreadable,
+  };
 }
