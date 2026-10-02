@@ -57,6 +57,13 @@ struct ByteRange {
 /// Parse the single-range subset of RFC 9110 (`bytes=start-end`, `bytes=start-`,
 /// `bytes=-suffix`). Multi-range requests fall back to serving the whole file.
 fn parse_range(value: &str, len: u64) -> Option<ByteRange> {
+    // An empty file has no bytes to range over; the `len - 1` below would
+    // underflow (debug panic / release wraparound). `None` means the caller
+    // serves the whole file — 200 with Content-Length 0, which is what the
+    // suffix branch already does for this case via `checked_sub`.
+    if len == 0 {
+        return None;
+    }
     let spec = value.strip_prefix("bytes=")?.split(',').next()?.trim();
     let (first, last) = spec.split_once('-')?;
     if first.is_empty() {
@@ -129,10 +136,10 @@ pub async fn stream(
     };
 
     let mut builder = Response::builder().header(header::CONTENT_TYPE, mime);
-    match range {
+    let body = match range {
         Some(ByteRange { start, end }) => {
             use std::io::SeekFrom;
-            use tokio::io::AsyncSeekExt;
+            use tokio::io::{AsyncReadExt, AsyncSeekExt};
             if file.seek(SeekFrom::Start(start)).await.is_err() {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -149,16 +156,21 @@ pub async fn stream(
                 )
                 .header(header::CONTENT_LENGTH, chunk)
                 .header(header::ACCEPT_RANGES, "bytes");
+            // Content-Length promises exactly `chunk` bytes; `take` stops the
+            // stream there. Reading to EOF would send extra bytes whenever
+            // `end` is not the last byte of the file, corrupting the framing.
+            Body::from_stream(ReaderStream::new(file.take(chunk)))
         }
         None => {
             builder = builder
                 .status(StatusCode::OK)
                 .header(header::CONTENT_LENGTH, len)
                 .header(header::ACCEPT_RANGES, "bytes");
+            Body::from_stream(ReaderStream::new(file))
         }
-    }
+    };
 
     builder
-        .body(Body::from_stream(ReaderStream::new(file)))
+        .body(body)
         .unwrap_or_else(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response())
 }

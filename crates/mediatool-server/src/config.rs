@@ -53,10 +53,20 @@ impl Config {
         let path = std::env::var("MEDIATOOL_CONFIG")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("config.toml"));
-        let mut cfg = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| toml::from_str::<Config>(&s).ok())
-            .unwrap_or_default();
+        let mut cfg = match std::fs::read_to_string(&path) {
+            // Missing (or unreadable) file: env vars and defaults carry it.
+            Err(_) => Config::default(),
+            Ok(s) => match toml::from_str::<Config>(&s) {
+                Ok(c) => c,
+                // A malformed file must not be indistinguishable from "no
+                // config": say what broke before falling back, or one typo
+                // silently disables every setting in the file.
+                Err(e) => {
+                    eprintln!("警告：{path:?} 解析失败，已回退默认配置（env 覆盖仍生效）：{e}");
+                    Config::default()
+                }
+            },
+        };
         cfg.apply_env();
         cfg
     }
@@ -91,6 +101,14 @@ impl Config {
         if self.token.is_empty() {
             return Err(
                 "未配置访问令牌：设置 MEDIATOOL_TOKEN 或 config.toml 的 token（服务会暴露文件浏览与转码能力，不能匿名开放）".into(),
+            );
+        }
+        // Soft check only: a hard refusal would lock existing deployments out
+        // on upgrade, but a short token is brute-forceable, so say so.
+        if self.token.len() < 12 {
+            eprintln!(
+                "警告：访问令牌过短（{} 字节），容易被暴力猜测，建议更换为长随机串",
+                self.token.len()
             );
         }
         if self.roots.is_empty() {

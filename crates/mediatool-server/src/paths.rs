@@ -17,22 +17,24 @@ use serde::Serialize;
 /// media tree can hold hundreds of thousands of entries.
 const MAX_ENTRIES: usize = 5000;
 
+/// One message for both "does not exist" and "outside the roots": telling
+/// them apart would let a caller probe which paths exist on the server (an
+/// existence oracle).
+const PATH_DENIED: &str = "路径不可访问或不在允许的目录内";
+
 /// A path as the browser should see it. Windows `canonicalize()` yields
 /// verbatim `\\?\` paths, which are meaningless in a UI and cannot be typed
-/// back in; the prefix is a no-op to strip on Linux.
+/// back in; the prefixes are a no-op to strip on Linux. A verbatim UNC path
+/// (`\\?\UNC\server\share`) is restored to its `\\server\share` form.
 pub fn display(path: &Path) -> String {
     let raw = path.to_string_lossy();
-    let trimmed = raw
-        .strip_prefix(r"\\?\UNC\")
-        .map_or(raw.as_ref(), |rest| rest);
-    let restored = if raw.starts_with(r"\\?\UNC\") {
-        format!(r"\\{trimmed}")
+    if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
     } else {
         raw.strip_prefix(r"\\?\")
             .unwrap_or(raw.as_ref())
             .to_string()
-    };
-    restored
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -65,9 +67,8 @@ impl Roots {
             return Err(AppError("路径不能为空".into()));
         }
         let path = Path::new(raw);
-        let canonical = path
-            .canonicalize()
-            .map_err(|e| AppError(format!("路径不存在或不可访问: {e}")))?;
+        // Same message for "missing" and "not allowed" — see PATH_DENIED.
+        let canonical = path.canonicalize().map_err(|_| AppError(PATH_DENIED.into()))?;
         self.check(&canonical)?;
         Ok(canonical)
     }
@@ -80,7 +81,7 @@ impl Roots {
         if ok {
             Ok(())
         } else {
-            Err(AppError("该路径不在服务器允许的目录内".into()))
+            Err(AppError(PATH_DENIED.into()))
         }
     }
 

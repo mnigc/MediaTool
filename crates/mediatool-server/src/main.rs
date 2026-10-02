@@ -59,6 +59,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let emitter = Arc::new(WsEmitter::new(1024));
+    let auth = Auth::new(cfg.token.clone());
     let ctx = Ctx::new(
         Arc::new(ServerEnv::new(
             cfg.data_dir.clone(),
@@ -82,17 +83,30 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         roots,
     });
 
-    let api = Router::new()
+    // Header token only: every JSON API route. A query-string credential
+    // would end up in proxy access logs, so it is not accepted here.
+    let json_api = Router::new()
         .route(
             "/api/invoke/{command}",
             post(rpc::handle).with_state(state.clone()),
         )
+        .layer(axum::middleware::from_fn_with_state(
+            auth.clone(),
+            auth::require_token,
+        ));
+
+    // The WebSocket handshake and the <video> element cannot carry an
+    // Authorization header, so exactly these two routes also accept the
+    // `?token=` query form (the known LAN-grade compromise; see auth.rs).
+    let browser_routes = Router::new()
         .route("/api/events", get(ws::upgrade).with_state(emitter))
         .route("/api/media", get(media_http::stream).with_state(state.clone()))
         .layer(axum::middleware::from_fn_with_state(
-            Auth::new(cfg.token.clone()),
-            auth::require_token,
+            auth,
+            auth::require_token_with_query,
         ));
+
+    let api = json_api.merge(browser_routes);
 
     // Unauthenticated on purpose: a container healthcheck must not need the
     // operator's token, and the OAuth callback is reached by the browser
