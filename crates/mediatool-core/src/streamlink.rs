@@ -24,7 +24,7 @@ use serde::Serialize;
 
 use crate::ctx::{emit, AppEnv, Ctx, Emitter};
 use crate::error::{AppError, Result};
-use crate::models::WorkflowStepInput;
+use crate::models::{DlKind, DlQuality, WorkflowStepInput};
 use crate::ytdlp::{
     self, emit_dl_done, format_speed, DownloadProgressEvent, DownloadRequest, DownloadStartedEvent,
     InstallProgressEvent,
@@ -661,22 +661,46 @@ pub fn probe_live(
 /// Map the shared quality vocabulary onto streamlink. streamlink names are
 /// per-plugin, so a capped request is expressed as a sort exclusion on `best`
 /// (which every HTTP plugin resolves) instead of a literal `1080p` name.
-fn stream_selection(quality: &str) -> (Vec<String>, String) {
+/// Values outside the shared vocabulary pass through as the literal stream
+/// name — a documented feature, not an error.
+fn stream_selection(quality: &DlQuality) -> (Vec<String>, String) {
     match quality {
-        "" | "best" => (Vec::new(), "best".into()),
         // Live capture has no audio-only mode; take the lowest-bitrate stream
         // with audio rather than failing on an unknown name.
-        "audio" => (Vec::new(), "worst".into()),
-        other => {
-            if let Some(p) = other.strip_suffix('p') {
+        DlQuality::Audio => (Vec::new(), "worst".into()),
+        DlQuality::Best => (Vec::new(), "best".into()),
+        DlQuality::R2160p => (
+            vec!["--stream-sorting-excludes".into(), ">2160p".into()],
+            "best".into(),
+        ),
+        DlQuality::R1080p => (
+            vec!["--stream-sorting-excludes".into(), ">1080p".into()],
+            "best".into(),
+        ),
+        DlQuality::R720p => (
+            vec!["--stream-sorting-excludes".into(), ">720p".into()],
+            "best".into(),
+        ),
+        DlQuality::R480p => (
+            vec!["--stream-sorting-excludes".into(), ">480p".into()],
+            "best".into(),
+        ),
+        // Passthrough (and "" / other unknown values keep the historical
+        // "best" resolution — that is what the old `"" | "best"` arm did).
+        DlQuality::Other(raw) => {
+            if raw.is_empty() {
+                (Vec::new(), "best".into())
+            } else if let Some(p) = raw.strip_suffix('p') {
                 if p.parse::<u32>().is_ok() {
                     return (
-                        vec!["--stream-sorting-excludes".into(), format!(">{other}")],
+                        vec!["--stream-sorting-excludes".into(), format!(">{p}")],
                         "best".into(),
                     );
                 }
+                (Vec::new(), raw.clone())
+            } else {
+                (Vec::new(), raw.clone())
             }
-            (Vec::new(), other.to_string())
         }
     }
 }
@@ -895,14 +919,14 @@ pub fn run_record_blocking(
     pipeline: Vec<WorkflowStepInput>,
     upload_to: Vec<String>,
 ) {
-    let kind = "record".to_string();
+    let kind = DlKind::Record;
     let fail = |e: String| {
         emit_dl_done(
             ctx,
             id,
             false,
             false,
-            &kind,
+            kind.as_str(),
             None,
             Some(e),
             false,
@@ -958,7 +982,7 @@ pub fn run_record_blocking(
             id: id.to_string(),
             url: req.url.clone(),
             title,
-            kind: kind.clone(),
+            kind: kind.as_str().to_string(),
             pipeline: pipeline.clone(),
             upload_to,
         },
@@ -1021,7 +1045,7 @@ pub fn run_record_blocking(
                 id,
                 false,
                 true,
-                &kind,
+                kind.as_str(),
                 Some(out.to_string_lossy().to_string()),
                 Some("已取消".into()),
                 false,
@@ -1047,7 +1071,7 @@ pub fn run_record_blocking(
                 id,
                 false,
                 false,
-                &kind,
+                kind.as_str(),
                 None,
                 Some(msg),
                 false,
@@ -1074,7 +1098,7 @@ pub fn run_record_blocking(
             id,
             true,
             false,
-            &kind,
+            kind.as_str(),
             Some(out.to_string_lossy().to_string()),
             None,
             limit_hit,
@@ -1163,17 +1187,17 @@ mod tests {
     fn stream_selection_best_and_audio() {
         // best/default: no sort exclusions, take best.
         assert_eq!(
-            stream_selection(""),
+            stream_selection(&DlQuality::Other(String::new())),
             (Vec::<String>::new(), "best".to_string())
         );
         assert_eq!(
-            stream_selection("best"),
+            stream_selection(&DlQuality::Best),
             (Vec::<String>::new(), "best".to_string())
         );
         // Live capture has no audio-only mode: degrade to the worst stream
         // (still audible) instead of failing.
         assert_eq!(
-            stream_selection("audio"),
+            stream_selection(&DlQuality::Audio),
             (Vec::<String>::new(), "worst".to_string())
         );
     }
@@ -1181,7 +1205,7 @@ mod tests {
     #[test]
     fn stream_selection_resolution_cap_excludes_better() {
         // A capped request sorts out anything above 720p but still takes best.
-        let (args, name) = stream_selection("720p");
+        let (args, name) = stream_selection(&DlQuality::R720p);
         assert_eq!(name, "best");
         assert_eq!(
             args,
@@ -1194,7 +1218,7 @@ mod tests {
 
     #[test]
     fn stream_selection_unknown_name_passes_through() {
-        let (args, name) = stream_selection("480p30");
+        let (args, name) = stream_selection(&DlQuality::Other("480p30".into()));
         assert!(args.is_empty());
         assert_eq!(name, "480p30");
     }

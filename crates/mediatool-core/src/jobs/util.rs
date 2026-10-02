@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::{AppError, Result};
-use crate::models::{MediaInfo, VideoParams};
+use crate::models::{GpuBackend, MediaInfo, SpeedPreset, VideoCodec, VideoParams};
 
 /// Build the output path, placing the result next to the input (or in output_dir).
 pub(super) fn output_path(
@@ -151,52 +151,58 @@ fn resolution_vf(res: &str) -> Option<String> {
     }
 }
 
-pub(super) fn vp9_cpu_used(preset: &str) -> u32 {
+pub(super) fn vp9_cpu_used(preset: &SpeedPreset) -> u32 {
     match preset {
-        "veryfast" => 5,
-        "faster" => 4,
-        "fast" => 3,
-        "medium" => 2,
-        "slow" => 1,
-        "slower" | "veryslow" => 0,
-        _ => 2,
+        SpeedPreset::Veryfast => 5,
+        SpeedPreset::Faster => 4,
+        SpeedPreset::Fast => 3,
+        SpeedPreset::Medium => 2,
+        SpeedPreset::Slow => 1,
+        SpeedPreset::Slower | SpeedPreset::Veryslow => 0,
+        // Unreachable after validation; keeps the historical default.
+        SpeedPreset::Other(_) => 2,
     }
 }
 
 /// Map the x264-style speed presets onto SVT-AV1's preset (cpu-used) scale.
 /// SVT-AV1 accepts roughly 1..=13 where higher = faster / lower quality.
-pub(super) fn svt_preset(preset: &str) -> u32 {
+pub(super) fn svt_preset(preset: &SpeedPreset) -> u32 {
     match preset {
-        "veryfast" => 10,
-        "faster" => 9,
-        "fast" => 8,
-        "medium" => 7,
-        "slow" => 5,
-        "slower" => 3,
-        "veryslow" => 2,
-        _ => 7,
+        SpeedPreset::Veryfast => 10,
+        SpeedPreset::Faster => 9,
+        SpeedPreset::Fast => 8,
+        SpeedPreset::Medium => 7,
+        SpeedPreset::Slow => 5,
+        SpeedPreset::Slower => 3,
+        SpeedPreset::Veryslow => 2,
+        // Unreachable after validation; keeps the historical default.
+        SpeedPreset::Other(_) => 7,
     }
 }
 
-pub(super) fn gpu_plan(video_codec: &str, gpu: &Option<String>) -> (String, Option<String>) {
-    match (video_codec, gpu.as_deref()) {
-        ("libx264", Some("nvenc")) => ("h264_nvenc".to_string(), Some("cuda".to_string())),
-        ("libx264", Some("qsv")) => ("h264_qsv".to_string(), Some("qsv".to_string())),
-        ("libx264", Some("videotoolbox")) => (
-            "h264_videotoolbox".to_string(),
-            Some("videotoolbox".to_string()),
-        ),
-        ("libx264", Some("amf")) => ("h264_amf".to_string(), Some("d3d11va".to_string())),
-        ("libx264", Some("vaapi")) => ("h264_vaapi".to_string(), None),
-        ("libx265", Some("nvenc")) => ("hevc_nvenc".to_string(), Some("cuda".to_string())),
-        ("libx265", Some("qsv")) => ("hevc_qsv".to_string(), Some("qsv".to_string())),
-        ("libx265", Some("videotoolbox")) => (
-            "hevc_videotoolbox".to_string(),
-            Some("videotoolbox".to_string()),
-        ),
-        ("libx265", Some("amf")) => ("hevc_amf".to_string(), Some("d3d11va".to_string())),
-        ("libx265", Some("vaapi")) => ("hevc_vaapi".to_string(), None),
-        _ => (video_codec.to_string(), None),
+/// Swap the chosen codec family for the hardware encoder when a backend was
+/// picked and the codec has a hardware implementation for it. Returns the
+/// effective ffmpeg encoder name plus the `-hwaccel` hint. Unknown codec or
+/// backend values fall through to CPU encoding — exactly the behavior the
+/// free-string version had.
+pub(super) fn gpu_plan(codec: &VideoCodec, gpu: Option<&GpuBackend>) -> (String, Option<&'static str>) {
+    let pair = |name: &'static str, accel: Option<&'static str>| (name.to_string(), accel);
+    match (codec, gpu) {
+        (VideoCodec::LibX264, Some(GpuBackend::Nvenc)) => pair("h264_nvenc", Some("cuda")),
+        (VideoCodec::LibX264, Some(GpuBackend::Qsv)) => pair("h264_qsv", Some("qsv")),
+        (VideoCodec::LibX264, Some(GpuBackend::Videotoolbox)) => {
+            pair("h264_videotoolbox", Some("videotoolbox"))
+        }
+        (VideoCodec::LibX264, Some(GpuBackend::Amf)) => pair("h264_amf", Some("d3d11va")),
+        (VideoCodec::LibX264, Some(GpuBackend::Vaapi)) => pair("h264_vaapi", None),
+        (VideoCodec::LibX265, Some(GpuBackend::Nvenc)) => pair("hevc_nvenc", Some("cuda")),
+        (VideoCodec::LibX265, Some(GpuBackend::Qsv)) => pair("hevc_qsv", Some("qsv")),
+        (VideoCodec::LibX265, Some(GpuBackend::Videotoolbox)) => {
+            pair("hevc_videotoolbox", Some("videotoolbox"))
+        }
+        (VideoCodec::LibX265, Some(GpuBackend::Amf)) => pair("hevc_amf", Some("d3d11va")),
+        (VideoCodec::LibX265, Some(GpuBackend::Vaapi)) => pair("hevc_vaapi", None),
+        (codec, _) => (codec.as_str().to_string(), None),
     }
 }
 
@@ -228,7 +234,7 @@ pub(super) fn vaapi_render_node() -> Option<&'static str> {
 /// node is available. The companion guard for `vaapi_render_node()` — the
 /// arg builders themselves stay infallible and simply skip the device flag.
 pub(super) fn ensure_vaapi_device(p: &VideoParams) -> Result<()> {
-    if gpu_plan(&p.video_codec, &p.gpu).0.ends_with("_vaapi") && vaapi_render_node().is_none() {
+    if gpu_plan(&p.video_codec, p.gpu.as_ref()).0.ends_with("_vaapi") && vaapi_render_node().is_none() {
         return Err(AppError(
             "VAAPI 硬件加速需要 Linux 且存在渲染节点 /dev/dri/renderD128：请检查显卡驱动，或改用 CPU 编码器／其他硬件后端".into(),
         ));

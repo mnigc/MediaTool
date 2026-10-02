@@ -6,10 +6,12 @@ use std::path::{Path, PathBuf};
 use crate::ctx::AppEnv;
 use crate::error::{AppError, Result};
 use crate::models::{
-    AudioMergeParams, AudioParams, AudioVolumeParams, ContactSheetParams, ExtractAudioParams,
-    FrameSampleParams, JobRequest, MediaInfo, MediaType, MuteParams, RoughCutParams,
-    ScreenshotParams, SpeedParams, StripMetadataParams, SubtitleParams, TrimParams, TrimSegment,
-    VideoParams, VideoSilenceParams, WatermarkParams,
+    AudioChoice, AudioMergeParams, AudioParams, AudioVolumeParams, ContactSheetParams,
+    CutMode, ExtractAudioParams, FrameSampleParams, JobRequest, MediaInfo, MediaType, MuteParams,
+    OverwritePolicy, OutputFormat, QualityMode, RoughCutContainer, RoughCutParams,
+    ScreenshotMode, ScreenshotParams, SpeedParams, SpeedPreset, StripMetadataParams,
+    SubtitleParams, TrimParams, TrimSegment, VideoCodec, VideoParams, VideoSilenceParams,
+    WatermarkParams,
 };
 
 use super::args::{
@@ -52,11 +54,19 @@ pub(super) const MP4_COPY_VIDEO: &[&str] = &["h264", "h265", "hevc", "av1", "vp9
 pub(super) const MP4_COPY_AUDIO: &[&str] = &["aac", "mp3", "ac3", "eac3", "alac"];
 
 /// The codec that actually reaches the muxer: an explicit encode target, or
-/// the probed source stream when the param is ""/"copy".
-fn effective_codec<'a>(param: &'a str, source: Option<&'a str>) -> &'a str {
+/// the probed source stream when the param is stream copy.
+fn effective_codec<'a>(param: &'a VideoCodec, source: Option<&'a str>) -> &'a str {
     match param {
-        "" | "copy" => source.unwrap_or(""),
-        other => other,
+        VideoCodec::Copy => source.unwrap_or(""),
+        other => other.as_str(),
+    }
+}
+
+/// Same as `effective_codec` for the video job's audio-track choice.
+fn effective_audio_codec<'a>(param: &'a AudioChoice, source: Option<&'a str>) -> &'a str {
+    match param {
+        AudioChoice::Copy => source.unwrap_or(""),
+        other => other.as_str(),
     }
 }
 
@@ -68,17 +78,17 @@ fn effective_codec<'a>(param: &'a str, source: Option<&'a str>) -> &'a str {
 /// Only callers that opted in via `allow_copy_fallback` reach this; explicit
 /// tool-page choices keep the hard validation error instead.
 pub(super) fn mp4_copy_fallback(p: &mut VideoParams, info: &MediaInfo) -> Option<String> {
-    if p.format != "mp4" {
+    if p.format != OutputFormat::Mp4 {
         return None;
     }
     let incompatible = |codec: Option<&str>, allowed: &[&str]| match codec {
         Some(c) if !c.is_empty() => !allowed.contains(&codec_family(c)),
         _ => false,
     };
-    let v_bad =
-        p.video_codec == "copy" && incompatible(info.video_codec.as_deref(), MP4_COPY_VIDEO);
-    let a_bad =
-        p.audio_codec == "copy" && incompatible(info.audio_codec.as_deref(), MP4_COPY_AUDIO);
+    let v_bad = p.video_codec == VideoCodec::Copy
+        && incompatible(info.video_codec.as_deref(), MP4_COPY_VIDEO);
+    let a_bad = p.audio_codec == AudioChoice::Copy
+        && incompatible(info.audio_codec.as_deref(), MP4_COPY_AUDIO);
     if !v_bad && !a_bad {
         return None;
     }
@@ -89,17 +99,17 @@ pub(super) fn mp4_copy_fallback(p: &mut VideoParams, info: &MediaInfo) -> Option
             "视频编码 {}",
             info.video_codec.as_deref().unwrap_or("")
         ));
-        p.video_codec = "libx264".into();
-        p.quality_mode = "crf".into();
+        p.video_codec = VideoCodec::LibX264;
+        p.quality_mode = QualityMode::Crf;
         p.crf = Some(23);
-        p.preset = "medium".into();
+        p.preset = SpeedPreset::Medium;
     }
     if a_bad {
         parts.push(format!(
             "音频编码 {}",
             info.audio_codec.as_deref().unwrap_or("")
         ));
-        p.audio_codec = "aac".into();
+        p.audio_codec = AudioChoice::Aac;
         p.audio_bitrate_kbps = Some(192);
     }
     let fix = if v_bad && a_bad {
@@ -122,8 +132,8 @@ pub(super) fn mp4_copy_fallback(p: &mut VideoParams, info: &MediaInfo) -> Option
 /// a raw "FFmpeg 退出码 1" long after the job started.
 pub(super) fn validate_video_container(
     ext: &str,
-    vcodec_param: &str,
-    acodec_param: &str,
+    vcodec_param: &VideoCodec,
+    acodec_param: &AudioChoice,
     info: &MediaInfo,
 ) -> Result<()> {
     match ext.to_ascii_lowercase().as_str() {
@@ -135,8 +145,8 @@ pub(super) fn validate_video_container(
                     if v_raw.is_empty() { "未知" } else { v_raw }
                 )));
             }
-            if acodec_param != "none" {
-                let a_raw = effective_codec(acodec_param, info.audio_codec.as_deref());
+            if !matches!(acodec_param, AudioChoice::None) {
+                let a_raw = effective_audio_codec(acodec_param, info.audio_codec.as_deref());
                 if !a_raw.is_empty() && !matches!(codec_family(a_raw), "opus" | "vorbis") {
                     return Err(AppError(format!(
                         "WebM 容器不支持 {} 音频：请改用 Opus，或将容器换成 MP4/MKV/MOV",
@@ -150,7 +160,7 @@ pub(super) fn validate_video_container(
         // codecs MP4 can carry; point at the re-encode paths otherwise.
         // Encode targets (non-copy) choose their own codec, so they skip this.
         "mp4" => {
-            if vcodec_param == "copy" {
+            if vcodec_param == &VideoCodec::Copy {
                 let v_raw = info.video_codec.as_deref().unwrap_or("");
                 if !v_raw.is_empty() && !MP4_COPY_VIDEO.contains(&codec_family(v_raw)) {
                     return Err(AppError(format!(
@@ -158,7 +168,7 @@ pub(super) fn validate_video_container(
                     )));
                 }
             }
-            if acodec_param == "copy" {
+            if acodec_param == &AudioChoice::Copy {
                 let a_raw = info.audio_codec.as_deref().unwrap_or("");
                 if !a_raw.is_empty() && !MP4_COPY_AUDIO.contains(&codec_family(a_raw)) {
                     return Err(AppError(format!(
@@ -213,15 +223,20 @@ fn reserve(path: &Path) {
 /// Resolve an output path applying the rename/skip/overwrite policy.
 /// Ok = path to use; Err = policy is "skip" and the file already exists (the
 /// existing path is returned so the caller can report/chain it).
-pub(super) fn resolve_policy(out: PathBuf, policy: &str) -> std::result::Result<PathBuf, PathBuf> {
+pub(super) fn resolve_policy(
+    out: PathBuf,
+    policy: &OverwritePolicy,
+) -> std::result::Result<PathBuf, PathBuf> {
     if !out.exists() {
         reserve(&out);
         return Ok(out);
     }
     match policy {
-        "overwrite" => Ok(out),
-        "skip" => Err(out),
-        _ => {
+        OverwritePolicy::Overwrite => Ok(out),
+        OverwritePolicy::Skip => Err(out),
+        // "rename" — and any unrecognized value, which is what unknown
+        // policies always resolved to.
+        OverwritePolicy::Rename | OverwritePolicy::Other(_) => {
             let candidate = apply_overwrite_policy(out, "rename");
             reserve(&candidate);
             Ok(candidate)
@@ -308,12 +323,11 @@ pub(super) fn prepare_job(
     info: &MediaInfo,
     req: &JobRequest,
     suffix: &str,
-    policy: &str,
+    policy: &OverwritePolicy,
 ) -> Result<PreparedJob> {
     let req = legacy_tool_request(req);
     match tool_dispatch(&req.tool_id) {
         "compress" | "convert" => {
-            let ext = extension_for(&req.tool_id, info, &req.params);
             // Parse and validate BEFORE reserving the output placeholder: an
             // early error must not leave a 0-byte stub that the next
             // rename/skip resolution would mistake for a real output.
@@ -325,15 +339,23 @@ pub(super) fn prepare_job(
                 MediaType::Video => {
                     let mut p: VideoParams = parse_params(&req.params)?;
                     p.gpu = req.gpu.clone();
-                    validate_video_container(&ext, &p.video_codec, &p.audio_codec, info)?;
-                    ensure_vaapi_device(&p)?;
+                    p.validate()?;
                     Src::Video(p)
                 }
-                MediaType::Audio => Src::Audio(parse_params(&req.params)?),
+                MediaType::Audio => {
+                    let p: AudioParams = parse_params(&req.params)?;
+                    p.validate()?;
+                    Src::Audio(p)
+                }
                 MediaType::Image | MediaType::Unknown => {
                     return Err(AppError("不支持的媒体类型".into()));
                 }
             };
+            let ext = extension_for(&req.tool_id, info, &req.params);
+            if let Src::Video(p) = &src {
+                validate_video_container(&ext, &p.video_codec, &p.audio_codec, info)?;
+                ensure_vaapi_device(p)?;
+            }
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
             let out = match resolve_policy(out, policy) {
                 Ok(p) => p,
@@ -351,32 +373,36 @@ pub(super) fn prepare_job(
         }
         "screenshot" => {
             let p: ScreenshotParams = parse_params(&req.params)?;
+            p.validate()?;
             let ext = screenshot_ext(&p.format);
-            if p.mode == "interval" || p.mode == "count" {
-                // Sequence outputs use a %03d pattern; the overwrite policy
-                // does not apply (ffmpeg overwrites numbered files with -y).
-                let base = output_path(&info.path, &req.output_dir, ext, suffix)?;
-                let out = interval_pattern(base);
-                let args = if p.mode == "count" {
-                    build_screenshot_count(info, &p, &out)
-                } else {
-                    build_screenshot_interval(info, &p, &out)
-                };
-                Ok(PreparedJob::Run { args, out })
-            } else {
-                let base = output_path(&info.path, &req.output_dir, ext, suffix)?;
-                let out = match resolve_policy(base, policy) {
-                    Ok(p) => p,
-                    Err(existing) => {
-                        return Ok(PreparedJob::Skipped {
-                            existing: Some(existing),
-                        })
-                    }
-                };
-                Ok(PreparedJob::Run {
-                    args: build_screenshot_single(info, &p, &out),
-                    out,
-                })
+            match p.mode {
+                ScreenshotMode::Interval | ScreenshotMode::Count => {
+                    // Sequence outputs use a %03d pattern; the overwrite policy
+                    // does not apply (ffmpeg overwrites numbered files with -y).
+                    let base = output_path(&info.path, &req.output_dir, ext, suffix)?;
+                    let out = interval_pattern(base);
+                    let args = if p.mode == ScreenshotMode::Count {
+                        build_screenshot_count(info, &p, &out)
+                    } else {
+                        build_screenshot_interval(info, &p, &out)
+                    };
+                    Ok(PreparedJob::Run { args, out })
+                }
+                ScreenshotMode::Single | ScreenshotMode::Other(_) => {
+                    let base = output_path(&info.path, &req.output_dir, ext, suffix)?;
+                    let out = match resolve_policy(base, policy) {
+                        Ok(p) => p,
+                        Err(existing) => {
+                            return Ok(PreparedJob::Skipped {
+                                existing: Some(existing),
+                            })
+                        }
+                    };
+                    Ok(PreparedJob::Run {
+                        args: build_screenshot_single(info, &p, &out),
+                        out,
+                    })
+                }
             }
         }
         "speed" => {
@@ -398,6 +424,7 @@ pub(super) fn prepare_job(
         }
         "watermark" => {
             let p: WatermarkParams = parse_params(&req.params)?;
+            p.validate()?;
             if p.image_path.trim().is_empty() {
                 return Err(AppError("请先选择水印图片".into()));
             }
@@ -422,6 +449,7 @@ pub(super) fn prepare_job(
         }
         "extract-audio" => {
             let p: ExtractAudioParams = parse_params(&req.params)?;
+            p.validate()?;
             if info.audio_codec.is_none() {
                 return Err(AppError("该视频没有音轨，无法提取音频".into()));
             }
@@ -468,7 +496,8 @@ pub(super) fn prepare_job(
         }
         "trim" => {
             let p: TrimParams = parse_params(&req.params)?;
-            let ext = if p.mode == "encode" {
+            p.validate()?;
+            let ext = if p.mode == CutMode::Encode {
                 safe_container_ext(info)
             } else {
                 input_ext(info, "mp4")
@@ -574,16 +603,21 @@ pub(super) fn prepare_job(
         }
         "roughcut" => {
             let p: RoughCutParams = parse_params(&req.params)?;
+            p.validate()?;
             if p.clips.is_empty() {
                 return Err(AppError("粗剪时间线为空：请先添加素材片段".into()));
             }
             // VAAPI requests need a render node; refuse before any file work.
-            if p.mode == "encode" {
+            if p.mode == CutMode::Encode {
                 if let Some(ep) = &p.encode {
                     ensure_vaapi_device(ep)?;
                 }
             }
-            let container = if p.container == "mkv" { "mkv" } else { "mp4" };
+            let container = match p.container {
+                RoughCutContainer::Mkv => "mkv",
+                // Unknown containers historically resolved to MP4.
+                RoughCutContainer::Mp4 | RoughCutContainer::Other(_) => "mp4",
+            };
             // The deliverable is named after the first clip.
             let ext = container.to_string();
             let out = output_path(&info.path, &req.output_dir, &ext, &suffix)?;
@@ -618,7 +652,7 @@ pub(super) fn prepare_job(
                     .zip(&clip_infos)
                     .map(|(c, inf)| roughcut_window(c, inf))
                     .collect::<Result<_>>()?;
-                if p.mode == "encode" {
+                if p.mode == CutMode::Encode {
                     let plan = plan_roughcut_encode(info, &p.clips, &windows, &clip_infos, &p)?;
                     Ok(PreparedJob::Run {
                         args: roughcut_encode_args(&plan, info, &p, container, &out),
@@ -655,6 +689,7 @@ pub(super) fn prepare_job(
         }
         "video-contact" => {
             let p: ContactSheetParams = parse_params(&req.params)?;
+            p.validate()?;
             let out = output_path(&info.path, &req.output_dir, "png", suffix)?;
             let out = match resolve_policy(out, policy) {
                 Ok(p) => p,
@@ -688,6 +723,7 @@ pub(super) fn prepare_job(
         /* ── New audio tools ── */
         "audio-volume" => {
             let p: AudioVolumeParams = parse_params(&req.params)?;
+            p.validate()?;
             let ext = source_audio_format(&info.path).to_string();
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
             let out = match resolve_policy(out, policy) {
@@ -732,6 +768,7 @@ pub(super) fn prepare_job(
 mod tests {
     use super::*;
     use crate::jobs::util::gpu_plan;
+    use crate::models::GpuBackend;
     use crate::jobs::test_support::sample_info;
 
     fn req(tool: &str, params: serde_json::Value) -> JobRequest {
@@ -759,7 +796,7 @@ mod tests {
                 serde_json::json!({"format":"opus","bitrateKbps":128}),
             ),
             "_mediatool",
-            "rename",
+            &OverwritePolicy::Rename,
         )
         .unwrap()
         {
@@ -781,7 +818,7 @@ mod tests {
             &info,
             &req("strip-metadata", serde_json::json!({})),
             "_mediatool",
-            "rename",
+            &OverwritePolicy::Rename,
         )
         .unwrap()
         {
@@ -800,28 +837,28 @@ mod tests {
         let mut info = sample_info();
         info.video_codec = Some("vp8".into());
         info.audio_codec = Some("opus".into());
-        let err = validate_video_container("mp4", "copy", "copy", &info).unwrap_err();
+        let err = validate_video_container("mp4", &VideoCodec::Copy, &AudioChoice::Copy, &info).unwrap_err();
         assert!(err.0.contains("vp8"), "{}", err.0);
         // Video-only source (no audio track) must still hit the video error.
         let mut no_audio = info.clone();
         no_audio.audio_codec = None;
-        let err = validate_video_container("mp4", "copy", "copy", &no_audio).unwrap_err();
+        let err = validate_video_container("mp4", &VideoCodec::Copy, &AudioChoice::Copy, &no_audio).unwrap_err();
         assert!(err.0.contains("vp8"), "{}", err.0);
         // With an mp4-safe video codec, an incompatible audio one is flagged.
         let mut bad_audio = info.clone();
         bad_audio.video_codec = Some("h264".into());
-        let err = validate_video_container("mp4", "copy", "copy", &bad_audio).unwrap_err();
+        let err = validate_video_container("mp4", &VideoCodec::Copy, &AudioChoice::Copy, &bad_audio).unwrap_err();
         assert!(err.0.contains("opus"), "{}", err.0);
     }
 
     #[test]
     fn mp4_copy_allows_common_stream_codecs() {
         // h264 + aac — the typical live-recording (MKV) contents.
-        assert!(validate_video_container("mp4", "copy", "copy", &sample_info()).is_ok());
+        assert!(validate_video_container("mp4", &VideoCodec::Copy, &AudioChoice::Copy, &sample_info()).is_ok());
         // A video without an audio track is fine too.
         let mut info = sample_info();
         info.audio_codec = None;
-        assert!(validate_video_container("mp4", "copy", "copy", &info).is_ok());
+        assert!(validate_video_container("mp4", &VideoCodec::Copy, &AudioChoice::Copy, &info).is_ok());
     }
 
     #[test]
@@ -831,7 +868,7 @@ mod tests {
         let mut info = sample_info();
         info.video_codec = Some("vp9".into());
         info.audio_codec = Some("opus".into());
-        assert!(validate_video_container("mp4", "libx264", "aac", &info).is_ok());
+        assert!(validate_video_container("mp4", &VideoCodec::LibX264, &AudioChoice::Aac, &info).is_ok());
     }
 
     #[test]
@@ -839,38 +876,38 @@ mod tests {
         let mut info = sample_info();
         info.video_codec = Some("vp9".into());
         info.audio_codec = Some("opus".into());
-        assert!(validate_video_container("webm", "copy", "copy", &info).is_ok());
-        assert!(validate_video_container("webm", "copy", "copy", &sample_info()).is_err());
+        assert!(validate_video_container("webm", &VideoCodec::Copy, &AudioChoice::Copy, &info).is_ok());
+        assert!(validate_video_container("webm", &VideoCodec::Copy, &AudioChoice::Copy, &sample_info()).is_err());
     }
 
     #[test]
     fn hevc_container_and_gpu_mapping() {
         // HEVC encodes fine in mp4/mkv but not webm (vp8/vp9/av1 only).
-        assert!(validate_video_container("mp4", "libx265", "aac", &sample_info()).is_ok());
-        assert!(validate_video_container("webm", "libx265", "aac", &sample_info()).is_err());
+        assert!(validate_video_container("mp4", &VideoCodec::LibX265, &AudioChoice::Aac, &sample_info()).is_ok());
+        assert!(validate_video_container("webm", &VideoCodec::LibX265, &AudioChoice::Aac, &sample_info()).is_err());
         // GPU backends swap libx265 for their HEVC encoders.
-        let (enc, hw) = gpu_plan("libx265", &Some("nvenc".into()));
+        let (enc, hw) = gpu_plan(&VideoCodec::LibX265, Some(&GpuBackend::Nvenc));
         assert_eq!(enc, "hevc_nvenc");
-        assert_eq!(hw.as_deref(), Some("cuda"));
-        assert_eq!(gpu_plan("libx265", &None).0, "libx265");
+        assert_eq!(hw, Some("cuda"));
+        assert_eq!(gpu_plan(&VideoCodec::LibX265, None).0, "libx265");
         // ...and the family maps to "hevc" for container checks.
         assert_eq!(codec_family("hevc_nvenc"), "hevc");
     }
 
     /* ── remux auto-fallback ─────────────────────────────────────── */
 
-    fn copy_params(format: &str) -> VideoParams {
+    fn copy_params(format: OutputFormat) -> VideoParams {
         VideoParams {
-            video_codec: "copy".into(),
-            quality_mode: "crf".into(),
+            video_codec: VideoCodec::Copy,
+            quality_mode: QualityMode::Crf,
             crf: None,
             target_size_mb: None,
             video_bitrate_kbps: None,
             resolution: "original".into(),
-            audio_codec: "copy".into(),
+            audio_codec: AudioChoice::Copy,
             audio_bitrate_kbps: None,
-            format: format.into(),
-            preset: "medium".into(),
+            format,
+            preset: SpeedPreset::Medium,
             fps: None,
             gpu: None,
         }
@@ -881,13 +918,13 @@ mod tests {
         let mut info = sample_info();
         info.video_codec = Some("vp8".into());
         info.audio_codec = Some("opus".into());
-        let mut p = copy_params("mp4");
+        let mut p = copy_params(OutputFormat::Mp4);
         let note = mp4_copy_fallback(&mut p, &info).unwrap();
         assert!(note.contains("vp8") && note.contains("opus"), "{}", note);
         assert!(note.contains("自动降级"), "{}", note);
-        assert_eq!(p.video_codec, "libx264");
+        assert_eq!(p.video_codec, VideoCodec::LibX264);
         assert_eq!(p.crf, Some(23));
-        assert_eq!(p.audio_codec, "aac");
+        assert_eq!(p.audio_codec, AudioChoice::Aac);
         assert_eq!(p.audio_bitrate_kbps, Some(192));
     }
 
@@ -896,26 +933,26 @@ mod tests {
         // mp4-safe video + incompatible audio: video stays copy.
         let mut info = sample_info();
         info.audio_codec = Some("opus".into());
-        let mut p = copy_params("mp4");
+        let mut p = copy_params(OutputFormat::Mp4);
         let note = mp4_copy_fallback(&mut p, &info).unwrap();
         assert!(note.contains("opus") && !note.contains("视频"), "{}", note);
-        assert_eq!(p.video_codec, "copy");
-        assert_eq!(p.audio_codec, "aac");
+        assert_eq!(p.video_codec, VideoCodec::Copy);
+        assert_eq!(p.audio_codec, AudioChoice::Aac);
     }
 
     #[test]
     fn mp4_copy_fallback_skips_compatible_or_non_mp4() {
         // h264/aac copies fine — no fallback.
-        let mut p = copy_params("mp4");
+        let mut p = copy_params(OutputFormat::Mp4);
         assert!(mp4_copy_fallback(&mut p, &sample_info()).is_none());
-        assert_eq!(p.video_codec, "copy");
+        assert_eq!(p.video_codec, VideoCodec::Copy);
         // Same incompatible codecs are fine when the target is MKV.
         let mut info = sample_info();
         info.video_codec = Some("vp8".into());
         info.audio_codec = Some("opus".into());
-        let mut mkv = copy_params("mkv");
+        let mut mkv = copy_params(OutputFormat::Mkv);
         assert!(mp4_copy_fallback(&mut mkv, &info).is_none());
-        assert_eq!(mkv.video_codec, "copy");
+        assert_eq!(mkv.video_codec, VideoCodec::Copy);
     }
 
     #[test]
@@ -926,21 +963,86 @@ mod tests {
         assert_eq!(norm_tool_id("extract-audio"), "extract-audio");
     }
 
+    /* ── unknown enum values: parse OK, prepare errors clearly ───── */
+
+    #[test]
+    fn unknown_codec_value_errors_at_prepare_with_raw_value() {
+        // A preset from another version: parses fine (the whole struct must
+        // stay deserializable), then fails at prepare time naming the value.
+        let dir = std::env::temp_dir().join(format!("enum_err_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut info = sample_info();
+        info.path = dir.join("clip.mp4").to_string_lossy().to_string();
+        let err = prepare_job(
+            None,
+            &info,
+            &req(
+                "compress",
+                serde_json::json!({
+                    "videoCodec": "h263",
+                    "qualityMode": "crf",
+                    "audioCodec": "aac",
+                    "format": "mp4",
+                    "preset": "medium",
+                    "resolution": "original"
+                }),
+            ),
+            "_mediatool",
+            &OverwritePolicy::Rename,
+        )
+        .unwrap_err();
+        assert!(err.0.contains("h263"), "{}", err.0);
+        // The failure precedes any output reservation: no stub file may be
+        // left for the next rename/skip resolution to mistake for real output.
+        assert!(
+            !dir.join("clip_mediatool.mp4").exists(),
+            "a 0-byte placeholder leaked"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unknown_overwrite_policy_keeps_rename_behavior() {
+        // Unknown policies never errored; they resolved as "rename".
+        let dir = std::env::temp_dir().join(format!("pol_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut info = sample_info();
+        info.path = dir.join("clip.mp4").to_string_lossy().to_string();
+        // An existing output forces the policy branch to actually run.
+        let existing = dir.join("clip_mediatool.mp4");
+        std::fs::write(&existing, b"x").unwrap();
+        match prepare_job(
+            None,
+            &info,
+            &req("strip-metadata", serde_json::json!({})),
+            "_mediatool",
+            &OverwritePolicy::Other("clobber".into()),
+        )
+        .unwrap()
+        {
+            PreparedJob::Run { out, .. } => {
+                assert!(out.to_string_lossy().contains("(2)"), "got {:?}", out);
+            }
+            _ => panic!("expected Run"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn webm_container_rejects_incompatible_codecs() {
         let mut info = sample_info();
         info.video_codec = Some("h264".into());
         info.audio_codec = Some("aac".into());
-        assert!(validate_video_container("webm", "libx264", "aac", &info).is_err());
-        assert!(validate_video_container("webm", "copy", "copy", &info).is_err());
-        assert!(validate_video_container("webm", "libvpx-vp9", "opus", &info).is_ok());
-        assert!(validate_video_container("webm", "libsvtav1", "none", &info).is_ok());
+        assert!(validate_video_container("webm", &VideoCodec::LibX264, &AudioChoice::Aac, &info).is_err());
+        assert!(validate_video_container("webm", &VideoCodec::Copy, &AudioChoice::Copy, &info).is_err());
+        assert!(validate_video_container("webm", &VideoCodec::LibVpxVp9, &AudioChoice::Opus, &info).is_ok());
+        assert!(validate_video_container("webm", &VideoCodec::LibSvtAv1, &AudioChoice::None, &info).is_ok());
         // MP4 accepts H.264/AAC.
-        assert!(validate_video_container("mp4", "libx264", "aac", &info).is_ok());
+        assert!(validate_video_container("mp4", &VideoCodec::LibX264, &AudioChoice::Aac, &info).is_ok());
         // mkv accepts anything.
-        assert!(validate_video_container("mkv", "libx264", "aac", &info).is_ok());
+        assert!(validate_video_container("mkv", &VideoCodec::LibX264, &AudioChoice::Aac, &info).is_ok());
         // GPU encoders are h264 too.
-        assert!(validate_video_container("webm", "h264_nvenc", "aac", &info).is_err());
+        assert!(validate_video_container("webm", &VideoCodec::LibX264, &AudioChoice::Aac, &info).is_err());
     }
 
 }

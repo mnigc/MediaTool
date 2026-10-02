@@ -10,8 +10,9 @@ use crate::error::Result;
 use crate::ffmpeg;
 use crate::media::probe;
 use crate::models::{
-    MediaInfo, SpeedParams, StartWorkflowResult, TrimParams, VideoParams, WatermarkParams,
-    WorkflowRequest, WorkflowStepInput,
+    AudioChoice, CutMode, GpuBackend, MediaInfo, OutputFormat, OverwritePolicy, QualityMode,
+    SpeedParams, SpeedPreset, StartWorkflowResult, TrimParams, VideoCodec, VideoParams,
+    WatermarkParams, WatermarkPosition, WorkflowRequest, WorkflowStepInput,
 };
 
 use super::args::safe_container_ext;
@@ -67,7 +68,7 @@ fn is_mergeable_chain(steps: &[WorkflowStepInput]) -> bool {
                 return false;
             }
             if let Ok(p) = parse_params::<TrimParams>(&s.params) {
-                if p.mode == "copy" {
+                if p.mode == CutMode::Copy {
                     return false;
                 }
                 // Multi-segment trims run as several ffmpeg invocations and
@@ -105,20 +106,24 @@ fn merged_chain(info: &MediaInfo, steps: &[WorkflowStepInput]) -> Option<MergedC
         match id {
             "compress" | "convert" => {
                 let p: VideoParams = parse_params(&s.params).ok()?;
+                // Unrecognized enum values fail per-step preparation later;
+                // here they just keep the chain from merging.
+                p.validate().ok()?;
                 // Same filter semantics as the single-job path: tone-map HDR
                 // first, then scale — unless the chain ends in stream copy.
-                if let Some(vf) = video_filter_chain(info, &p.video_codec, &p.resolution) {
+                if let Some(vf) = video_filter_chain(info, p.video_codec.as_str(), &p.resolution) {
                     ops.push(VideoOp::Filter(vf));
                 }
                 // "none" means drop the audio track — same as the single-job
                 // compress path, which maps it to -an.
-                if p.audio_codec == "none" {
+                if p.audio_codec == AudioChoice::None {
                     drop_audio = true;
                 }
                 encode = Some(p);
             }
             "trim" => {
                 let p: TrimParams = parse_params(&s.params).ok()?;
+                p.validate().ok()?;
                 trim = Some((p.start_time.max(0.0), p.duration));
             }
             "speed" => {
@@ -136,6 +141,7 @@ fn merged_chain(info: &MediaInfo, steps: &[WorkflowStepInput]) -> Option<MergedC
             "mute" => drop_audio = true,
             "watermark" => {
                 let p: WatermarkParams = parse_params(&s.params).ok()?;
+                p.validate().ok()?;
                 ops.push(VideoOp::Overlay(p));
             }
             "strip-metadata" => strip_meta = true,
@@ -148,11 +154,9 @@ fn merged_chain(info: &MediaInfo, steps: &[WorkflowStepInput]) -> Option<MergedC
     let ext = if !needs_reencode {
         input_ext(info, "mp4")
     } else if let Some(p) = &encode {
-        let f = p.format.as_str();
-        if f == "source" || f.is_empty() {
-            input_ext(info, "mp4")
-        } else {
-            f.to_string()
+        match &p.format {
+            OutputFormat::Source => input_ext(info, "mp4"),
+            other => other.as_str().to_string(),
         }
     } else {
         safe_container_ext(info)
@@ -192,28 +196,28 @@ fn vf_filter_string(op: &VideoOp) -> Option<&str> {
 /// Emit the codec / quality-rate flags for the final re-encode. Does NOT include
 /// `-i`, `-vf`, or the output tail (those are built by `merged_args`).
 pub(super) fn video_encoder_args(info: &MediaInfo, ep: &VideoParams) -> Vec<String> {
-    let vcodec = gpu_plan(&ep.video_codec, &ep.gpu).0;
+    let vcodec = gpu_plan(&ep.video_codec, ep.gpu.as_ref()).0;
     let mut a: Vec<String> = vec!["-c:v".into(), vcodec.clone()];
 
     match vcodec.as_str() {
         "libx264" => {
-            if ep.quality_mode == "crf" {
+            if ep.quality_mode == QualityMode::Crf {
                 a.push("-crf".into());
                 a.push(ep.crf.unwrap_or(28).to_string());
             }
             a.push("-preset".into());
-            a.push(ep.preset.clone());
+            a.push(ep.preset.as_str().into());
         }
         "libx265" => {
-            if ep.quality_mode == "crf" {
+            if ep.quality_mode == QualityMode::Crf {
                 a.push("-crf".into());
                 a.push(ep.crf.unwrap_or(28).to_string());
             }
             a.push("-preset".into());
-            a.push(ep.preset.clone());
+            a.push(ep.preset.as_str().into());
         }
         "libvpx-vp9" => {
-            if ep.quality_mode == "crf" {
+            if ep.quality_mode == QualityMode::Crf {
                 a.push("-b:v".into());
                 a.push("0".into());
                 a.push("-crf".into());
@@ -230,10 +234,10 @@ pub(super) fn video_encoder_args(info: &MediaInfo, ep: &VideoParams) -> Vec<Stri
             a.push("1".into());
         }
         "libsvtav1" => {
-            if ep.quality_mode == "crf" {
+            if ep.quality_mode == QualityMode::Crf {
                 a.push("-crf".into());
                 a.push(ep.crf.unwrap_or(32).to_string());
-            } else if ep.quality_mode == "bitrate" {
+            } else if ep.quality_mode == QualityMode::Bitrate {
                 a.push("-b:v".into());
                 a.push(ep.video_bitrate_kbps.unwrap_or(1000).to_string() + "k");
             }
@@ -241,7 +245,7 @@ pub(super) fn video_encoder_args(info: &MediaInfo, ep: &VideoParams) -> Vec<Stri
             a.push(svt_preset(&ep.preset).to_string());
         }
         "h264_nvenc" => {
-            if ep.quality_mode == "crf" {
+            if ep.quality_mode == QualityMode::Crf {
                 a.push("-cq".into());
                 a.push(ep.crf.unwrap_or(28).to_string());
             }
@@ -249,19 +253,19 @@ pub(super) fn video_encoder_args(info: &MediaInfo, ep: &VideoParams) -> Vec<Stri
             a.push("p4".into());
         }
         "h264_qsv" => {
-            if ep.quality_mode == "crf" {
+            if ep.quality_mode == QualityMode::Crf {
                 a.push("-q:v".into());
                 a.push(ep.crf.unwrap_or(28).to_string());
             }
         }
         "h264_videotoolbox" => {
-            if ep.quality_mode == "crf" {
+            if ep.quality_mode == QualityMode::Crf {
                 a.push("-b:v".into());
                 a.push(format!("{}k", crf_to_bitrate(ep.crf.unwrap_or(28))));
             }
         }
         "h264_amf" => {
-            if ep.quality_mode == "crf" {
+            if ep.quality_mode == QualityMode::Crf {
                 a.push("-rc".into());
                 a.push("cqp".into());
                 a.push("-qp".into());
@@ -269,13 +273,13 @@ pub(super) fn video_encoder_args(info: &MediaInfo, ep: &VideoParams) -> Vec<Stri
             }
         }
         "h264_vaapi" => {
-            if ep.quality_mode == "crf" {
+            if ep.quality_mode == QualityMode::Crf {
                 a.push("-b:v".into());
                 a.push(format!("{}k", crf_to_bitrate(ep.crf.unwrap_or(28))));
             }
         }
         "hevc_nvenc" => {
-            if ep.quality_mode == "crf" {
+            if ep.quality_mode == QualityMode::Crf {
                 a.push("-cq".into());
                 a.push(ep.crf.unwrap_or(28).to_string());
             }
@@ -283,19 +287,19 @@ pub(super) fn video_encoder_args(info: &MediaInfo, ep: &VideoParams) -> Vec<Stri
             a.push("p4".into());
         }
         "hevc_qsv" => {
-            if ep.quality_mode == "crf" {
+            if ep.quality_mode == QualityMode::Crf {
                 a.push("-q:v".into());
                 a.push(ep.crf.unwrap_or(28).to_string());
             }
         }
         "hevc_videotoolbox" => {
-            if ep.quality_mode == "crf" {
+            if ep.quality_mode == QualityMode::Crf {
                 a.push("-b:v".into());
                 a.push(format!("{}k", crf_to_bitrate(ep.crf.unwrap_or(28))));
             }
         }
         "hevc_amf" => {
-            if ep.quality_mode == "crf" {
+            if ep.quality_mode == QualityMode::Crf {
                 a.push("-rc".into());
                 a.push("cqp".into());
                 a.push("-qp".into());
@@ -303,7 +307,7 @@ pub(super) fn video_encoder_args(info: &MediaInfo, ep: &VideoParams) -> Vec<Stri
             }
         }
         "hevc_vaapi" => {
-            if ep.quality_mode == "crf" {
+            if ep.quality_mode == QualityMode::Crf {
                 a.push("-b:v".into());
                 a.push(format!("{}k", crf_to_bitrate(ep.crf.unwrap_or(28))));
             }
@@ -311,12 +315,12 @@ pub(super) fn video_encoder_args(info: &MediaInfo, ep: &VideoParams) -> Vec<Stri
         _ => {}
     }
 
-    if ep.quality_mode == "bitrate" {
+    if ep.quality_mode == QualityMode::Bitrate {
         if let Some(b) = ep.video_bitrate_kbps {
             a.push("-b:v".into());
             a.push(format!("{}k", b));
         }
-    } else if ep.quality_mode == "target_size" {
+    } else if ep.quality_mode == QualityMode::TargetSize {
         if let Some(mb) = ep.target_size_mb {
             if let Some(dur) = info.duration_secs {
                 if dur > 0.0 {
@@ -358,16 +362,31 @@ fn build_overlay_filter_complex(
     let margin_pct = wm.margin_percent.unwrap_or(3).clamp(0, 30) as f64 / 100.0;
     let margin = ((vw.min(vh)) * margin_pct) as i64;
 
-    let pos = wm.position.as_str();
-    let x = match pos {
-        "tl" | "ml" | "bl" => format!("{}", margin),
-        "tc" | "mc" | "bc" => "(main_w-overlay_w)/2".to_string(),
-        _ => format!("main_w-overlay_w-{}", margin),
+    let x = match wm.position {
+        WatermarkPosition::Tl | WatermarkPosition::Ml | WatermarkPosition::Bl => {
+            format!("{}", margin)
+        }
+        WatermarkPosition::Tc | WatermarkPosition::Mc | WatermarkPosition::Bc => {
+            "(main_w-overlay_w)/2".to_string()
+        }
+        WatermarkPosition::Tr | WatermarkPosition::Mr | WatermarkPosition::Br => {
+            format!("main_w-overlay_w-{}", margin)
+        }
+        // Unreachable after validation; historically any unknown position
+        // anchored bottom-right.
+        WatermarkPosition::Other(_) => format!("main_w-overlay_w-{}", margin),
     };
-    let y = match pos {
-        "tl" | "tc" | "tr" => format!("{}", margin),
-        "ml" | "mc" | "mr" => "(main_h-overlay_h)/2".to_string(),
-        _ => format!("main_h-overlay_h-{}", margin),
+    let y = match wm.position {
+        WatermarkPosition::Tl | WatermarkPosition::Tc | WatermarkPosition::Tr => {
+            format!("{}", margin)
+        }
+        WatermarkPosition::Ml | WatermarkPosition::Mc | WatermarkPosition::Mr => {
+            "(main_h-overlay_h)/2".to_string()
+        }
+        WatermarkPosition::Bl | WatermarkPosition::Bc | WatermarkPosition::Br => {
+            format!("main_h-overlay_h-{}", margin)
+        }
+        WatermarkPosition::Other(_) => format!("main_h-overlay_h-{}", margin),
     };
 
     let before: Vec<&str> = chain
@@ -429,7 +448,7 @@ fn merged_args(
     info: &MediaInfo,
     chain: &MergedChain,
     out: &Path,
-    gpu: &Option<String>,
+    gpu: &Option<GpuBackend>,
 ) -> Vec<String> {
     let mut a: Vec<String> = vec!["-nostats".into()];
 
@@ -511,16 +530,16 @@ fn merged_args(
         a.push("copy".into());
     } else {
         let default = VideoParams {
-            video_codec: "libx264".into(),
-            quality_mode: "crf".into(),
+            video_codec: VideoCodec::LibX264,
+            quality_mode: QualityMode::Crf,
             crf: Some(18),
             target_size_mb: None,
             video_bitrate_kbps: None,
             resolution: "original".into(),
-            audio_codec: "aac".into(),
+            audio_codec: AudioChoice::Aac,
             audio_bitrate_kbps: Some(192),
-            format: String::new(),
-            preset: "medium".into(),
+            format: OutputFormat::Source,
+            preset: SpeedPreset::Medium,
             fps: None,
             gpu: gpu.clone(),
         };
@@ -538,16 +557,17 @@ fn merged_args(
             a.push("-an".into());
         } else {
             a.push("-c:a".into());
-            match ep.audio_codec.as_str() {
-                "copy" => a.push("copy".into()),
-                "opus" => {
+            match ep.audio_codec {
+                AudioChoice::Copy => a.push("copy".into()),
+                AudioChoice::Opus => {
                     a.push("libopus".into());
                     if let Some(b) = ep.audio_bitrate_kbps {
                         a.push("-b:a".into());
                         a.push(format!("{}k", b));
                     }
                 }
-                _ => {
+                // Historical default: every other choice encoded to AAC.
+                AudioChoice::Aac | AudioChoice::None | AudioChoice::Other(_) => {
                     a.push("aac".into());
                     if let Some(b) = ep.audio_bitrate_kbps {
                         a.push("-b:a".into());
@@ -598,7 +618,12 @@ pub async fn start_workflow(ctx: Ctx, req: WorkflowRequest) -> Result<StartWorkf
         .clone()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "_mediatool".to_string());
-    let policy = req.overwrite_policy.as_deref().unwrap_or("rename");
+    let policy = req
+        .overwrite_policy
+        .clone()
+        // An absent (or unrecognized — it stays `Other`) policy keeps the
+        // historical "rename" resolution inside prepare.
+        .unwrap_or(OverwritePolicy::Rename);
 
     let ext = match merged_output_ext(&info, &req.steps) {
         Some(ext) => ext,
@@ -612,7 +637,7 @@ pub async fn start_workflow(ctx: Ctx, req: WorkflowRequest) -> Result<StartWorkf
         }
     };
     let out = output_path(&input, &req.output_dir, &ext, &suffix)?;
-    let out = match resolve_policy(out, policy) {
+    let out = match resolve_policy(out, &policy) {
         Ok(p) => p,
         Err(_existing) => {
             // Output already existed and policy = "skip": signal a no-op via the
@@ -649,8 +674,8 @@ pub async fn start_workflow(ctx: Ctx, req: WorkflowRequest) -> Result<StartWorkf
     // Codec/container sanity for the final encode (e.g. H.264 into WebM).
     {
         let (vc, ac) = match &chain.encode {
-            Some(p) => (p.video_codec.as_str(), p.audio_codec.as_str()),
-            None => ("copy", "copy"),
+            Some(p) => (&p.video_codec, &p.audio_codec),
+            None => (&VideoCodec::Copy, &AudioChoice::Copy),
         };
         validate_video_container(&chain.ext, vc, ac, &info)?;
     }

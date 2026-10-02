@@ -6,12 +6,14 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{AppError, Result};
 use crate::models::{
-    AudioParams, AudioVolumeParams, ContactSheetParams, FrameSampleParams, MediaInfo, MediaType,
-    MuteParams, RoughCutClip, RoughCutParams, ScreenshotParams, SpeedParams, StripMetadataParams,
-    SubtitleParams, VideoParams, VideoSilenceParams, WatermarkParams,
+    AudioChoice, AudioFormat, AudioParams, AudioVolumeParams, ContactMode, ContactSheetParams,
+    CutMode, FrameSampleParams, ImageFormat, MediaInfo, MediaType, MuteParams, OutputFormat,
+    QualityMode, RoughCutClip, RoughCutParams, ScreenshotParams, SpeedParams,
+    SpeedPreset, StripMetadataParams, SubtitleParams, VideoCodec, VideoParams, VideoSilenceParams,
+    VolumeMode, WatermarkPosition, WatermarkParams,
 };
 #[cfg(test)]
-use crate::models::TrimParams;
+use crate::models::{RoughCutContainer, ScreenshotMode, TrimParams};
 
 use super::prepare::{codec_family, PreparedJob, MP4_COPY_AUDIO, MP4_COPY_VIDEO};
 use super::util::{
@@ -21,14 +23,14 @@ use super::util::{
 use super::workflow::video_encoder_args;
 
 pub(super) fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) -> Vec<String> {
-    let (vcodec, hwaccel) = gpu_plan(&p.video_codec, &p.gpu);
+    let (vcodec, hwaccel) = gpu_plan(&p.video_codec, p.gpu.as_ref());
     let is_vaapi = vcodec == "h264_vaapi" || vcodec == "hevc_vaapi";
     let mut a: Vec<String> = vec![];
 
     let vf = video_filter_chain(info, &vcodec, &p.resolution);
-    if let Some(hw) = &hwaccel {
+    if let Some(hw) = hwaccel {
         a.push("-hwaccel".into());
-        a.push(hw.clone());
+        a.push(hw.to_string());
         // A software `-vf` chain needs frames in system memory; locking QSV
         // frames in video memory makes the scale filter fail with
         // "Impossible to convert between the formats".
@@ -71,23 +73,23 @@ pub(super) fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) ->
 
     match vcodec.as_str() {
         "libx264" => {
-            if p.quality_mode == "crf" {
+            if matches!(p.quality_mode, QualityMode::Crf) {
                 a.push("-crf".into());
                 a.push(p.crf.unwrap_or(28).to_string());
             }
             a.push("-preset".into());
-            a.push(p.preset.clone());
+            a.push(p.preset.as_str().into());
         }
         "libx265" => {
-            if p.quality_mode == "crf" {
+            if matches!(p.quality_mode, QualityMode::Crf) {
                 a.push("-crf".into());
                 a.push(p.crf.unwrap_or(28).to_string());
             }
             a.push("-preset".into());
-            a.push(p.preset.clone());
+            a.push(p.preset.as_str().into());
         }
         "libvpx-vp9" => {
-            if p.quality_mode == "crf" {
+            if matches!(p.quality_mode, QualityMode::Crf) {
                 a.push("-b:v".into());
                 a.push("0".into());
                 a.push("-crf".into());
@@ -104,10 +106,10 @@ pub(super) fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) ->
             a.push("1".into());
         }
         "libsvtav1" => {
-            if p.quality_mode == "crf" {
+            if matches!(p.quality_mode, QualityMode::Crf) {
                 a.push("-crf".into());
                 a.push(p.crf.unwrap_or(32).to_string());
-            } else if p.quality_mode == "target_size" {
+            } else if matches!(p.quality_mode, QualityMode::TargetSize) {
                 // bitrate is appended by the shared target-size logic below;
                 // nothing extra needed here.
             } else {
@@ -118,7 +120,7 @@ pub(super) fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) ->
             a.push(svt_preset(&p.preset).to_string());
         }
         "h264_nvenc" => {
-            if p.quality_mode == "crf" {
+            if matches!(p.quality_mode, QualityMode::Crf) {
                 a.push("-cq".into());
                 a.push(p.crf.unwrap_or(28).to_string());
             }
@@ -126,19 +128,19 @@ pub(super) fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) ->
             a.push("p4".into());
         }
         "h264_qsv" => {
-            if p.quality_mode == "crf" {
+            if matches!(p.quality_mode, QualityMode::Crf) {
                 a.push("-q:v".into());
                 a.push(p.crf.unwrap_or(28).to_string());
             }
         }
         "h264_videotoolbox" => {
-            if p.quality_mode == "crf" {
+            if matches!(p.quality_mode, QualityMode::Crf) {
                 a.push("-b:v".into());
                 a.push(format!("{}k", crf_to_bitrate(p.crf.unwrap_or(28))));
             }
         }
         "h264_amf" => {
-            if p.quality_mode == "crf" {
+            if matches!(p.quality_mode, QualityMode::Crf) {
                 a.push("-rc".into());
                 a.push("cqp".into());
                 a.push("-qp".into());
@@ -146,13 +148,13 @@ pub(super) fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) ->
             }
         }
         "h264_vaapi" => {
-            if p.quality_mode == "crf" {
+            if matches!(p.quality_mode, QualityMode::Crf) {
                 a.push("-b:v".into());
                 a.push(format!("{}k", crf_to_bitrate(p.crf.unwrap_or(28))));
             }
         }
         "hevc_nvenc" => {
-            if p.quality_mode == "crf" {
+            if matches!(p.quality_mode, QualityMode::Crf) {
                 a.push("-cq".into());
                 a.push(p.crf.unwrap_or(28).to_string());
             }
@@ -160,19 +162,19 @@ pub(super) fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) ->
             a.push("p4".into());
         }
         "hevc_qsv" => {
-            if p.quality_mode == "crf" {
+            if matches!(p.quality_mode, QualityMode::Crf) {
                 a.push("-q:v".into());
                 a.push(p.crf.unwrap_or(28).to_string());
             }
         }
         "hevc_videotoolbox" => {
-            if p.quality_mode == "crf" {
+            if matches!(p.quality_mode, QualityMode::Crf) {
                 a.push("-b:v".into());
                 a.push(format!("{}k", crf_to_bitrate(p.crf.unwrap_or(28))));
             }
         }
         "hevc_amf" => {
-            if p.quality_mode == "crf" {
+            if matches!(p.quality_mode, QualityMode::Crf) {
                 a.push("-rc".into());
                 a.push("cqp".into());
                 a.push("-qp".into());
@@ -180,7 +182,7 @@ pub(super) fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) ->
             }
         }
         "hevc_vaapi" => {
-            if p.quality_mode == "crf" {
+            if matches!(p.quality_mode, QualityMode::Crf) {
                 a.push("-b:v".into());
                 a.push(format!("{}k", crf_to_bitrate(p.crf.unwrap_or(28))));
             }
@@ -188,24 +190,29 @@ pub(super) fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) ->
         _ => {}
     }
 
-    if p.quality_mode == "bitrate" {
-        if let Some(b) = p.video_bitrate_kbps {
-            a.push("-b:v".into());
-            a.push(format!("{}k", b));
+    match p.quality_mode {
+        QualityMode::Bitrate => {
+            if let Some(b) = p.video_bitrate_kbps {
+                a.push("-b:v".into());
+                a.push(format!("{}k", b));
+            }
         }
-    } else if p.quality_mode == "target_size" {
-        if let Some(mb) = p.target_size_mb {
-            if let Some(dur) = info.duration_secs {
-                if dur > 0.0 {
-                    let total_bits = mb * 1024.0 * 1024.0 * 8.0;
-                    let total_kbps = total_bits / dur / 1000.0;
-                    let audio_kbps = p.audio_bitrate_kbps.unwrap_or(128) as f64;
-                    let video_kbps = (total_kbps - audio_kbps).max(50.0);
-                    a.push("-b:v".into());
-                    a.push(format!("{}k", video_kbps as u32));
+        QualityMode::TargetSize => {
+            if let Some(mb) = p.target_size_mb {
+                if let Some(dur) = info.duration_secs {
+                    if dur > 0.0 {
+                        let total_bits = mb * 1024.0 * 1024.0 * 8.0;
+                        let total_kbps = total_bits / dur / 1000.0;
+                        let audio_kbps = p.audio_bitrate_kbps.unwrap_or(128) as f64;
+                        let video_kbps = (total_kbps - audio_kbps).max(50.0);
+                        a.push("-b:v".into());
+                        a.push(format!("{}k", video_kbps as u32));
+                    }
                 }
             }
         }
+        // CRF was already handled per encoder above.
+        QualityMode::Crf | QualityMode::Other(_) => {}
     }
 
     // Frame-rate control; meaningless (and re-encode-forcing) with stream copy.
@@ -218,13 +225,13 @@ pub(super) fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) ->
         }
     }
 
-    match p.audio_codec.as_str() {
-        "none" => a.push("-an".into()),
-        "copy" => {
+    match p.audio_codec {
+        AudioChoice::None => a.push("-an".into()),
+        AudioChoice::Copy => {
             a.push("-c:a".into());
             a.push("copy".into());
         }
-        "aac" => {
+        AudioChoice::Aac => {
             a.push("-c:a".into());
             a.push("aac".into());
             if let Some(b) = p.audio_bitrate_kbps {
@@ -232,7 +239,7 @@ pub(super) fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) ->
                 a.push(format!("{}k", b));
             }
         }
-        "opus" => {
+        AudioChoice::Opus => {
             a.push("-c:a".into());
             a.push("libopus".into());
             if let Some(b) = p.audio_bitrate_kbps {
@@ -240,7 +247,9 @@ pub(super) fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) ->
                 a.push(format!("{}k", b));
             }
         }
-        _ => {}
+        // Unreachable after validation; historically an unrecognized codec
+        // pushed no flag and ffmpeg picked its default.
+        AudioChoice::Other(_) => {}
     }
 
     a.push("-threads".into());
@@ -271,10 +280,11 @@ fn source_image_format(path: &str) -> String {
 pub(super) fn build_audio_args(info: &MediaInfo, p: &AudioParams, out: &Path) -> Vec<String> {
     let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-vn".into()];
 
-    let fmt = if p.format == "source" || p.format.is_empty() {
-        source_audio_format(&info.path)
-    } else {
-        p.format.clone()
+    // "source" keeps the input codec family; the effective format (possibly a
+    // container-ish one like "wav") is then resolved from the input extension.
+    let fmt = match &p.format {
+        AudioFormat::Source | AudioFormat::Other(_) => source_audio_format(&info.path),
+        other => other.as_str().to_string(),
     };
     // "wav" is a container-ish target handled by the pcm codec below.
     let fmt = if fmt == "wav" { "pcm".to_string() } else { fmt };
@@ -450,7 +460,7 @@ pub(super) fn build_trim_segment_args(
     info: &MediaInfo,
     start: f64,
     duration: Option<f64>,
-    mode: &str,
+    mode: &CutMode,
     out: &Path,
 ) -> Vec<String> {
     let mut a: Vec<String> = vec![
@@ -471,7 +481,7 @@ pub(super) fn build_trim_segment_args(
     a.push("-map".into());
     a.push("0".into());
 
-    if mode == "encode" {
+    if *mode == CutMode::Encode {
         a.push("-c:v".into());
         a.push("libx264".into());
         a.push("-crf".into());
@@ -496,11 +506,11 @@ pub(super) fn build_trim_segment_args(
     a
 }
 
-pub(super) fn screenshot_ext(format: &str) -> &'static str {
-    if format == "jpeg" {
-        "jpg"
-    } else {
-        "png"
+pub(super) fn screenshot_ext(format: &ImageFormat) -> &'static str {
+    match format {
+        ImageFormat::Jpeg => "jpg",
+        // PNG is also what unrecognized values always fell back to.
+        ImageFormat::Png | ImageFormat::Other(_) => "png",
     }
 }
 
@@ -608,7 +618,7 @@ pub(super) fn build_screenshot_single(info: &MediaInfo, p: &ScreenshotParams, ou
             a.push(format!("scale={}:-2", w));
         }
     }
-    if p.format == "jpeg" {
+    if p.format == ImageFormat::Jpeg {
         a.push("-q:v".into());
         a.push("2".into());
     }
@@ -647,7 +657,7 @@ pub(super) fn build_screenshot_interval(info: &MediaInfo, p: &ScreenshotParams, 
     a.push("-vf".into());
     a.push(vf);
 
-    if p.format == "jpeg" {
+    if p.format == ImageFormat::Jpeg {
         a.push("-q:v".into());
         a.push("2".into());
     }
@@ -761,16 +771,31 @@ pub(super) fn build_watermark_args(
     let margin_pct = p.margin_percent.unwrap_or(3).clamp(0, 30) as f64 / 100.0;
     let margin = ((vw.min(vh)) * margin_pct) as i64;
 
-    let pos = p.position.as_str();
-    let x = match pos {
-        "tl" | "ml" | "bl" => format!("{}", margin),
-        "tc" | "mc" | "bc" => "(main_w-overlay_w)/2".to_string(),
-        _ => format!("main_w-overlay_w-{}", margin), // tr/mr/br
+    let x = match p.position {
+        WatermarkPosition::Tl | WatermarkPosition::Ml | WatermarkPosition::Bl => {
+            format!("{}", margin)
+        }
+        WatermarkPosition::Tc | WatermarkPosition::Mc | WatermarkPosition::Bc => {
+            "(main_w-overlay_w)/2".to_string()
+        }
+        WatermarkPosition::Tr | WatermarkPosition::Mr | WatermarkPosition::Br => {
+            format!("main_w-overlay_w-{}", margin)
+        }
+        // Unreachable after validation; historically any unknown position
+        // anchored bottom-right.
+        WatermarkPosition::Other(_) => format!("main_w-overlay_w-{}", margin),
     };
-    let y = match pos {
-        "tl" | "tc" | "tr" => format!("{}", margin),
-        "ml" | "mc" | "mr" => "(main_h-overlay_h)/2".to_string(),
-        _ => format!("main_h-overlay_h-{}", margin), // bl/bc/br
+    let y = match p.position {
+        WatermarkPosition::Tl | WatermarkPosition::Tc | WatermarkPosition::Tr => {
+            format!("{}", margin)
+        }
+        WatermarkPosition::Ml | WatermarkPosition::Mc | WatermarkPosition::Mr => {
+            "(main_h-overlay_h)/2".to_string()
+        }
+        WatermarkPosition::Bl | WatermarkPosition::Bc | WatermarkPosition::Br => {
+            format!("main_h-overlay_h-{}", margin)
+        }
+        WatermarkPosition::Other(_) => format!("main_h-overlay_h-{}", margin),
     };
 
     let mut chain = format!("[1:v]scale={}:-2", tw);
@@ -1119,7 +1144,7 @@ pub(super) fn plan_roughcut_encode(
     p: &RoughCutParams,
 ) -> Result<RoughCutPlan> {
     let ep = p.encode.clone().unwrap_or_else(default_roughcut_encode);
-    let want_audio = ep.audio_codec != "none"
+    let want_audio = !matches!(ep.audio_codec, AudioChoice::None)
         && clips
             .iter()
             .zip(infos.iter())
@@ -1129,7 +1154,7 @@ pub(super) fn plan_roughcut_encode(
     // filter tolerates mixed rates but the muxer then carries variable-frame
     // timestamps, which players and editors handle badly.
     let target_fps = first.fps;
-    let vaapi = gpu_plan(&ep.video_codec, &ep.gpu).0.ends_with("_vaapi");
+    let vaapi = gpu_plan(&ep.video_codec, ep.gpu.as_ref()).0.ends_with("_vaapi");
 
     let mut input_args: Vec<String> = Vec::new();
     if vaapi {
@@ -1243,16 +1268,16 @@ pub(super) fn plan_roughcut_encode(
 /// Defaults when the frontend sends no encode recipe for precise mode.
 fn default_roughcut_encode() -> VideoParams {
     VideoParams {
-        video_codec: "libx264".into(),
-        quality_mode: "crf".into(),
+        video_codec: VideoCodec::LibX264,
+        quality_mode: QualityMode::Crf,
         crf: Some(20),
         target_size_mb: None,
         video_bitrate_kbps: None,
         resolution: "original".into(),
-        audio_codec: "aac".into(),
+        audio_codec: AudioChoice::Aac,
         audio_bitrate_kbps: Some(192),
-        format: "mp4".into(),
-        preset: "medium".into(),
+        format: OutputFormat::Mp4,
+        preset: SpeedPreset::Medium,
         fps: None,
         gpu: None,
     }
@@ -1275,14 +1300,18 @@ pub(super) fn roughcut_encode_args(
     if plan.with_audio {
         a.push("-map".into());
         a.push("[aout]".into());
-        match ep.audio_codec.as_str() {
-            "opus" => {
+        match ep.audio_codec {
+            AudioChoice::Opus => {
                 a.push("-c:a".into());
                 a.push("libopus".into());
                 a.push("-b:a".into());
                 a.push(format!("{}k", ep.audio_bitrate_kbps.unwrap_or(192)));
             }
-            _ => {
+            // Historical default: everything but Opus encoded to AAC.
+            AudioChoice::Aac
+            | AudioChoice::Copy
+            | AudioChoice::None
+            | AudioChoice::Other(_) => {
                 a.push("-c:a".into());
                 a.push("aac".into());
                 a.push("-b:a".into());
@@ -1311,11 +1340,13 @@ pub(super) fn roughcut_encode_args(
 }
 
 pub(super) fn build_audio_volume_args(info: &MediaInfo, p: &AudioVolumeParams, out: &Path) -> Vec<String> {
-    let af = if p.mode == "normalize" {
-        "loudnorm".to_string()
-    } else {
-        let db = p.gain.unwrap_or(0.0).clamp(-20.0, 20.0);
-        format!("volume=volume={:.1}dB", db)
+    let af = match p.mode {
+        VolumeMode::Normalize => "loudnorm".to_string(),
+        // Gain is also what unrecognized values always fell back to.
+        VolumeMode::Gain | VolumeMode::Other(_) => {
+            let db = p.gain.unwrap_or(0.0).clamp(-20.0, 20.0);
+            format!("volume=volume={:.1}dB", db)
+        }
     };
     let mut a: Vec<String> = vec!["-i".into(), info.path.clone(), "-af".into(), af];
     a.push("-c:a".into());
@@ -1394,7 +1425,7 @@ pub(super) fn build_video_contact_args(info: &MediaInfo, p: &ContactSheetParams,
     // short layout player hover-previews expect), otherwise auto-fit a
     // near-square grid. Interval mode honors the user's sampling rate and
     // explicit columns/rows.
-    let (cols, rows) = if p.mode == "count" {
+    let (cols, rows) = if p.mode == ContactMode::Count {
         let n = p.count.max(1) as u32;
         match p.count_cols.filter(|c| *c > 0) {
             Some(c) => (c.max(1), n.div_ceil(c.max(1))),
@@ -1406,7 +1437,7 @@ pub(super) fn build_video_contact_args(info: &MediaInfo, p: &ContactSheetParams,
     } else {
         (p.cols.max(1), p.rows.max(1))
     };
-    let fps_expr = if p.mode == "count" {
+    let fps_expr = if p.mode == ContactMode::Count {
         let dur = info.duration_secs.unwrap_or(0.0).max(0.1);
         let n = p.count.max(1) as f64;
         format!("1/{:.4}", dur / n)
@@ -1445,37 +1476,47 @@ pub(super) fn build_video_silence_args(info: &MediaInfo, p: &VideoSilenceParams,
     a
 }
 
-pub(super) fn audio_ext_for(codec: &str) -> &'static str {
+pub(super) fn audio_ext_for(codec: &AudioFormat) -> &'static str {
     match codec {
-        "aac" | "m4a" => "m4a",
-        "opus" => "opus",
-        "flac" => "flac",
-        _ => "mp3",
+        AudioFormat::Aac | AudioFormat::M4a => "m4a",
+        AudioFormat::Opus => "opus",
+        AudioFormat::Flac => "flac",
+        // Historical default (also covers "source", which extract-audio
+        // never offered): MP3 is the safe common denominator.
+        AudioFormat::Source | AudioFormat::Mp3 | AudioFormat::Other(_) => "mp3",
     }
 }
 
 /// Resolve the output file extension based on the tool and its params.
 /// Tools that preserve the input streams keep the input container; compress /
 /// convert honor a chosen format with "source" meaning keep-input.
+///
+/// Reads `format` straight from the raw params JSON so it can run before the
+/// typed parse; unrecognized values pass through as their literal string and
+/// are rejected by the params validation right after.
 pub(super) fn extension_for(tool_id: &str, info: &MediaInfo, params: &serde_json::Value) -> String {
     let fmt = |default: &str| -> String {
         let f = params
             .get("format")
             .and_then(|f| f.as_str())
-            .unwrap_or(default);
-        if f == "source" || f.is_empty() {
-            String::new()
-        } else {
-            f.to_string()
+            .map_or_else(
+                || OutputFormat::from_wire(default.to_string()),
+                |s| OutputFormat::from_wire(s.to_string()),
+            );
+        match f {
+            OutputFormat::Source => String::new(),
+            other => other.as_str().to_string(),
         }
     };
 
     match tool_id {
         "extract-audio" => audio_ext_for(
-            params
+            &params
                 .get("format")
                 .and_then(|f| f.as_str())
-                .unwrap_or("mp3"),
+                .map(str::to_string)
+                .map(AudioFormat::from_wire)
+                .unwrap_or(AudioFormat::Mp3),
         )
         .to_string(),
         "trim" | "mute" | "strip-metadata" => input_ext(info, "mp4"),
@@ -1522,16 +1563,16 @@ mod tests {
 
     fn video_params() -> VideoParams {
         VideoParams {
-            video_codec: "libx264".into(),
-            quality_mode: "crf".into(),
+            video_codec: VideoCodec::LibX264,
+            quality_mode: QualityMode::Crf,
             crf: Some(26),
             target_size_mb: None,
             video_bitrate_kbps: None,
             resolution: "720p".into(),
-            audio_codec: "aac".into(),
+            audio_codec: AudioChoice::Aac,
             audio_bitrate_kbps: Some(128),
-            format: "mp4".into(),
-            preset: "medium".into(),
+            format: OutputFormat::Mp4,
+            preset: SpeedPreset::Medium,
             fps: None,
             gpu: None,
         }
@@ -1555,7 +1596,7 @@ mod tests {
     #[test]
     fn video_target_size_bitrate() {
         let mut p = video_params();
-        p.quality_mode = "target_size".into();
+        p.quality_mode = QualityMode::TargetSize;
         p.target_size_mb = Some(5.0);
         let args = build_video_args(&sample_info(), &p, Path::new("o.mp4"));
         let idx = args.iter().position(|a| a == "-b:v").unwrap();
@@ -1567,8 +1608,8 @@ mod tests {
     #[test]
     fn video_vp9_crf() {
         let mut p = video_params();
-        p.video_codec = "libvpx-vp9".into();
-        p.format = "webm".into();
+        p.video_codec = VideoCodec::LibVpxVp9;
+        p.format = OutputFormat::Webm;
         let args = build_video_args(&sample_info(), &p, Path::new("o.webm"));
         assert!(args.contains(&"libvpx-vp9".to_string()));
         assert!(args.contains(&"-b:v".to_string()));
@@ -1584,7 +1625,7 @@ mod tests {
         info.media_type = MediaType::Audio;
         info.path = "song.mp3".into();
         let p = AudioParams {
-            format: "source".into(),
+            format: AudioFormat::Source,
             bitrate_kbps: 192,
         };
         let args = build_audio_args(&info, &p, Path::new("o.mp3"));
@@ -1603,7 +1644,7 @@ mod tests {
     #[test]
     fn audio_mp3_bitrate() {
         let p = AudioParams {
-            format: "mp3".into(),
+            format: AudioFormat::Mp3,
             bitrate_kbps: 192,
         };
         let args = build_audio_args(&sample_info(), &p, Path::new("o.mp3"));
@@ -1616,7 +1657,7 @@ mod tests {
     #[test]
     fn av1_crf_and_preset() {
         let mut p = video_params();
-        p.video_codec = "libsvtav1".into();
+        p.video_codec = VideoCodec::LibSvtAv1;
         p.crf = Some(32);
         let args = build_video_args(&sample_info(), &p, Path::new("o.mp4"));
         assert!(args.contains(&"libsvtav1".to_string()));
@@ -1632,8 +1673,8 @@ mod tests {
     #[test]
     fn av1_bitrate_mode() {
         let mut p = video_params();
-        p.video_codec = "libsvtav1".into();
-        p.quality_mode = "bitrate".into();
+        p.video_codec = VideoCodec::LibSvtAv1;
+        p.quality_mode = QualityMode::Bitrate;
         p.video_bitrate_kbps = Some(1500);
         let args = build_video_args(&sample_info(), &p, Path::new("o.mkv"));
         assert!(args.contains(&"1500k".to_string()));
@@ -1648,7 +1689,7 @@ mod tests {
         let idx = args.iter().position(|a| a == "-r").unwrap();
         assert_eq!(args[idx + 1], "30");
 
-        p.video_codec = "copy".into();
+        p.video_codec = VideoCodec::Copy;
         let args = build_video_args(&sample_info(), &p, Path::new("o.mp4"));
         assert!(!args.contains(&"-r".to_string()));
 
@@ -1693,18 +1734,18 @@ mod tests {
         assert!(!args.contains(&"libx264".to_string()));
     }
 
-    fn trim_params(mode: &str) -> TrimParams {
+    fn trim_params(mode: CutMode) -> TrimParams {
         TrimParams {
             start_time: 5.5,
             duration: Some(10.0),
-            mode: mode.into(),
+            mode,
             segments: vec![],
         }
     }
 
     #[test]
     fn trim_copy_args() {
-        let args = build_trim_args(&sample_info(), &trim_params("copy"), Path::new("o.mp4"));
+        let args = build_trim_args(&sample_info(), &trim_params(CutMode::Copy), Path::new("o.mp4"));
         let ss_idx = args.iter().position(|a| a == "-ss").unwrap();
         assert_eq!(args[ss_idx + 1], "5.500");
         let i_idx = args.iter().position(|a| a == "-i").unwrap();
@@ -1719,7 +1760,7 @@ mod tests {
 
     #[test]
     fn trim_encode_args() {
-        let args = build_trim_args(&sample_info(), &trim_params("encode"), Path::new("o.mp4"));
+        let args = build_trim_args(&sample_info(), &trim_params(CutMode::Encode), Path::new("o.mp4"));
         assert!(args.contains(&"libx264".to_string()));
         assert!(args.contains(&"-crf".to_string()));
         assert!(!args.contains(&"copy".to_string()));
@@ -1767,29 +1808,29 @@ mod tests {
         assert_eq!(safe_container_ext(&info), "mkv");
     }
 
-    fn shot_params(mode: &str) -> ScreenshotParams {
+    fn shot_params(mode: ScreenshotMode) -> ScreenshotParams {
         ScreenshotParams {
-            mode: mode.into(),
+            mode,
             at_sec: Some(3.5),
             every_sec: Some(5.0),
             count: Some(4),
             start_sec: Some(2.0),
             end_sec: Some(30.0),
-            format: "png".into(),
+            format: ImageFormat::Png,
             max_width: Some(1280),
         }
     }
 
     #[test]
     fn screenshot_single_and_interval() {
-        let sp = shot_params("single");
+        let sp = shot_params(ScreenshotMode::Single);
         let args = build_screenshot_single(&sample_info(), &sp, Path::new("o.png"));
         let ss = args.iter().position(|a| a == "-ss").unwrap();
         assert_eq!(args[ss + 1], "3.500");
         assert!(args.contains(&"-frames:v".to_string()));
         assert!(args.contains(&"scale=1280:-2".to_string()));
 
-        let ip = shot_params("interval");
+        let ip = shot_params(ScreenshotMode::Interval);
         let args = build_screenshot_interval(&sample_info(), &ip, Path::new("o_%03d.png"));
         assert!(args.iter().any(|a| a.contains("fps=1/5.000")));
         let t = args.iter().position(|a| a == "-t").unwrap();
@@ -1800,7 +1841,7 @@ mod tests {
     #[test]
     fn screenshot_count_spreads_frames_evenly() {
         // 10s video, 4 frames → every 2.5s, first frame at the 1.25s midpoint
-        let cp = shot_params("count");
+        let cp = shot_params(ScreenshotMode::Count);
         let args = build_screenshot_count(&sample_info(), &cp, Path::new("o_%03d.png"));
         assert!(args.iter().any(|a| a.contains("fps=1/2.500")));
         let ss = args.iter().position(|a| a == "-ss").unwrap();
@@ -1854,10 +1895,10 @@ mod tests {
         assert!(args.contains(&"atempo=0.500000".to_string()));
     }
 
-    fn wm_params(pos: &str, opacity: Option<f32>) -> WatermarkParams {
+    fn wm_params(pos: WatermarkPosition, opacity: Option<f32>) -> WatermarkParams {
         WatermarkParams {
             image_path: "wm.png".into(),
-            position: pos.into(),
+            position: pos,
             scale_percent: 20,
             opacity,
             margin_percent: Some(3),
@@ -1866,7 +1907,7 @@ mod tests {
 
     #[test]
     fn watermark_args_geometry() {
-        let p = wm_params("br", Some(0.5));
+        let p = wm_params(WatermarkPosition::Br, Some(0.5));
         let args = build_watermark_args(&sample_info(), &p, "wm.png", Path::new("o.mp4"));
         let fc = args.iter().position(|a| a == "-filter_complex").unwrap();
         let fc_val = &args[fc + 1];
@@ -1884,7 +1925,7 @@ mod tests {
 
     #[test]
     fn watermark_full_opacity_skips_alpha() {
-        let p = wm_params("tl", None);
+        let p = wm_params(WatermarkPosition::Tl, None);
         let args = build_watermark_args(&sample_info(), &p, "wm.png", Path::new("o.mp4"));
         let fc_idx = args.iter().position(|a| a == "-filter_complex").unwrap();
         let fc_val = &args[fc_idx + 1];
@@ -1906,7 +1947,7 @@ mod tests {
 
         // Stream copy never gets filters, so the HDR transfer stays untouched.
         let mut cp = video_params();
-        cp.video_codec = "copy".into();
+        cp.video_codec = VideoCodec::Copy;
         let copied = build_video_args(&info, &cp, Path::new("out.mp4"));
         assert!(!has_tonemap(&copied));
         assert!(!copied.contains(&"-vf".to_string()));
@@ -1956,9 +1997,9 @@ mod tests {
 
     fn rc_params(clips: Vec<RoughCutClip>) -> RoughCutParams {
         RoughCutParams {
-            mode: "encode".into(),
+            mode: CutMode::Encode,
             clips,
-            container: "mp4".into(),
+            container: RoughCutContainer::Mp4,
             encode: None,
         }
     }
@@ -2154,7 +2195,7 @@ mod tests {
             rc_clip("a.mp4", 0.0, Some(4.0)),
             rc_clip("a.mp4", 4.0, None),
         ]);
-        p.mode = "copy".into();
+        p.mode = CutMode::Copy;
         let windows = vec![(0.0, 4.0), (4.0, 10.0)];
         match prepare_roughcut_copy(
             &p.clips,
@@ -2194,7 +2235,7 @@ mod tests {
             rc_clip("a.mp4", 0.0, Some(4.0)),
             rc_clip("b.mp4", 0.0, Some(4.0)),
         ]);
-        p.mode = "copy".into();
+        p.mode = CutMode::Copy;
         let windows = vec![(0.0, 4.0), (0.0, 4.0)];
         let err = prepare_roughcut_copy(
             &p.clips,

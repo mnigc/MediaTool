@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ctx::{emit, AppEnv, Ctx, Emitter};
 use crate::error::{AppError, Result};
-use crate::models::{StartJobResult, WorkflowStepInput};
+use crate::models::{DlKind, DlQuality, StartJobResult, WorkflowStepInput};
 
 /// Fresh job/monitor id: `nanos` alone can collide when two jobs start within
 /// one clock tick, so — like jobs.rs `uuid` — pid + a monotonic counter make
@@ -661,7 +661,7 @@ pub(crate) fn tail_text(s: &str) -> String {
 pub struct DownloadRequest {
     pub url: String,
     /// best | 2160p | 1080p | 720p | 480p | audio
-    pub quality: String,
+    pub quality: DlQuality,
     /// mp3 | m4a | opus | flac — only for quality == "audio"
     pub audio_format: Option<String>,
     pub output_dir: String,
@@ -672,8 +672,9 @@ pub struct DownloadRequest {
     pub proxy: Option<String>,
     /// Also save subtitles (converted to srt)
     pub subtitles: Option<bool>,
-    /// download | record (live capture: mpegts-friendly, resumable segmenting)
-    pub kind: Option<String>,
+    /// download | record (live capture: mpegts-friendly, resumable segmenting).
+    /// Anything else keeps the historical "download" behavior.
+    pub kind: Option<DlKind>,
     /// Recording safety limit in seconds; the capture is stopped (and kept)
     /// when exceeded. None = unlimited.
     pub max_duration_sec: Option<u64>,
@@ -681,9 +682,10 @@ pub struct DownloadRequest {
     pub title: Option<String>,
 }
 
-fn format_selector(quality: &str, audio_format: Option<&str>) -> (Vec<String>, String) {
+/// Map the shared quality vocabulary onto yt-dlp's format selection.
+fn format_selector(quality: &DlQuality, audio_format: Option<&str>) -> (Vec<String>, String) {
     match quality {
-        "audio" => (
+        DlQuality::Audio => (
             vec![
                 "-x".into(),
                 "--audio-format".into(),
@@ -693,17 +695,22 @@ fn format_selector(quality: &str, audio_format: Option<&str>) -> (Vec<String>, S
             ],
             "bestaudio/best".to_string(),
         ),
-        "2160p" => (vec!["-S".into(), "res:2160,ext".into()], "b".into()),
-        "1080p" => (vec!["-S".into(), "res:1080,ext".into()], "b".into()),
-        "720p" => (vec!["-S".into(), "res:720,ext".into()], "b".into()),
-        "480p" => (vec!["-S".into(), "res:480,ext".into()], "b".into()),
-        // best: no resolution cap; still prefer mp4-capable merges as a tiebreak
-        _ => (vec!["-S".into(), "ext".into()], "bv*+ba/b".to_string()),
+        DlQuality::R2160p => (vec!["-S".into(), "res:2160,ext".into()], "b".into()),
+        DlQuality::R1080p => (vec!["-S".into(), "res:1080,ext".into()], "b".into()),
+        DlQuality::R720p => (vec!["-S".into(), "res:720,ext".into()], "b".into()),
+        DlQuality::R480p => (vec!["-S".into(), "res:480,ext".into()], "b".into()),
+        // best: no resolution cap; still prefer mp4-capable merges as a
+        // tiebreak. Quality names outside the shared vocabulary keep the
+        // historical "best" behavior here (streamlink treats them as literal
+        // per-plugin stream names instead — see `stream_selection`).
+        DlQuality::Best | DlQuality::Other(_) => {
+            (vec!["-S".into(), "ext".into()], "bv*+ba/b".to_string())
+        }
     }
 }
 
 fn build_download_args(env: &dyn AppEnv, bin: &Path, req: &DownloadRequest) -> Result<Vec<String>> {
-    let is_record = req.kind.as_deref() == Some("record");
+    let is_record = matches!(req.kind, Some(DlKind::Record));
     let mut a: Vec<String> = vec![
         "--no-playlist".into(),
         "--no-warnings".into(),
@@ -994,8 +1001,8 @@ pub fn run_download_blocking(
     pipeline: Vec<WorkflowStepInput>,
     upload_to: Vec<String>,
 ) {
-    let kind = req.kind.clone().unwrap_or_else(|| "download".into());
-    let is_record = kind == "record";
+    let kind = req.kind.clone().unwrap_or(DlKind::Download);
+    let is_record = kind == DlKind::Record;
     // Reset the cancel latch before the id becomes observable below (track_dl
     // makes the card adoptable after a reload). Kept symmetric with the
     // jobs.rs run entry; it is a cheap map removal.
@@ -1011,7 +1018,7 @@ pub fn run_download_blocking(
                 .clone()
                 .filter(|t| !t.is_empty())
                 .unwrap_or_else(|| req.url.clone()),
-            kind: kind.clone(),
+            kind: kind.as_str().to_string(),
             pipeline: pipeline.clone(),
             upload_to: upload_to.clone(),
         },
@@ -1035,7 +1042,7 @@ pub fn run_download_blocking(
                 id,
                 false,
                 false,
-                &kind,
+                kind.as_str(),
                 None,
                 Some(e.to_string()),
                 false,
@@ -1052,7 +1059,7 @@ pub fn run_download_blocking(
                 id: id.to_string(),
                 url: req.url.clone(),
                 title: t.clone(),
-                kind: kind.clone(),
+                kind: kind.as_str().to_string(),
                 pipeline: pipeline.clone(),
                 upload_to: upload_to.clone(),
             },
@@ -1066,7 +1073,7 @@ pub fn run_download_blocking(
                 id,
                 false,
                 false,
-                &kind,
+                kind.as_str(),
                 None,
                 Some(e.to_string()),
                 false,
@@ -1188,7 +1195,7 @@ pub fn run_download_blocking(
             id,
             false,
             true,
-            &kind,
+            kind.as_str(),
             None,
             Some("已取消".into()),
             false,
@@ -1204,7 +1211,7 @@ pub fn run_download_blocking(
             id,
             false,
             false,
-            &kind,
+            kind.as_str(),
             None,
             Some(format!(
                 "yt-dlp 退出码 {}{}",
@@ -1249,7 +1256,7 @@ pub fn run_download_blocking(
         id,
         true,
         false,
-        &kind,
+        kind.as_str(),
         output,
         None,
         limit_reached,
@@ -1392,7 +1399,7 @@ pub struct MonitorRequest {
     pub interval_sec: u64,
     /// Auto-start recording when the channel is live.
     pub auto_record: bool,
-    pub quality: String,
+    pub quality: DlQuality,
     pub output_dir: String,
     pub cookies_file: Option<String>,
     pub cookies_text: Option<String>,
@@ -1413,7 +1420,7 @@ pub struct MonitorInfo {
     pub name: String,
     pub interval_sec: u64,
     pub auto_record: bool,
-    pub quality: String,
+    pub quality: DlQuality,
     pub output_dir: String,
     pub cookies_file: Option<String>,
     pub cookies_text: Option<String>,
@@ -1820,7 +1827,7 @@ fn record_once(ctx: &Ctx, bin: &Path, info: &Arc<Mutex<MonitorInfo>>) {
                 cookies_text: net.cookies_text,
                 proxy: net.proxy,
                 subtitles: Some(false),
-                kind: Some("record".into()),
+                kind: Some(DlKind::Record),
                 max_duration_sec: None,
                 title: Some(
                     i.title
@@ -1901,7 +1908,7 @@ pub struct MonitorEdit {
     pub name: Option<String>,
     pub interval_sec: Option<u64>,
     pub auto_record: Option<bool>,
-    pub quality: Option<String>,
+    pub quality: Option<DlQuality>,
 }
 
 pub fn monitor_update(ctx: Ctx, id: String, edit: MonitorEdit) -> Result<MonitorInfo> {
@@ -1932,8 +1939,10 @@ pub fn monitor_update(ctx: Ctx, id: String, edit: MonitorEdit) -> Result<Monitor
             }
             i.auto_record = auto;
         }
-        if let Some(quality) = edit.quality.filter(|q| !q.trim().is_empty()) {
-            i.quality = quality.trim().to_string();
+        // An empty quality string keeps the current value, exactly as it did
+        // while this field was a plain string.
+        if let Some(quality) = edit.quality.filter(|q| !q.as_str().trim().is_empty()) {
+            i.quality = quality;
         }
         // A one-shot manual recording lets the monitor thread exit ("stopped").
         // Any edit revives it so the new settings actually take effect.

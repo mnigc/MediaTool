@@ -37,12 +37,14 @@ pub async fn estimate_size(ctx: Ctx, req: EstimateRequest) -> Result<EstimateRes
     let mut base_args: Vec<String> = match req.media_type {
         MediaType::Video => {
             let p: VideoParams = parse_params(&req.params)?;
+            p.validate()?;
             ensure_vaapi_device(&p)?;
             build_video_args(&info, &p, &tmp)
         }
         MediaType::Image | MediaType::Unknown => return Err(AppError("不支持的媒体类型".into())),
         MediaType::Audio => {
             let p: AudioParams = parse_params(&req.params)?;
+            p.validate()?;
             build_audio_args(&info, &p, &tmp)
         }
     };

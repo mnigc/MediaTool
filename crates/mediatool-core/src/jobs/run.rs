@@ -9,8 +9,8 @@ use crate::error::{AppError, Result};
 use crate::ffmpeg;
 use crate::media::probe;
 use crate::models::{
-    DoneEvent, JobRequest, MediaInfo, ProgressEvent, RoughCutParams, ScreenshotParams,
-    StartJobResult, TrimParams, VideoParams,
+    DoneEvent, JobRequest, MediaInfo, OverwritePolicy, ProgressEvent, RoughCutParams,
+    ScreenshotMode, ScreenshotParams, StartJobResult, TrimParams, VideoParams,
 };
 
 use super::args::{cleanup_pattern_outputs, pattern_output_size, scan_pattern_outputs};
@@ -42,8 +42,9 @@ pub async fn start_job(ctx: Ctx, req: JobRequest) -> Result<StartJobResult> {
     let policy = req
         .overwrite_policy
         .clone()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "rename".to_string());
+        // An absent (or unrecognized — it stays `Other`) policy keeps the
+        // historical "rename" resolution inside prepare.
+        .unwrap_or(OverwritePolicy::Rename);
     // Sequential (non-merged) pipeline steps land here with the remux
     // auto-fallback opted in: swap copy params for the transcode recipe when
     // the source codecs can't be copied into MP4 (see mp4_copy_fallback).
@@ -354,7 +355,7 @@ fn effective_duration(req: &JobRequest, info: &MediaInfo) -> f64 {
     match tool_dispatch(&req.tool_id) {
         "screenshot" => parse_params::<ScreenshotParams>(&req.params)
             .map(|p| {
-                if p.mode == "interval" {
+                if p.mode == ScreenshotMode::Interval {
                     let start = p.start_sec.unwrap_or(0.0).max(0.0);
                     trim_window_secs(total, start, p.end_sec.map(|e| e - start))
                 } else {
