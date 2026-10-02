@@ -16,12 +16,20 @@ pub struct TrayState {
 }
 
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
+    // A missing bundled icon must not abort startup: warn and run tray-less
+    // instead of panicking inside `setup`. `update_labels` tolerates the
+    // missing TrayState, so nothing else needs to change.
+    let Some(icon) = app.default_window_icon() else {
+        eprintln!("警告：未找到打包的应用图标，托盘将不可用（其余功能不受影响）");
+        return Ok(());
+    };
+    let icon = icon.clone();
     let open_item =
         MenuItem::with_id(app, "tray-open", "打开 MediaTool", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "tray-quit", "退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open_item, &quit_item])?;
     TrayIconBuilder::with_id("main-tray")
-        .icon(app.default_window_icon().expect("bundle icon").clone())
+        .icon(icon)
         .tooltip("MediaTool")
         .menu(&menu)
         .show_menu_on_left_click(false)

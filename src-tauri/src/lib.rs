@@ -83,8 +83,14 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let app = window.app_handle();
-                let action =
-                    settings::load_close_action(&*app.state::<shell::ShellState>().ctx.env);
+                // Cached in ShellState at startup and kept fresh by
+                // `close_action_set`; this fires on every X click, so it must
+                // not do disk I/O.
+                let action = *app
+                    .state::<shell::ShellState>()
+                    .close_action
+                    .lock()
+                    .unwrap();
                 match action {
                     settings::CloseAction::Tray => {
                         let _ = window.hide();

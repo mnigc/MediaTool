@@ -20,13 +20,22 @@ fn ctx(app: &AppHandle) -> mediatool_core::ctx::Ctx {
 
 /* ── Cache ──────────────────────────────────────────────────────── */
 
+/// The report walks whole trees (OS temp dir + app data), which can mean
+/// thousands of stat calls on a big cache; keep it on a worker thread so the
+/// window cannot freeze (same reason as `detect_gpu` below).
 #[tauri::command]
-pub fn cache_report(app: AppHandle) -> mediatool_core::cache::CacheReport {
-    mediatool_core::cache::cache_report(&*ctx(&app).env)
+pub async fn cache_report(app: AppHandle) -> Result<mediatool_core::cache::CacheReport> {
+    let env = ctx(&app).env.clone();
+    // The scan itself is infallible; only a dead worker (JoinError) errors.
+    tokio::task::spawn_blocking(move || mediatool_core::cache::cache_report(&*env))
+        .await
+        .map_err(|e| error::AppError(e.to_string()))
 }
 
+// `cache_clean` now returns the engine's Result; propagate it so a failed
+// cleanup (worker panic, shutdown) reaches the UI instead of lying about it.
 #[tauri::command]
-pub async fn cache_clean(app: AppHandle) -> mediatool_core::cache::CacheCleanResult {
+pub async fn cache_clean(app: AppHandle) -> Result<mediatool_core::cache::CacheCleanResult> {
     mediatool_core::cache::cache_clean(ctx(&app).env.clone()).await
 }
 
@@ -38,13 +47,15 @@ pub async fn cache_clean(app: AppHandle) -> mediatool_core::cache::CacheCleanRes
 #[tauri::command]
 pub fn delete_file(_app: AppHandle, path: String) -> Result<()> {
     let p = std::path::Path::new(&path);
-    if !p.exists() {
-        return Ok(());
+    // No exists/is_dir pre-check: that leaves a check-then-use gap (TOCTOU).
+    // Attempt the removal and let the error kind decide; the is_dir probe in
+    // the match only classifies an already-failed removal.
+    match std::fs::remove_file(p) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) if p.is_dir() => Err(error::AppError("不能删除目录".into())),
+        Err(e) => Err(error::AppError(format!("删除失败: {e}"))),
     }
-    if p.is_dir() {
-        return Err(error::AppError("不能删除目录".into()));
-    }
-    std::fs::remove_file(p).map_err(|e| error::AppError(format!("删除失败: {e}")))
 }
 
 /* ── Notifications ──────────────────────────────────────────────── */
@@ -64,13 +75,16 @@ pub fn notify_set(app: AppHandle, targets: Vec<mediatool_core::notify::NotifyTar
 
 #[tauri::command]
 pub fn close_action_get(app: AppHandle) -> crate::settings::CloseAction {
-    crate::settings::load_close_action(&*ctx(&app).env)
+    // Read the in-memory copy kept in `ShellState`; no disk I/O here.
+    *app.state::<ShellState>().close_action.lock().unwrap()
 }
 
 #[tauri::command]
 pub fn close_action_set(app: AppHandle, action: crate::settings::CloseAction) -> Result<()> {
-    crate::settings::save_close_action(&*ctx(&app).env, action)
-        .map_err(error::AppError)
+    crate::settings::save_close_action(&*ctx(&app).env, action).map_err(error::AppError)?;
+    // Keep the cached copy in sync so the close handler stays disk-free.
+    *app.state::<ShellState>().close_action.lock().unwrap() = action;
+    Ok(())
 }
 
 /// Quit for real, after the frontend's active-task confirmation. Goes through

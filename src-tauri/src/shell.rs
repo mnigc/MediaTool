@@ -46,15 +46,24 @@ impl Emitter for TauriEmitter {
 pub struct ShellState {
     pub ctx: Ctx,
     pub jobs: Arc<mediatool_core::state::JobManager>,
+    /// Close behavior cached at startup (see `load_close_action`); kept in
+    /// memory so the window-close handler never touches the disk.
+    pub close_action: std::sync::Mutex<crate::settings::CloseAction>,
 }
 
 pub fn build(app: &AppHandle) -> ShellState {
     let env: Arc<dyn AppEnv> = Arc::new(TauriEnv { app: app.clone() });
+    // Read once here; `close_action_set` updates the copy on every change.
+    let close_action = std::sync::Mutex::new(crate::settings::load_close_action(env.as_ref()));
     let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter { app: app.clone() });
     let jobs = Arc::new(mediatool_core::state::JobManager::new());
     let monitors = Arc::new(mediatool_core::ytdlp::MonitorManager::default());
     let uploads = Arc::new(mediatool_core::upload::UploadManager::default());
     let oauth = Arc::new(mediatool_core::upload::OauthManager::default());
     let ctx = Ctx::new(env, emitter, jobs.clone(), monitors, uploads, oauth);
-    ShellState { ctx, jobs }
+    ShellState {
+        ctx,
+        jobs,
+        close_action,
+    }
 }

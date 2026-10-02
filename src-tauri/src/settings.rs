@@ -46,7 +46,21 @@ fn save(env: &dyn mediatool_core::ctx::AppEnv, settings: &AppSettings) -> Result
     }
     let json =
         serde_json::to_string_pretty(settings).map_err(|e| format!("serialize settings: {e}"))?;
-    std::fs::write(path, json).map_err(|e| format!("write settings: {e}"))
+    // Write to a sibling temp file first, then swap it in with a rename: a
+    // crash mid-write must not leave a truncated settings file behind (the
+    // close handler reads it on every close request). std's rename uses
+    // MOVEFILE_REPLACE_EXISTING on Windows, so it replaces the old file in
+    // one step on both platforms.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json).map_err(|e| format!("write settings: {e}"))?;
+    match std::fs::rename(&tmp, &path) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // Leave no stray temp file behind on a failed swap.
+            let _ = std::fs::remove_file(&tmp);
+            Err(format!("replace settings: {e}"))
+        }
+    }
 }
 
 pub fn load_close_action(env: &dyn mediatool_core::ctx::AppEnv) -> CloseAction {
