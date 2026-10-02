@@ -16,6 +16,9 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 base64 = "0.22"
 sha2 = "0.10"
 rand = "0.8"
+# Local-time filename stamps for recordings; already in the tree as a
+# transitive dependency, so this adds no new crates.
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 
 # Unix process-tree kills (kill(-pid, SIGKILL)); see state::kill_tree.
 [target.'cfg(unix)'.dependencies]

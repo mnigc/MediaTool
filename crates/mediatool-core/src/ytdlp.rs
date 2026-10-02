@@ -728,7 +728,11 @@ fn build_download_args(env: &dyn AppEnv, bin: &Path, req: &DownloadRequest) -> R
         .filter(|t| !t.is_empty())
         .unwrap_or("%(title)s [%(id)s].%(ext)s");
     if is_record {
-        let ts = "%(epoch>%Y%m%d-%H%M%S)s";
+        // Local wall-clock stamp baked in as a literal: yt-dlp's own
+        // %(epoch>...)s renders UTC, which reads as a wrong date to a user
+        // recording late at night. Computed once per request — a few seconds
+        // of drift against file-open time is irrelevant for a filename.
+        let ts = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
         a.push("-o".into());
         a.push(format!(
             "{}/%(title).180B [{}].%(ext)s",

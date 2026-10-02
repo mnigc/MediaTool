@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -1110,12 +1110,9 @@ fn unique_record_path(dir: &Path, req: &DownloadRequest) -> PathBuf {
         .map(|t| t.trim().chars().take(120).collect::<String>())
         .filter(|t| !t.is_empty())
         .unwrap_or_else(|| "直播".into());
-    let stamp = epoch_to_civil(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0),
-    );
+    // Local wall-clock stamp: recordings are named for the user, so a
+    // deep-night capture must not show a UTC-shifted date.
+    let stamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
     let base = dir.join(format!("{title} [{stamp}].mkv"));
     // Two monitors going live in the same second would otherwise collide.
     // create_new(true) doubles as the atomic occupancy probe, so the winner
@@ -1147,29 +1144,6 @@ fn unique_record_path(dir: &Path, req: &DownloadRequest) -> PathBuf {
     // 10k suffixes exhausted (absurd in practice): return the base name
     // instead of panicking.
     base
-}
-
-/// Unix seconds → **UTC** `YYYYMMDDHHMMSS`, without pulling in a date crate.
-///
-/// The stamp is deliberately UTC, not local time: this crate has no timezone
-/// database, and rendering local time would need chrono as a new dependency.
-/// Recorded filenames can therefore appear shifted relative to the wall
-/// clock; switching to local naming is left for a later change.
-fn epoch_to_civil(secs: i64) -> String {
-    let days = secs.div_euclid(86_400);
-    let rem = secs.rem_euclid(86_400);
-    let (h, mi, s) = (rem / 3600, rem % 3600 / 60, rem % 60);
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y0 = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y0 + 1 } else { y0 };
-    format!("{y:04}{m:02}{d:02}{h:02}{mi:02}{s:02}")
 }
 
 fn format_secs(secs: f64) -> String {
@@ -1223,17 +1197,5 @@ mod tests {
         let (args, name) = stream_selection("480p30");
         assert!(args.is_empty());
         assert_eq!(name, "480p30");
-    }
-
-    #[test]
-    fn epoch_to_civil_known_instants() {
-        // The epoch itself.
-        assert_eq!(epoch_to_civil(0), "19700101000000");
-        // 1e9 seconds: 2001-09-09T01:46:40Z.
-        assert_eq!(epoch_to_civil(1_000_000_000), "20010909014640");
-        // Leap-year day: 2024-02-29T12:00:00Z.
-        assert_eq!(epoch_to_civil(1_709_208_000), "20240229120000");
-        // Last second before a year boundary rolls over correctly.
-        assert_eq!(epoch_to_civil(1_704_067_199), "20231231235959");
     }
 }
