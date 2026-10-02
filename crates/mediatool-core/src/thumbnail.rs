@@ -137,7 +137,14 @@ fn video_thumbnail(
     let p = path.to_string_lossy().to_string();
     let seek_at = |frac: f64, dflt: &str| -> String {
         match duration_secs {
-            Some(d) if d > 1.0 => format!("{:.1}", (d * frac).clamp(1.0, d - 0.5)),
+            Some(d) if d > 1.0 => {
+                // For d in (1.0, 1.5) the old `clamp(1.0, d - 0.5)` had min >
+                // max and panicked. Derive max first, then keep min at or
+                // below it, so any positive duration yields a valid range.
+                let max_t = (d - 0.5).max(0.05);
+                let min_t = 1.0_f64.min(max_t);
+                format!("{:.1}", (d * frac).clamp(min_t, max_t))
+            }
             _ => dflt.to_string(),
         }
     };
@@ -287,26 +294,9 @@ fn is_complete_jpeg(buf: &[u8]) -> bool {
     buf.len() > 4 && buf.ends_with(&[0xFF, 0xD9])
 }
 
+/// Standard base64 with padding, byte-identical to the hand-rolled encoder
+/// this used to be (data URLs need the padded alphabet).
 fn base64_encode(input: &[u8]) -> String {
-    const CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
-    for chunk in input.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
-        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-        out.push(CHARS[((triple >> 18) & 63) as usize] as char);
-        out.push(CHARS[((triple >> 12) & 63) as usize] as char);
-        if chunk.len() > 1 {
-            out.push(CHARS[((triple >> 6) & 63) as usize] as char);
-        } else {
-            out.push('=');
-        }
-        if chunk.len() > 2 {
-            out.push(CHARS[(triple & 63) as usize] as char);
-        } else {
-            out.push('=');
-        }
-    }
-    out
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(input)
 }

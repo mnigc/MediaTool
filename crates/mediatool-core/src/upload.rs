@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
-use bytes::Bytes;
 use futures_util::Stream;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -328,11 +327,23 @@ impl OauthManager {
         let state = self.states.lock().unwrap().get(request_id).cloned()?;
         self.grants.lock().unwrap().remove(&state)
     }
+
+    /// Drop a pending request on cancel/timeout: remove the parked grant if
+    /// it is still there, and ALWAYS clear the `state` entry. The grant may
+    /// already be gone (the callback won the race), but leaving the state
+    /// behind would leak the map entry until the process exits.
+    fn withdraw(&self, request_id: &str) {
+        if let Some(state) = self.states.lock().unwrap().remove(request_id) {
+            self.grants.lock().unwrap().remove(&state);
+        }
+    }
 }
 
 /// How long a browser OAuth flow may stay unfinished before it is dropped.
 const OAUTH_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Internal task/request identifier (upload ids, OAuth request ids): only
+/// needs process-wide uniqueness, not secrecy — see [`random_token`].
 fn uuid(prefix: &str) -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let nanos = std::time::SystemTime::now()
@@ -572,13 +583,14 @@ fn report_oauth_result(
 
 pub fn oauth_cancel(ctx: Ctx, request_id: String) {
     // Loopback: wake the listener thread. Hosted: drop the grant so a late
-    // callback finds nothing pending.
+    // callback finds nothing pending. `withdraw` clears the state entry even
+    // when the grant was already claimed (e.g. by oauth_complete), so cancel
+    // can no longer strand it.
     if let Some(flag) = ctx.oauth.cancelled.lock().unwrap().get(&request_id) {
         flag.store(true, Ordering::Relaxed);
     }
-    if ctx.oauth.claim_by_request(&request_id).is_some() {
-        ctx.oauth.finish(&request_id);
-    }
+    ctx.oauth.withdraw(&request_id);
+    ctx.oauth.finish(&request_id);
 }
 
 /* ── Dispatcher ─────────────────────────────────────────────────── */
@@ -591,7 +603,13 @@ async fn run_upload(
     flag: Arc<AtomicBool>,
 ) {
     let progress = make_progress(&ctx, &id);
-    let outcome = upload_dispatch(&progress, &target, &files, &flag).await;
+    // A provider can rotate the refresh token and only then let the upload
+    // fail, so the token is parked in this slot the moment it arrives and
+    // travels back on BOTH done-event paths — dropping it on the error path
+    // would force the user to re-authorize the account.
+    let rotated = Mutex::new(None);
+    let outcome = upload_dispatch(&progress, &target, &files, &flag, &rotated).await;
+    let rotated = rotated.into_inner().unwrap_or_default();
     // The cancel flag is the source of truth: a wrapped stream error surfaces
     // as a generic transport error, but the flag tells us why it stopped.
     let was_cancelled = flag.load(Ordering::Relaxed);
@@ -602,7 +620,7 @@ async fn run_upload(
             cancelled: false,
             error: None,
             url: outcome.url,
-            new_refresh_token: outcome.new_refresh_token,
+            new_refresh_token: rotated,
         },
         Err(e) => UploadDoneEvent {
             id: id.clone(),
@@ -614,18 +632,18 @@ async fn run_upload(
                 e.0
             }),
             url: None,
-            new_refresh_token: None,
+            new_refresh_token: rotated,
         },
     };
     ctx.uploads.finish(&id);
     emit(ctx.emitter.as_ref(), "upload-done", &event);
 }
 
-/// Shared result of a successful transfer: a link when the platform has one,
-/// plus a possibly rotated refresh token to hand back to the frontend.
+/// Shared result of a successful transfer: a link when the target provides
+/// one. A rotated refresh token does not travel here — it goes through the
+/// `rotated` slot instead, so it survives failure paths too.
 struct UploadOutcome {
     url: Option<String>,
-    new_refresh_token: Option<String>,
 }
 
 async fn upload_dispatch(
@@ -633,6 +651,7 @@ async fn upload_dispatch(
     target: &TargetConfig,
     files: &[UploadFile],
     flag: &Arc<AtomicBool>,
+    rotated: &Mutex<Option<String>>,
 ) -> std::result::Result<UploadOutcome, AppError> {
     let first = files
         .first()
@@ -640,20 +659,17 @@ async fn upload_dispatch(
     let name = first.name.as_str();
     let total: u64 = files.iter().map(|f| f.size).sum();
     progress(0.0, 0, total);
-    match target.kind.as_str() {
+    let url = match target.kind.as_str() {
         "webdav" => upload_webdav(progress, target, &first.path, first.size, name, flag).await,
         "telegram" => upload_telegram(progress, target, files, flag).await,
         "youtube" => upload_youtube(progress, target, &first.path, first.size, name, flag).await,
         "gdrive" => upload_gdrive(progress, target, &first.path, first.size, name, flag).await,
         "onedrive" => {
-            upload_onedrive(progress, target, &first.path, first.size, name, flag).await
+            upload_onedrive(progress, target, &first.path, first.size, name, flag, rotated).await
         }
         other => Err(AppError(format!("Unknown upload target kind: {other}"))),
-    }
-    .map(|(url, rt)| UploadOutcome {
-        url,
-        new_refresh_token: rt,
-    })
+    }?;
+    Ok(UploadOutcome { url })
 }
 
 fn check_cancelled(flag: &AtomicBool) -> std::result::Result<(), AppError> {
@@ -673,7 +689,7 @@ async fn upload_webdav(
     size: u64,
     name: &str,
     flag: &Arc<AtomicBool>,
-) -> std::result::Result<(Option<String>, Option<String>), AppError> {
+) -> std::result::Result<Option<String>, AppError> {
     let base = target.url.as_deref().unwrap_or("").trim_end_matches('/');
     let client = build_client(target.proxy.as_deref())?;
     let mut auth = reqwest::header::HeaderMap::new();
@@ -741,7 +757,7 @@ async fn upload_webdav(
         )));
     }
     progress(100.0, size, size);
-    Ok((Some(url), None))
+    Ok(Some(url))
 }
 
 /* ── Telegram ───────────────────────────────────────────────────── */
@@ -801,7 +817,7 @@ async fn upload_telegram(
     target: &TargetConfig,
     files: &[UploadFile],
     flag: &Arc<AtomicBool>,
-) -> std::result::Result<(Option<String>, Option<String>), AppError> {
+) -> std::result::Result<Option<String>, AppError> {
     if let Some(big) = files.iter().find(|f| f.size > TELEGRAM_BOT_LIMIT) {
         return Err(AppError(format!(
             "Telegram Bot API 限制 50 MB（{} 为 {}）；更大文件可用本地 Bot API server 或改用其他目标",
@@ -856,7 +872,7 @@ async fn upload_telegram(
     }
 
     progress(100.0, total, total);
-    Ok((link, None))
+    Ok(link)
 }
 
 /// Splits a job's deliverables into what may share an album and what must go
@@ -914,57 +930,36 @@ async fn tg_send_file(
     flag: &Arc<AtomicBool>,
 ) -> std::result::Result<serde_json::Value, AppError> {
     let name = file.name.as_str();
-    let bytes = tokio::fs::read(&file.path)
+    // Stream straight off the disk: the old path read the whole file into
+    // memory and then copied it again into 512 KiB chunks — a 2× file-size
+    // memory peak. The part stream keeps it constant. The stream is boxed
+    // because the unfold state is not Unpin and CountingStream polls by
+    // pin (same as the WebDAV path below).
+    let f = tokio::fs::File::open(&file.path)
         .await
-        .map_err(|e| AppError(format!("Cannot read file: {e}")))?;
-
-    let boundary = format!("mediatool{}", uuid("b"));
-    let mut head = Vec::new();
-    if !chat.is_empty() {
-        head.extend_from_slice(
-            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n{chat}\r\n")
-                .as_bytes(),
-        );
-    }
-    head.extend_from_slice(
-        format!(
-            "--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"; filename=\"{}\"; filename*=utf-8''{}\r\nContent-Type: {}\r\n\r\n",
-            ascii_fallback_name(name),
-            enc(name),
-            mime_for(name)
-        )
-        .as_bytes(),
-    );
-    let tail_part = format!("\r\n--{boundary}--\r\n");
-    let body_len = (head.len() + bytes.len() + tail_part.len()) as u64;
-
-    let head_bytes = Bytes::from(head);
-    let file_bytes = Bytes::from(bytes);
-    let tail_bytes = Bytes::from(tail_part);
-    let stream = futures_util::stream::iter(vec![Ok(head_bytes)])
-        .chain(futures_util::stream::iter(
-            file_bytes
-                .chunks(512 * 1024)
-                .map(Bytes::copy_from_slice)
-                .map(Ok)
-                .collect::<Vec<_>>(),
-        ))
-        .chain(futures_util::stream::iter(vec![Ok(tail_bytes)]))
-        .boxed();
+        .map_err(|e| AppError(format!("Cannot open file: {e}")))?;
     let counted = CountingStream::new(
-        stream,
-        body_len,
+        file_stream(f).boxed(),
+        file.size,
         scoped_progress(progress, base, file.size, total),
         flag.clone(),
     );
+    let part = reqwest::multipart::Part::stream_with_length(
+        reqwest::Body::wrap_stream(counted),
+        file.size,
+    )
+    .file_name(name.to_string())
+    .mime_str(mime_for(name))
+    .map_err(|e| AppError(format!("Invalid mime type: {e}")))?;
+    let mut form = reqwest::multipart::Form::new();
+    if !chat.is_empty() {
+        form = form.text("chat_id", chat.to_string());
+    }
+    form = form.part(field.to_string(), part);
 
     let resp = client
         .post(format!("https://api.telegram.org/bot{token}/{method}"))
-        .header(
-            reqwest::header::CONTENT_TYPE,
-            format!("multipart/form-data; boundary={boundary}"),
-        )
-        .body(reqwest::Body::wrap_stream(counted))
+        .multipart(form)
         .send()
         .await?;
     tg_result(resp).await
@@ -1022,7 +1017,17 @@ async fn tg_result(
             tail(&text, 300)
         )));
     }
-    let v: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
+    let v: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(e) => {
+            // "unknown" helps nobody: carry the failing payload (truncated)
+            // into the error so the user sees what Telegram actually sent.
+            return Err(AppError(format!(
+                "Telegram returned invalid JSON ({e}): {}",
+                head(&text, 200)
+            )));
+        }
+    };
     if v.get("ok").and_then(|x| x.as_bool()) != Some(true) {
         return Err(AppError(format!(
             "Telegram error: {}",
@@ -1054,7 +1059,7 @@ async fn upload_youtube(
     size: u64,
     name: &str,
     flag: &Arc<AtomicBool>,
-) -> std::result::Result<(Option<String>, Option<String>), AppError> {
+) -> std::result::Result<Option<String>, AppError> {
     let client = build_client(target.proxy.as_deref())?;
     let title = strip_extension(name).to_string();
     let privacy = match target.privacy.as_deref() {
@@ -1113,7 +1118,7 @@ async fn upload_youtube(
         .get("id")
         .and_then(|x| x.as_str())
         .ok_or_else(|| AppError("YouTube response has no video id".into()))?;
-    Ok((Some(format!("https://www.youtube.com/watch?v={vid}")), None))
+    Ok(Some(format!("https://www.youtube.com/watch?v={vid}")))
 }
 
 /* ── Google Drive ───────────────────────────────────────────────── */
@@ -1125,7 +1130,7 @@ async fn upload_gdrive(
     size: u64,
     name: &str,
     flag: &Arc<AtomicBool>,
-) -> std::result::Result<(Option<String>, Option<String>), AppError> {
+) -> std::result::Result<Option<String>, AppError> {
     let client = build_client(target.proxy.as_deref())?;
     let access = google_access_token(client.clone(), target).await?;
     let mut meta = serde_json::json!({ "name": name });
@@ -1167,7 +1172,7 @@ async fn upload_gdrive(
                 .and_then(|x| x.as_str())
                 .map(|fid| format!("https://drive.google.com/file/d/{fid}/view"))
         });
-    Ok((link, None))
+    Ok(link)
 }
 
 /* ── OneDrive (Microsoft Graph) ─────────────────────────────────── */
@@ -1179,10 +1184,10 @@ async fn upload_onedrive(
     size: u64,
     name: &str,
     flag: &Arc<AtomicBool>,
-) -> std::result::Result<(Option<String>, Option<String>), AppError> {
+    rotated: &Mutex<Option<String>>,
+) -> std::result::Result<Option<String>, AppError> {
     let client = build_client(target.proxy.as_deref())?;
-    let mut rotated: Option<String> = None;
-    let mut access = microsoft_access_token(client.clone(), target, &mut rotated).await?;
+    let mut access = microsoft_access_token(client.clone(), target, rotated).await?;
 
     let remote = remote_path(&target.directory, name);
     // /me/drive/root:{path}:/createUploadSession — `{path}` includes the
@@ -1202,7 +1207,7 @@ async fn upload_onedrive(
         .send()
         .await?;
     if resp.status().as_u16() == 401 {
-        access = microsoft_access_token(client.clone(), target, &mut rotated).await?;
+        access = microsoft_access_token(client.clone(), target, rotated).await?;
         resp = client
             .post(&url)
             .bearer_auth(&access)
@@ -1218,10 +1223,14 @@ async fn upload_onedrive(
             tail(&resp.text().await.unwrap_or_default(), 300)
         )));
     }
-    let v: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| AppError(format!("Bad OneDrive response: {e}")))?;
+    let v: serde_json::Value = resp.json().await.map_err(|e| {
+        // A decode error's Display would carry the full request URL; keep it
+        // sanitized like every other reqwest failure here.
+        AppError(format!(
+            "Bad OneDrive response: {}",
+            crate::error::sanitize_reqwest_error(&e)
+        ))
+    })?;
     let upload_url = v
         .get("uploadUrl")
         .and_then(|x| x.as_str())
@@ -1284,7 +1293,7 @@ async fn upload_onedrive(
         progress(offset as f64 / size as f64 * 100.0, offset, size);
     }
     progress(100.0, size, size);
-    Ok((None, rotated))
+    Ok(None)
 }
 
 fn next_expected(v: &serde_json::Value) -> Option<u64> {
@@ -1339,7 +1348,7 @@ async fn google_access_token(client: reqwest::Client, target: &TargetConfig) -> 
 async fn microsoft_access_token(
     client: reqwest::Client,
     target: &TargetConfig,
-    rotated: &mut Option<String>,
+    rotated: &Mutex<Option<String>>,
 ) -> Result<String> {
     let tenant = target
         .tenant
@@ -1377,8 +1386,12 @@ async fn microsoft_access_token(
         .and_then(|x| x.as_str())
         .ok_or_else(|| AppError("Microsoft response has no access_token".into()))?
         .to_string();
+    // Microsoft rotates the refresh token on refresh: park it immediately so
+    // it reaches the frontend even if the upload dies right after.
     if let Some(rt) = v.get("refresh_token").and_then(|x| x.as_str()) {
-        *rotated = Some(rt.to_string());
+        if let Ok(mut slot) = rotated.lock() {
+            *slot = Some(rt.to_string());
+        }
     }
     Ok(access)
 }
@@ -1403,12 +1416,7 @@ async fn google_resumable(
         let end = std::cmp::min(offset + CHUNK, size);
         let chunk = read_chunk(&mut file, offset, (end - offset) as usize).await?;
         let cr = format!("bytes {offset}-{}/{size}", end - 1);
-        let resp = client
-            .put(session)
-            .header(reqwest::header::CONTENT_RANGE, &cr)
-            .body(chunk)
-            .send()
-            .await?;
+        let resp = put_chunk(&client, session, &cr, &chunk, flag).await?;
         let status = resp.status().as_u16();
         if status == 308 {
             let next = resp
@@ -1445,16 +1453,57 @@ async fn google_resumable(
         return Ok(text);
     }
     // size == 0: a single finalizing PUT with the zero-length range.
-    let resp = client
-        .put(session)
-        .header(reqwest::header::CONTENT_RANGE, format!("bytes */{size}"))
-        .send()
-        .await?;
+    let resp = put_chunk(
+        &client,
+        session,
+        &format!("bytes */{size}"),
+        &bytes::Bytes::new(),
+        flag,
+    )
+    .await?;
     let status = resp.status().as_u16();
     if !(200..300).contains(&status) {
         return Err(AppError(format!("Upload failed: HTTP {status}")));
     }
     Ok(resp.text().await.unwrap_or_default())
+}
+
+/// One resumable-upload PUT with bounded retries. A dropped connection,
+/// timeout, 5xx or 429 used to abandon a transfer that may already be hours
+/// in; those get up to 3 attempts with 2s/5s backoff. A 4xx is a permanent
+/// rejection (or a stale session) and must fail immediately. Re-putting a
+/// range is safe: the server answers 308 with its `Range` and the caller
+/// resyncs `offset` from it.
+async fn put_chunk(
+    client: &reqwest::Client,
+    session: &str,
+    content_range: &str,
+    chunk: &bytes::Bytes,
+    flag: &AtomicBool,
+) -> std::result::Result<reqwest::Response, AppError> {
+    const MAX_ATTEMPTS: u32 = 3;
+    let mut attempt = 1;
+    loop {
+        check_cancelled(flag)?;
+        let last = attempt >= MAX_ATTEMPTS;
+        let outcome = client
+            .put(session)
+            .header(reqwest::header::CONTENT_RANGE, content_range)
+            .body(chunk.clone())
+            .send()
+            .await;
+        let transient = match &outcome {
+            Ok(resp) => resp.status().is_server_error() || resp.status().as_u16() == 429,
+            Err(_) => true, // connect/timeout/body-level network failure
+        };
+        if last || !transient {
+            // A final 5xx/429 still returns the response so the caller reports
+            // its usual "HTTP xxx" message; errors surface sanitized.
+            return outcome.map_err(AppError::from);
+        }
+        tokio::time::sleep(Duration::from_secs(if attempt == 1 { 2 } else { 5 })).await;
+        attempt += 1;
+    }
 }
 
 fn parse_range_end(v: &str) -> Option<u64> {
@@ -1540,7 +1589,7 @@ fn exchange_oauth_code(flow: &OauthFlow, code: &str) -> std::result::Result<Stri
             .form(&form)
             .send()
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| crate::error::sanitize_reqwest_error(&e))?;
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
         let v: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
@@ -1625,12 +1674,19 @@ fn write_simple_404(stream: &std::net::TcpStream) -> std::io::Result<()> {
 /* ── Shared helpers ─────────────────────────────────────────────── */
 
 fn build_client(proxy: Option<&str>) -> Result<reqwest::Client> {
-    let mut b = reqwest::Client::builder().connect_timeout(Duration::from_secs(30));
+    let mut b = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(30))
+        // Read-idle timeout: a server that accepts the connection and then
+        // stops talking would otherwise block the transfer forever, beyond the
+        // reach of cancel. It is per read, not per request, so a healthy
+        // large-file transfer that keeps making progress never trips it.
+        .read_timeout(Duration::from_secs(60));
     if let Some(p) = proxy.map(str::trim).filter(|p| !p.is_empty()) {
         let p = reqwest::Proxy::all(p).map_err(|e| AppError(format!("Bad proxy: {e}")))?;
         b = b.proxy(p);
     }
-    b.build().map_err(|e| AppError(format!("HTTP client: {e}")))
+    b.build()
+        .map_err(|e| AppError(format!("HTTP client: {}", crate::error::sanitize_reqwest_error(&e))))
 }
 
 /// Progress sink shared by every platform uploader: `(percent, uploaded, total)`.
@@ -1828,24 +1884,6 @@ fn mime_for(name: &str) -> &'static str {
     }
 }
 
-/// ASCII-safe filename for a Content-Disposition header byte string.
-fn ascii_fallback_name(name: &str) -> String {
-    if name.is_ascii() && !name.is_empty() {
-        return name.to_string();
-    }
-    match name.rsplit('.').next() {
-        Some(ext)
-            if ext.is_ascii()
-                && !ext.is_empty()
-                && ext.len() <= 5
-                && ext.contains(|c: char| c.is_ascii_alphanumeric()) =>
-        {
-            format!("upload.{ext}")
-        }
-        _ => "upload.bin".to_string(),
-    }
-}
-
 /// Strip a short trailing extension (`clip.mp4` → `clip`) for display names.
 fn strip_extension(name: &str) -> &str {
     match name.rsplit_once('.') {
@@ -1883,6 +1921,22 @@ fn tail(s: &str, max_bytes: usize) -> String {
     s[start..].to_string()
 }
 
+/// Keep the FIRST `max_bytes` of `s` (char-boundary safe). Response bodies are
+/// quoted at their head in errors: the diagnostic part comes first.
+fn head(s: &str, max_bytes: usize) -> String {
+    let s = s.trim();
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+    let mut end = max_bytes;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_string()
+}
+
+/// Security token (PKCE verifier, OAuth `state`): cryptographically random,
+/// unguessable — do not use [`uuid`] for anything an attacker could guess.
 fn random_token(len: usize) -> String {
     use rand::Rng;
     const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";

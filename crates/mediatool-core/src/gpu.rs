@@ -1,5 +1,5 @@
 use std::process::Command;
-use std::sync::OnceLock;
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
@@ -76,10 +76,11 @@ const BACKENDS: &[Backend] = &[
 /// fail when the driver or device is missing.
 const PROBE_INPUT: &str = "color=c=black:s=256x256:d=0.1";
 
-/// Detection spawns ffmpeg processes, so the result is computed once. It is
-/// only cached once ffmpeg has actually been located: before that the answer
-/// is "nothing", and caching that would hide the GPU for the whole session.
-static CACHED: OnceLock<GpuInfo> = OnceLock::new();
+/// Detection spawns ffmpeg processes, so a positive result is computed once
+/// and kept. An empty result is deliberately not sticky: caching "no
+/// backends" forever would hide a GPU that appears mid-session (driver
+/// installed, eGPU plugged in) until the app is restarted.
+static CACHED: Mutex<Option<GpuInfo>> = Mutex::new(None);
 
 /// Run `ffmpeg -encoders` and return its output (stdout, falling back to
 /// stderr) — used only to skip backends the build does not even contain.
@@ -148,11 +149,17 @@ fn detect(env: &dyn AppEnv) -> Option<GpuInfo> {
 /// a machine with none of their hardware. Each candidate therefore has to
 /// encode a frame before it is offered to the user.
 pub fn detect_gpu(env: &dyn AppEnv) -> Result<GpuInfo> {
-    if let Some(cached) = CACHED.get() {
-        return Ok(cached.clone());
+    if let Some(cached) = CACHED.lock().unwrap().clone() {
+        // Only non-empty results are cached (see CACHED): re-detect empty
+        // ones so a driver installed later is picked up without a restart.
+        if cached.available {
+            return Ok(cached);
+        }
     }
     let info = detect(env).ok_or_else(|| AppError("找不到 ffmpeg，无法检测 GPU 支持".into()))?;
-    let _ = CACHED.set(info.clone());
+    if info.available {
+        *CACHED.lock().unwrap() = Some(info.clone());
+    }
     Ok(info)
 }
 

@@ -55,13 +55,6 @@ fn strip_extension_only_strips_short_extensions() {
 }
 
 #[test]
-fn ascii_fallback_keeps_ascii_uses_upload_for_cjk() {
-    assert_eq!(ascii_fallback_name("clip.mp4"), "clip.mp4");
-    assert_eq!(ascii_fallback_name("视频.mp4"), "upload.mp4");
-    assert_eq!(ascii_fallback_name("视频"), "upload.bin");
-}
-
-#[test]
 fn target_config_validates_required_fields() {
     let mut t = webdav_target("127.0.0.1:1".parse().unwrap());
     assert!(t.validate().is_ok());
@@ -398,7 +391,7 @@ fn webdav_upload_creates_parents_and_streams_body() {
     .expect("upload should succeed");
 
     assert_eq!(
-        outcome.0.as_deref(),
+        outcome.as_deref(),
         Some(format!("http://{addr}/media/%E5%86%92%E7%83%9F%E6%B5%8B%E8%AF%95.bin").as_str())
     );
 

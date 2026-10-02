@@ -67,38 +67,53 @@ pub fn resolve(env: &dyn AppEnv, base: &str) -> Option<PathBuf> {
         }
     }
 
-    if let Some(found) = find_in_path(&name) {
-        return Some(found);
-    }
-
-    // Last resort: let the OS resolve the bare name. (On Windows this search
-    // also covers the current working directory — find_in_path above already
-    // checked the real PATH dirs, so this only fires when nothing else worked.)
-    let mut probe = Command::new(&name);
-    probe
-        .arg("-version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    hide_console(&mut probe);
-    if probe.status().map(|s| s.success()).unwrap_or(false) {
-        return Some(PathBuf::from(&name));
+    // Walk the PATH manually — CreateProcess would also search the current
+    // working directory for a bare name, a hijack vector when the app is
+    // launched from a downloaded folder. Each candidate is verified with a
+    // `-version` probe via its absolute path, so only a working binary wins.
+    for cand in find_in_path_all(&name) {
+        let mut probe = Command::new(&cand);
+        probe
+            .arg("-version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        hide_console(&mut probe);
+        if probe.status().map(|s| s.success()).unwrap_or(false) {
+            return Some(cand);
+        }
     }
 
     None
 }
 
-/// Walk the PATH environment explicitly instead of letting CreateProcess
-/// resolve a bare executable name (which also searches the current working
-/// directory first — a hijack vector when launched from a downloaded folder).
+/// First PATH hit for `name`, unprobed (streamlink resolves its own engine
+/// this way and verifies it with `--version` itself).
 pub(crate) fn find_in_path(name: &str) -> Option<PathBuf> {
-    let dirs = std::env::var_os("PATH")?;
+    find_in_path_all(name).into_iter().next()
+}
+
+/// Every existing `name` along the PATH environment, best first. On Windows a
+/// bare base name also gets its `.exe` spelling checked, mirroring how the
+/// loader would resolve it.
+pub(crate) fn find_in_path_all(name: &str) -> Vec<PathBuf> {
+    let Some(dirs) = std::env::var_os("PATH") else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
     for dir in std::env::split_paths(&dirs) {
         let cand = dir.join(name);
         if cand.is_file() {
-            return Some(cand);
+            found.push(cand);
+        }
+        #[cfg(windows)]
+        if !name.contains('.') {
+            let exe = dir.join(format!("{name}.exe"));
+            if exe.is_file() {
+                found.push(exe);
+            }
         }
     }
-    None
+    found
 }
 
 /// Spawn a process, returning the child handle, its stdout pipe, a shared
@@ -124,6 +139,8 @@ pub fn spawn(
 
     let mut cmd = Command::new(&bin);
     cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    // Own process group on Unix, so cancel can signal the whole tree.
+    crate::state::process_group(&mut cmd);
     hide_console(&mut cmd);
 
     let mut child = cmd.spawn().map_err(AppError::from)?;

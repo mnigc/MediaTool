@@ -7,10 +7,16 @@ description = "Pure media-processing engine shared by the desktop app and the he
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", default-features = true, features = ["stream", "json", "socks", "blocking"] }
+# "multipart" streams Telegram Bot API uploads off the disk (see
+# upload::tg_send_file) instead of buffering whole files in memory.
+reqwest = { version = "0.12", default-features = true, features = ["stream", "json", "socks", "blocking", "multipart"] }
 tokio = { version = "1", features = ["rt", "fs", "io-util", "time", "macros"] }
 bytes = "1"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 base64 = "0.22"
 sha2 = "0.10"
 rand = "0.8"
+
+# Unix process-tree kills (kill(-pid, SIGKILL)); see state::kill_tree.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

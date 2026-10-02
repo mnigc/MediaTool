@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::io;
 use std::process::Child;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::models::WorkflowStepInput;
 
@@ -35,8 +36,30 @@ pub fn kill_tree(child: &mut Child) -> io::Result<()> {
     }
     #[cfg(not(windows))]
     {
+        // Spawn sites in this crate put children in their own process group
+        // (see `process_group`), so a negative pid signals the whole tree.
+        // The pid stays reserved by the unreaped Child, so it cannot be
+        // mistaken for an unrelated group. Engines spawned elsewhere (e.g.
+        // yt-dlp's own spawn path) have no such group: kill() then fails and
+        // we fall back to the direct child.
+        let pid = child.id() as i32;
+        if pid > 0 && unsafe { libc::kill(-pid, libc::SIGKILL) } == 0 {
+            return Ok(());
+        }
         child.kill()
     }
+}
+
+/// Put a child into its own process group so `kill_tree` can signal the whole
+/// tree on Unix (Windows gets the equivalent for free via `taskkill /T`).
+pub(crate) fn process_group(cmd: &mut std::process::Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    #[cfg(not(unix))]
+    let _ = cmd;
 }
 
 /// What an in-flight download/record looks like to a frontend that missed the
@@ -53,13 +76,25 @@ pub struct ActiveDlInfo {
     pub upload_to: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+struct Peer {
+    child: Arc<Mutex<Child>>,
+    /// How long to wait after the main child dies before killing this peer:
+    /// the writer must close the pipe first so the muxer can finalize its
+    /// output file. streamlink's ffmpeg muxer needs seconds, not milliseconds.
+    grace: Duration,
+}
+
+/// Grace used when none was registered explicitly.
+const DEFAULT_PEER_GRACE: Duration = Duration::from_millis(400);
+
 #[derive(Default)]
 pub struct JobManager {
     pub children: Mutex<HashMap<String, Arc<Mutex<Child>>>>,
     /// Extra children owned by the same job (e.g. the ffmpeg muxer behind a
     /// streamlink pipe). Killed only after the main child, so the writer side
     /// closes the pipe first and the muxer can finalize the output file.
-    attached: Mutex<HashMap<String, Vec<Arc<Mutex<Child>>>>>,
+    attached: Mutex<HashMap<String, Vec<Peer>>>,
     pub cancelled: Mutex<HashMap<String, bool>>,
     active_dls: Mutex<HashMap<String, ActiveDlInfo>>,
 }
@@ -75,15 +110,20 @@ impl JobManager {
 
     /// Register extra children that share the job's lifecycle (pipe peers).
     pub fn attach(&self, id: &str, child: Arc<Mutex<Child>>) {
+        self.attach_with_grace(id, child, DEFAULT_PEER_GRACE);
+    }
+
+    /// Like `attach`, with an explicit grace before the peer is killed.
+    pub fn attach_with_grace(&self, id: &str, child: Arc<Mutex<Child>>, grace: Duration) {
         self.attached
             .lock()
             .unwrap()
             .entry(id.to_string())
             .or_default()
-            .push(child);
+            .push(Peer { child, grace });
     }
 
-    fn attached_of(&self, id: &str) -> Vec<Arc<Mutex<Child>>> {
+    fn attached_of(&self, id: &str) -> Vec<Peer> {
         self.attached
             .lock()
             .unwrap()
@@ -106,8 +146,8 @@ impl JobManager {
     }
 
     /// Kill the child process (and any pipe peers) if running. Best-effort.
-    /// Peers are killed after a short grace period so the main child closes
-    /// its output pipe first and the muxer can finalize the file.
+    /// Peers are killed after their registered grace period so the main child
+    /// closes its output pipe first and the muxer can finalize the file.
     pub fn kill(&self, id: &str) {
         if let Some(child) = self.children.lock().unwrap().get(id) {
             // A silently-failed kill strands the process with no card to
@@ -119,35 +159,38 @@ impl JobManager {
         let peers = self.attached_of(id);
         if !peers.is_empty() {
             let id = id.to_string();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(400));
-                for c in peers {
-                    if let Err(e) = kill_tree(&mut c.lock().unwrap()) {
-                        eprintln!("kill attached job {id}: {e}");
-                    }
-                }
-            });
+            std::thread::spawn(move || kill_peers_after_grace(peers, &id));
         }
     }
 
     /// Kill every live child. Called on app exit so closing the window doesn't
     /// leave orphan ffmpeg processes burning CPU and writing partial outputs.
+    /// Waits out each peer's grace inline: the process is going away, so this
+    /// is the last chance for the muxer to finalize its file.
     pub fn kill_all(&self) {
         for child in self.children.lock().unwrap().values() {
             let _ = kill_tree(&mut child.lock().unwrap());
         }
-        for peers in self.attached.lock().unwrap().values() {
-            for child in peers {
-                let _ = kill_tree(&mut child.lock().unwrap());
-            }
+        for (id, peers) in self.attached.lock().unwrap().drain() {
+            kill_peers_after_grace(peers, &id);
         }
     }
 
     pub fn finish(&self, id: &str) {
         self.children.lock().unwrap().remove(id);
         self.attached.lock().unwrap().remove(id);
-        self.cancelled.lock().unwrap().remove(id);
         self.active_dls.lock().unwrap().remove(id);
+        // The cancelled latch intentionally survives finish(): a multi-run job
+        // calls finish() between runs, and clearing here would erase a cancel
+        // that lands in the gap, letting the remaining runs execute. Runs
+        // reset the latch via `begin` at start instead.
+    }
+
+    /// Reset the cancel latch for `id` at the start of a run. Callers must
+    /// invoke this before the id is observable by the frontend — a cancel
+    /// arriving after this point has to stay latched for the whole task.
+    pub fn begin(&self, id: &str) {
+        self.cancelled.lock().unwrap().remove(id);
     }
 
     pub fn track_dl(&self, id: &str, info: ActiveDlInfo) {
@@ -172,5 +215,16 @@ impl JobManager {
     /// in the frontend's task center and simply never start on exit.
     pub fn active_job_count(&self) -> usize {
         self.children.lock().unwrap().len()
+    }
+}
+
+/// Kill each pipe peer once its own grace has elapsed, so a muxer gets the
+/// time it needs to finalize before being torn down.
+fn kill_peers_after_grace(peers: Vec<Peer>, id: &str) {
+    for p in peers {
+        std::thread::sleep(p.grace);
+        if let Err(e) = kill_tree(&mut p.child.lock().unwrap()) {
+            eprintln!("kill attached job {id}: {e}");
+        }
     }
 }

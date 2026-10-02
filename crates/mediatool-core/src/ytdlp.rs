@@ -10,7 +10,7 @@
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -19,6 +19,24 @@ use serde::{Deserialize, Serialize};
 use crate::ctx::{emit, AppEnv, Ctx, Emitter};
 use crate::error::{AppError, Result};
 use crate::models::{StartJobResult, WorkflowStepInput};
+
+/// Fresh job/monitor id: `nanos` alone can collide when two jobs start within
+/// one clock tick, so — like jobs.rs `uuid` — pid + a monotonic counter make
+/// the id unique.
+static ID_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn fresh_id(prefix: &str) -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!(
+        "{prefix}-{:x}-{}-{}",
+        nanos,
+        std::process::id(),
+        ID_SEQ.fetch_add(1, Ordering::Relaxed)
+    )
+}
 
 /* ── Binary management ──────────────────────────────────────────── */
 
@@ -285,7 +303,15 @@ pub async fn ytdlp_install(ctx: Ctx) -> Result<YtdlpStatus> {
         )));
     }
 
-    std::fs::rename(&tmp, &target)?;
+    // Replacing a running exe is what fails here on Windows: a recording is
+    // still holding the old binary. Clean up the download so it doesn't rot,
+    // and tell the user what to do instead of surfacing a bare io error.
+    if let Err(e) = std::fs::rename(&tmp, &target) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(AppError(format!(
+            "yt-dlp 更新失败（{e}）：旧版本可能正在使用中，请先停止录制后再更新"
+        )));
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -329,6 +355,18 @@ pub struct NetOptions {
     pub proxy: Option<String>,
 }
 
+/// Cookies are live-session credentials: keep every file that carries them
+/// (materialised cookie files and platform_cookies.json, which stores the
+/// pasted text verbatim) readable only by the owner. No-op on Windows.
+#[cfg(unix)]
+fn restrict_permissions(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(not(unix))]
+fn restrict_permissions(_path: &Path) {}
+
 /// The cookie file to hand to `--cookies` / `--cookie-file`: an explicit path
 /// wins over pasted text, which is materialised into the app data dir.
 /// A missing app dir produces no path.
@@ -356,6 +394,7 @@ pub(crate) fn cookies_path(env: &dyn AppEnv, opts: &NetOptions) -> Option<String
     let path = dir.join("pasted.txt");
     if std::fs::read_to_string(&path).ok().as_deref() != Some(text) {
         std::fs::write(&path, text).ok()?;
+        restrict_permissions(&path);
     }
     Some(path.to_string_lossy().into_owned())
 }
@@ -392,8 +431,11 @@ fn write_platform_cookies(env: &dyn AppEnv, list: &[PlatformCookies]) -> Result<
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(AppError::from)?;
     }
-    std::fs::write(path, serde_json::to_string_pretty(list).map_err(AppError::from)?)
-        .map_err(AppError::from)
+    std::fs::write(&path, serde_json::to_string_pretty(list).map_err(AppError::from)?)
+        .map_err(AppError::from)?;
+    // The file embeds the pasted cookie text, so it is a credential too.
+    restrict_permissions(&path);
+    Ok(())
 }
 
 /// The host a room URL belongs to, lower-cased with the scheme, `www.` and
@@ -461,6 +503,7 @@ pub fn cookies_set(env: &dyn AppEnv, entry: PlatformCookies) -> Result<PlatformC
             let path = dir.join(format!("{}.txt", cookie_file_slug(&host)));
             if std::fs::read_to_string(&path).ok().as_deref() != Some(t.as_str()) {
                 std::fs::write(&path, t).map_err(AppError::from)?;
+                restrict_permissions(&path);
             }
             stored_file = Some(path.to_string_lossy().into_owned());
         }
@@ -852,6 +895,10 @@ fn spawn_process(
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000);
     }
+    // Own process group on Unix so kill_tree's negative-pid signal reaches the
+    // whole tree (the PyInstaller bootloader plus the real downloader);
+    // Windows takes the tree down via taskkill /T regardless.
+    crate::state::process_group(&mut cmd);
     let mut child = cmd.spawn().map_err(AppError::from)?;
     let stdout = child
         .stdout
@@ -945,6 +992,10 @@ pub fn run_download_blocking(
 ) {
     let kind = req.kind.clone().unwrap_or_else(|| "download".into());
     let is_record = kind == "record";
+    // Reset the cancel latch before the id becomes observable below (track_dl
+    // makes the card adoptable after a reload). Kept symmetric with the
+    // jobs.rs run entry; it is a cheap map removal.
+    ctx.jobs.begin(id);
     // Registered for the whole life of the job so a frontend reload can
     // re-adopt the running card (see `dl_active_tasks`).
     ctx.jobs.track_dl(
@@ -1226,8 +1277,10 @@ pub(crate) fn newest_media_file(dir: &Path, since: Instant) -> Option<String> {
         if p.to_string_lossy().ends_with(".part") {
             continue;
         }
-        let meta = e.metadata().ok()?;
-        let modified = meta.modified().ok()?;
+        // One unreadable entry (vanished file, raced metadata) must not abort
+        // the whole scan with `?` — skip it and keep looking.
+        let Ok(meta) = e.metadata() else { continue };
+        let Ok(modified) = meta.modified() else { continue };
         // Only files written during this run count.
         if modified < started_threshold(since) {
             continue;
@@ -1306,14 +1359,7 @@ pub async fn ytdlp_start_download(ctx: Ctx, request: DownloadRequest) -> Result<
     if req_output_dir_missing(&request) {
         std::fs::create_dir_all(&request.output_dir)?;
     }
-    let id = format!(
-        "dl-{:x}-{}",
-        std::time::SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0),
-        std::process::id()
-    );
+    let id = fresh_id("dl");
     let ctx2 = ctx.clone();
     let id2 = id.clone();
     std::thread::spawn(move || {
@@ -1557,13 +1603,7 @@ fn validate_live_url(url: &str) -> Result<()> {
 pub fn monitor_add(ctx: Ctx, request: MonitorRequest) -> Result<MonitorInfo> {
     let bin = resolve(&*ctx.env).ok_or_else(|| AppError("尚未安装 yt-dlp".into()))?;
     validate_live_url(&request.url)?;
-    let id = format!(
-        "mon-{:x}",
-        std::time::SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    );
+    let id = fresh_id("mon");
     let info = MonitorInfo::from_request(&id, &request);
     let handle = spawn_monitor(ctx.clone(), bin, info.clone());
     ctx.monitors.monitors.lock().unwrap().insert(id, handle);
@@ -1597,7 +1637,6 @@ fn monitor_loop(
     stop: Arc<AtomicBool>,
     record_now: Arc<AtomicBool>,
 ) {
-    let opts = |i: &MonitorInfo| monitor_net(&*ctx.env, i);
     loop {
         if stop.load(Ordering::Relaxed) {
             break;
@@ -1617,8 +1656,12 @@ fn monitor_loop(
         let mut auto_recording = false;
         if !want_now {
             let (url, net, auto) = {
-                let i = info.lock().unwrap();
-                (i.url.clone(), opts(&i), i.auto_record)
+                // Clone the cheap config under the lock, then release it:
+                // monitor_net reads platform_cookies.json from disk, and
+                // every other monitor operation queues behind this mutex —
+                // file I/O must not run while we hold it.
+                let i = info.lock().unwrap().clone();
+                (i.url.clone(), monitor_net(&*ctx.env, &i), i.auto_record)
             };
             // Probe with the capture engine first: recording always goes to
             // streamlink when it's installed, so its answer is the one that
@@ -1686,8 +1729,10 @@ fn monitor_loop(
             // the base output dir instead of the per-author folder.
             if info.lock().unwrap().author.is_none() {
                 let (url, net) = {
-                    let i = info.lock().unwrap();
-                    (i.url.clone(), opts(&i))
+                    // Same discipline as the probe above: clone under the
+                    // lock, hit the disk with it released.
+                    let i = info.lock().unwrap().clone();
+                    (i.url.clone(), monitor_net(&*ctx.env, &i))
                 };
                 let cookies = cookies_path(&*ctx.env, &net);
                 if let Ok((_, _, author)) = crate::streamlink::probe_live(
@@ -1755,7 +1800,9 @@ fn record_subdir(author: Option<&str>, name: &str, url: &str) -> Option<String> 
 /// running for the next stream (true) or stops after this recording (false).
 fn record_once(ctx: &Ctx, bin: &Path, info: &Arc<Mutex<MonitorInfo>>) {
     let (req, pipeline, upload_to, auto) = {
-        let i = info.lock().unwrap();
+        // Clone the cheap config under the lock; monitor_net reads
+        // platform_cookies.json from disk and must not hold the mutex.
+        let i = info.lock().unwrap().clone();
         let net = monitor_net(&*ctx.env, &i);
         let output_dir = room_dir(&i);
         (
@@ -1783,14 +1830,7 @@ fn record_once(ctx: &Ctx, bin: &Path, info: &Arc<Mutex<MonitorInfo>>) {
             i.auto_record,
         )
     };
-    let id = format!(
-        "dl-{:x}-{}",
-        std::time::SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0),
-        std::process::id()
-    );
+    let id = fresh_id("dl");
     {
         let mut i = info.lock().unwrap();
         i.status = "recording".into();
@@ -1990,6 +2030,57 @@ mod tests {
         assert!(validate_live_url("https://live.bilibili.com/123").is_ok());
         assert!(validate_live_url("https://www.twitch.tv/x").is_ok());
         assert!(validate_live_url("https://www.douyin.com/video/123").is_ok());
+    }
+
+    #[test]
+    fn dest_tracker_follows_destination_switches() {
+        let mut t = DestTracker(None);
+        // A fresh [download] Destination sets the target…
+        t.observe("[download] Destination: /dl/video.f137.mp4");
+        assert_eq!(t.0.as_deref(), Some("/dl/video.f137.mp4"));
+        // …and progress noise must not move it.
+        t.observe("PROG|1024|2048|NA|NA|NA");
+        assert_eq!(t.0.as_deref(), Some("/dl/video.f137.mp4"));
+        // The merge names the file users actually keep.
+        t.observe("[Merger] Merging formats into \"/dl/video.mp4\"");
+        assert_eq!(t.0.as_deref(), Some("/dl/video.mp4"));
+    }
+
+    #[test]
+    fn dest_tracker_tracks_remux_and_extract_audio() {
+        let mut t = DestTracker(None);
+        t.observe("[VideoRemuxer] Remuxing video from /dl/a.ts to /dl/a.mp4");
+        assert_eq!(t.0.as_deref(), Some("/dl/a.mp4"));
+        t.observe("[ExtractAudio] Destination: /dl/a.mp3");
+        assert_eq!(t.0.as_deref(), Some("/dl/a.mp3"));
+    }
+
+    #[test]
+    fn dest_tracker_resolves_already_downloaded_files() {
+        let mut t = DestTracker(None);
+        // A re-download of an existing file still has to produce a real path
+        // for the done event (and any bound pipeline).
+        t.observe("[download] /videos/clip.mp4 has already been downloaded");
+        assert_eq!(t.0.as_deref(), Some("/videos/clip.mp4"));
+    }
+
+    #[test]
+    fn parse_progress_line_reads_machine_fields() {
+        assert_eq!(
+            parse_progress_line("PROG|1024|2048|150.5|12|30"),
+            Some((Some(1024), Some(2048), Some(12), Some(30)))
+        );
+        // Unknown fields arrive as "NA"; total falls back to the estimate.
+        assert_eq!(
+            parse_progress_line("PROG|NA|NA|2048|NA|NA"),
+            Some((None, Some(2048), None, None))
+        );
+        assert_eq!(
+            parse_progress_line("PROG|NA|NA|NA|NA|NA"),
+            Some((None, None, None, None))
+        );
+        // Plain yt-dlp output is not machine progress.
+        assert_eq!(parse_progress_line("[download]  10.0% of 1.00MiB"), None);
     }
 
     #[test]

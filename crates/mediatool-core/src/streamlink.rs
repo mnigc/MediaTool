@@ -33,6 +33,9 @@ use crate::ytdlp::{
 const POLL: Duration = Duration::from_secs(2);
 /// Time given to ffmpeg to finish the file after the writer is killed.
 const MUXER_GRACE: Duration = Duration::from_secs(10);
+/// Hard deadline for a live-status probe: `--json` resolves plugins over the
+/// network, and a hanging site must not freeze the monitor thread forever.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /* ── Binary management ──────────────────────────────────────────── */
 
@@ -571,19 +574,55 @@ pub fn probe_live(
         .stderr(Stdio::null())
         .env("PYTHONIOENCODING", "utf-8")
         .env("PYTHONUTF8", "1");
+    crate::state::process_group(&mut cmd);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000);
     }
-    let out = cmd
-        .output()
+    let mut child = cmd
+        .spawn()
         .map_err(|e| format!("启动 streamlink 失败: {e}"))?;
-    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // `output()` has no timeout: a network that never answers would block the
+    // monitor thread forever. Drain stdout on a helper thread and poll for
+    // exit with a hard deadline instead.
+    let stdout_pipe = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut s) = stdout_pipe {
+            let _ = s.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if Instant::now() >= deadline => break None,
+            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+            // Practically unreachable; kill anyway so nothing leaks.
+            Err(_) => {
+                let _ = crate::state::kill_tree(&mut child);
+                return Err("streamlink 探测进程状态读取失败".into());
+            }
+        }
+    };
+    let Some(status) = status else {
+        // Take the whole tree down; the reader unblocks once the killed
+        // process closes the pipe.
+        let _ = crate::state::kill_tree(&mut child);
+        let _ = reader.join();
+        return Err(format!(
+            "streamlink 探测超时（{} 秒）",
+            PROBE_TIMEOUT.as_secs()
+        ));
+    };
+    let raw = reader.join().unwrap_or_default();
+    let stdout = String::from_utf8_lossy(&raw).trim().to_string();
     let json: serde_json::Value = serde_json::from_str(&stdout).map_err(|_| {
         format!(
             "streamlink 探测输出无法解析（退出码 {}）",
-            out.status.code().unwrap_or(-1)
+            status.code().unwrap_or(-1)
         )
     })?;
     if let Some(err) = json["error"].as_str() {
@@ -754,6 +793,9 @@ impl Session {
             sl.creation_flags(0x0800_0000);
             ff.creation_flags(0x0800_0000);
         }
+        // Own process groups on Unix so cancel can take the tree down.
+        crate::state::process_group(&mut sl);
+        crate::state::process_group(&mut ff);
 
         let mut sl_child = sl.spawn().map_err(AppError::from)?;
         let writer_log = capture_stderr(sl_child.stderr.take());
@@ -762,7 +804,15 @@ impl Session {
             return Err(AppError("无法建立 streamlink → ffmpeg 管道".into()));
         };
         ff.stdin(Stdio::from(pipe));
-        let mut ff_child = ff.spawn().map_err(AppError::from)?;
+        let mut ff_child = match ff.spawn() {
+            Ok(c) => c,
+            // Without the muxer the pipe has no reader: a live stream would
+            // keep flowing into a full pipe forever. Kill the writer.
+            Err(e) => {
+                let _ = crate::state::kill_tree(&mut sl_child);
+                return Err(AppError::from(e));
+            }
+        };
         let muxer_log = capture_stderr(ff_child.stderr.take());
         Ok(Session {
             writer: Arc::new(Mutex::new(sl_child)),
@@ -892,7 +942,9 @@ pub fn run_record_blocking(
     let Session { writer, muxer, .. } = &session;
     let manager = ctx.jobs.clone();
     manager.register(id, writer.clone());
-    manager.attach(id, muxer.clone());
+    // The muxer needs seconds, not milliseconds, to finalize the file after
+    // the writer dies — give kill()/kill_all() the same grace wait_muxer uses.
+    manager.attach_with_grace(id, muxer.clone(), MUXER_GRACE);
     // A cancel between spawn and register would have missed the child.
     if manager.is_cancelled(id) {
         session.kill_writer();
@@ -1064,18 +1116,45 @@ fn unique_record_path(dir: &Path, req: &DownloadRequest) -> PathBuf {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0),
     );
-    let mut out = dir.join(format!("{title} [{stamp}].mkv"));
+    let base = dir.join(format!("{title} [{stamp}].mkv"));
     // Two monitors going live in the same second would otherwise collide.
-    for n in 1.. {
-        if !out.exists() {
-            return out;
+    // create_new(true) doubles as the atomic occupancy probe, so the winner
+    // of a race is unambiguous; the placeholder is removed immediately after
+    // and the tiny window before ffmpeg reopens the path with -y is accepted.
+    for n in 0..10_000_u32 {
+        let candidate = if n == 0 {
+            base.clone()
+        } else {
+            dir.join(format!("{title} [{stamp}] ({n}).mkv"))
+        };
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(f) => {
+                drop(f);
+                let _ = std::fs::remove_file(&candidate);
+                return candidate;
+            }
+            // Name taken — try the next suffix.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            // Unwritable dir or similar: hand the path back and let the
+            // spawn surface the real error.
+            Err(_) => return candidate,
         }
-        out = dir.join(format!("{title} [{stamp}] ({n}).mkv"));
     }
-    unreachable!()
+    // 10k suffixes exhausted (absurd in practice): return the base name
+    // instead of panicking.
+    base
 }
 
-/// Unix seconds → UTC `YYYYMMDDHHMMSS`, without pulling in a date crate.
+/// Unix seconds → **UTC** `YYYYMMDDHHMMSS`, without pulling in a date crate.
+///
+/// The stamp is deliberately UTC, not local time: this crate has no timezone
+/// database, and rendering local time would need chrono as a new dependency.
+/// Recorded filenames can therefore appear shifted relative to the wall
+/// clock; switching to local naming is left for a later change.
 fn epoch_to_civil(secs: i64) -> String {
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);
@@ -1099,5 +1178,62 @@ fn format_secs(secs: f64) -> String {
         format!("{}:{:02}:{:02}", s / 3600, s % 3600 / 60, s % 60)
     } else {
         format!("{}:{:02}", s / 60, s % 60)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_selection_best_and_audio() {
+        // best/default: no sort exclusions, take best.
+        assert_eq!(
+            stream_selection(""),
+            (Vec::<String>::new(), "best".to_string())
+        );
+        assert_eq!(
+            stream_selection("best"),
+            (Vec::<String>::new(), "best".to_string())
+        );
+        // Live capture has no audio-only mode: degrade to the worst stream
+        // (still audible) instead of failing.
+        assert_eq!(
+            stream_selection("audio"),
+            (Vec::<String>::new(), "worst".to_string())
+        );
+    }
+
+    #[test]
+    fn stream_selection_resolution_cap_excludes_better() {
+        // A capped request sorts out anything above 720p but still takes best.
+        let (args, name) = stream_selection("720p");
+        assert_eq!(name, "best");
+        assert_eq!(
+            args,
+            vec![
+                "--stream-sorting-excludes".to_string(),
+                ">720p".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn stream_selection_unknown_name_passes_through() {
+        let (args, name) = stream_selection("480p30");
+        assert!(args.is_empty());
+        assert_eq!(name, "480p30");
+    }
+
+    #[test]
+    fn epoch_to_civil_known_instants() {
+        // The epoch itself.
+        assert_eq!(epoch_to_civil(0), "19700101000000");
+        // 1e9 seconds: 2001-09-09T01:46:40Z.
+        assert_eq!(epoch_to_civil(1_000_000_000), "20010909014640");
+        // Leap-year day: 2024-02-29T12:00:00Z.
+        assert_eq!(epoch_to_civil(1_709_208_000), "20240229120000");
+        // Last second before a year boundary rolls over correctly.
+        assert_eq!(epoch_to_civil(1_704_067_199), "20231231235959");
     }
 }

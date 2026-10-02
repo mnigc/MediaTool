@@ -12,6 +12,7 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use crate::ctx::AppEnv;
+use crate::error::{AppError, Result};
 
 /// Every scratch file the app writes into the OS temp dir starts with this
 /// prefix (thumbnail frames, size estimates, …). Only that prefix is removed,
@@ -48,20 +49,35 @@ pub struct CacheCleanResult {
     pub failed: u64,
 }
 
+/// Trees deeper than this are treated as a loop and skipped: temp scratch
+/// trees are flat by construction, so 32 levels is generous headroom.
+const MAX_WALK_DEPTH: usize = 32;
+
 /// `(total bytes, file count)` of one entry, walking into directories.
+///
+/// `symlink_metadata` never follows symlinks, so a link pointing back up the
+/// tree can neither loop forever nor double-count its target; the depth cap
+/// is the second belt against pathological layouts.
 fn walk_size(path: &Path) -> (u64, u64) {
-    let meta = match fs::metadata(path) {
+    walk_size_at(path, 0)
+}
+
+fn walk_size_at(path: &Path, depth: usize) -> (u64, u64) {
+    let meta = match fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(_) => return (0, 0),
     };
     if !meta.is_dir() {
         return (meta.len(), 1);
     }
+    if depth >= MAX_WALK_DEPTH {
+        return (0, 0);
+    }
     let mut size = 0u64;
     let mut count = 0u64;
     if let Ok(rd) = fs::read_dir(path) {
         for entry in rd.flatten() {
-            let (s, c) = walk_size(entry.path().as_path());
+            let (s, c) = walk_size_at(entry.path().as_path(), depth + 1);
             size = size.saturating_add(s);
             count = count.saturating_add(c);
         }
@@ -179,9 +195,9 @@ pub fn cache_report(env: &dyn AppEnv) -> CacheReport {
 
 /// Delete every removable entry. Runs off the main thread: the scan plus the
 /// recursive removals can mean thousands of filesystem calls.
-pub async fn cache_clean(env: Arc<dyn AppEnv>) -> CacheCleanResult {
+pub async fn cache_clean(env: Arc<dyn AppEnv>) -> Result<CacheCleanResult> {
     let bin_dir = managed_bin_dir(&*env);
-    let result = tokio::task::spawn_blocking(move || {
+    let (freed_bytes, removed, failed) = tokio::task::spawn_blocking(move || {
         let bin_dir = bin_dir;
         let mut targets: Vec<std::path::PathBuf> = temp_entries();
         if let Some(dir) = &bin_dir {
@@ -207,13 +223,14 @@ pub async fn cache_clean(env: Arc<dyn AppEnv>) -> CacheCleanResult {
         }
         (freed_bytes, removed, failed)
     })
+    // A JoinError means the worker panicked or the runtime is shutting down:
+    // surface it instead of reporting a cleanup that never happened.
     .await
-    .unwrap_or((0, 0, 0));
+    .map_err(|e| AppError(format!("缓存清理失败：{e}")))?;
 
-    let (freed_bytes, removed, failed) = result;
-    CacheCleanResult {
+    Ok(CacheCleanResult {
         freed_bytes,
         removed,
         failed,
-    }
+    })
 }

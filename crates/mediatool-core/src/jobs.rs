@@ -212,8 +212,36 @@ fn gpu_plan(video_codec: &str, gpu: &Option<String>) -> (String, Option<String>)
 /// used by hardware encoders that lack a CRF-style constant-quality mode.
 fn crf_to_bitrate(crf: u32) -> u32 {
     let c = crf.clamp(18, 40) as i32;
+    // 9000 / 230 / 300 are an empirical fit, not a model: CRF 18 ≈ 9 Mbps,
+    // minus 230 kbps per CRF step, floored at the encoder's 300 kbps minimum.
+    // Chosen so the hardware output lands near its x264 counterpart.
     let b = 9000 - (c - 18) * 230;
     (b.max(300)) as u32
+}
+
+/// VAAPI encodes through a DRM render node that only exists on Linux with a
+/// loaded GPU driver. Gating on its presence keeps a VAAPI request from
+/// reaching ffmpeg with a device path it cannot open (non-Linux platforms or
+/// a driverless Linux box would only die with a cryptic muxer error later).
+fn vaapi_render_node() -> Option<&'static str> {
+    const NODE: &str = "/dev/dri/renderD128";
+    if cfg!(target_os = "linux") && Path::new(NODE).exists() {
+        Some(NODE)
+    } else {
+        None
+    }
+}
+
+/// Refuse a VAAPI request early, with an actionable message, when no render
+/// node is available. The companion guard for `vaapi_render_node()` — the
+/// arg builders themselves stay infallible and simply skip the device flag.
+fn ensure_vaapi_device(p: &VideoParams) -> Result<()> {
+    if gpu_plan(&p.video_codec, &p.gpu).0.ends_with("_vaapi") && vaapi_render_node().is_none() {
+        return Err(AppError(
+            "VAAPI 硬件加速需要 Linux 且存在渲染节点 /dev/dri/renderD128：请检查显卡驱动，或改用 CPU 编码器／其他硬件后端".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) -> Vec<String> {
@@ -235,8 +263,12 @@ fn build_video_args(info: &MediaInfo, p: &VideoParams, out: &Path) -> Vec<String
     }
 
     if is_vaapi {
-        a.push("-vaapi_device".into());
-        a.push("/dev/dri/renderD128".into());
+        // Callers gate on ensure_vaapi_device; skip the flag here so the
+        // builder stays infallible on hosts without a render node.
+        if let Some(node) = vaapi_render_node() {
+            a.push("-vaapi_device".into());
+            a.push(node.into());
+        }
     }
 
     a.push("-i".into());
@@ -1352,8 +1384,12 @@ fn plan_roughcut_encode(
 
     let mut input_args: Vec<String> = Vec::new();
     if vaapi {
-        input_args.push("-vaapi_device".into());
-        input_args.push("/dev/dri/renderD128".into());
+        // Same guard as build_video_args: the caller (prepare_job) has
+        // already validated the render node via ensure_vaapi_device.
+        if let Some(node) = vaapi_render_node() {
+            input_args.push("-vaapi_device".into());
+            input_args.push(node.into());
+        }
     }
     let mut fc = String::new();
     let mut input_idx = 0usize;
@@ -2039,6 +2075,26 @@ fn prepare_job(
     match tool_dispatch(&req.tool_id) {
         "compress" | "convert" => {
             let ext = extension_for(&req.tool_id, info, &req.params);
+            // Parse and validate BEFORE reserving the output placeholder: an
+            // early error must not leave a 0-byte stub that the next
+            // rename/skip resolution would mistake for a real output.
+            enum Src {
+                Video(VideoParams),
+                Audio(AudioParams),
+            }
+            let src = match info.media_type {
+                MediaType::Video => {
+                    let mut p: VideoParams = parse_params(&req.params)?;
+                    p.gpu = req.gpu.clone();
+                    validate_video_container(&ext, &p.video_codec, &p.audio_codec, info)?;
+                    ensure_vaapi_device(&p)?;
+                    Src::Video(p)
+                }
+                MediaType::Audio => Src::Audio(parse_params(&req.params)?),
+                MediaType::Image | MediaType::Unknown => {
+                    return Err(AppError("不支持的媒体类型".into()));
+                }
+            };
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
             let out = match resolve_policy(out, policy) {
                 Ok(p) => p,
@@ -2048,20 +2104,9 @@ fn prepare_job(
                     })
                 }
             };
-            let args = match info.media_type {
-                MediaType::Video => {
-                    let mut p: VideoParams = parse_params(&req.params)?;
-                    p.gpu = req.gpu.clone();
-                    validate_video_container(&ext, &p.video_codec, &p.audio_codec, info)?;
-                    build_video_args(info, &p, &out)
-                }
-                MediaType::Audio => {
-                    let p: AudioParams = parse_params(&req.params)?;
-                    build_audio_args(info, &p, &out)
-                }
-                MediaType::Image | MediaType::Unknown => {
-                    return Err(AppError("不支持的媒体类型".into()));
-                }
+            let args = match src {
+                Src::Video(p) => build_video_args(info, &p, &out),
+                Src::Audio(p) => build_audio_args(info, &p, &out),
             };
             Ok(PreparedJob::Run { args, out })
         }
@@ -2161,7 +2206,7 @@ fn prepare_job(
             })
         }
         "strip-metadata" => {
-            parse_params::<StripMetadataParams>(&req.params)?;
+            let p: StripMetadataParams = parse_params(&req.params)?;
             let fallback = match info.media_type {
                 MediaType::Image => "jpg",
                 MediaType::Audio => "mp3",
@@ -2177,7 +2222,6 @@ fn prepare_job(
                     })
                 }
             };
-            let p: StripMetadataParams = parse_params(&req.params)?;
             Ok(PreparedJob::Run {
                 args: build_strip_metadata_args(info, &p, &out),
                 out,
@@ -2201,6 +2245,7 @@ fn prepare_job(
             let total_dur = info.duration_secs.unwrap_or(0.0);
             let multi = segments.len() > 1;
             let mut runs: Vec<(Vec<String>, PathBuf, f64)> = Vec::with_capacity(segments.len());
+            let mut reserved: Vec<PathBuf> = Vec::new();
             for (i, seg) in segments.iter().enumerate() {
                 let label = if multi {
                     format!("_{}", i + 1)
@@ -2209,11 +2254,20 @@ fn prepare_job(
                 };
                 let out = output_path_labeled(&info.path, &req.output_dir, &ext, &suffix, &label)?;
                 let out = match resolve_policy(out, policy) {
-                    Ok(p) => p,
+                    Ok(p) => {
+                        reserved.push(p.clone());
+                        p
+                    }
                     Err(existing) => {
+                        // A later segment hit the skip policy: roll back the
+                        // placeholders reserved for the earlier segments —
+                        // nothing will ever be written to them.
+                        for r in reserved {
+                            let _ = std::fs::remove_file(r);
+                        }
                         return Ok(PreparedJob::Skipped {
                             existing: Some(existing),
-                        })
+                        });
                     }
                 };
                 let args =
@@ -2235,7 +2289,7 @@ fn prepare_job(
             }
         }
         "mute" => {
-            parse_params::<MuteParams>(&req.params)?;
+            let p: MuteParams = parse_params(&req.params)?;
             let ext = input_ext(info, "mp4");
             let out = output_path(&info.path, &req.output_dir, &ext, suffix)?;
             let out = match resolve_policy(out, policy) {
@@ -2246,7 +2300,6 @@ fn prepare_job(
                     })
                 }
             };
-            let p: MuteParams = parse_params(&req.params)?;
             Ok(PreparedJob::Run {
                 args: build_mute_args(info, &p, &out),
                 out,
@@ -2285,6 +2338,12 @@ fn prepare_job(
             if p.clips.is_empty() {
                 return Err(AppError("粗剪时间线为空：请先添加素材片段".into()));
             }
+            // VAAPI requests need a render node; refuse before any file work.
+            if p.mode == "encode" {
+                if let Some(ep) = &p.encode {
+                    ensure_vaapi_device(ep)?;
+                }
+            }
             let container = if p.container == "mkv" { "mkv" } else { "mp4" };
             // The deliverable is named after the first clip.
             let ext = container.to_string();
@@ -2297,31 +2356,45 @@ fn prepare_job(
                     })
                 }
             };
-            // Every clip is probed: durations clamp the cut windows, and the
-            // audio presence / codecs drive both modes' validation and the
-            // filter graph (silence splicing).
-            let env = env.ok_or_else(|| AppError("内部错误：缺少应用环境".into()))?;
-            let mut clip_infos: Vec<MediaInfo> = Vec::with_capacity(p.clips.len());
-            for c in &p.clips {
-                if c.path.trim().is_empty() {
-                    return Err(AppError("存在未指定源文件的片段".into()));
+            // Everything past the reserve can still fail (missing env, source
+            // probing, window validation, filter planning): roll the reserved
+            // placeholder back on any of those paths so no 0-byte stub is
+            // left behind to poison the next overwrite resolution.
+            let reserved_out = out.clone();
+            let prepared = (|| -> Result<PreparedJob> {
+                // Every clip is probed: durations clamp the cut windows, and
+                // the audio presence / codecs drive both modes' validation
+                // and the filter graph (silence splicing).
+                let env = env.ok_or_else(|| AppError("内部错误：缺少应用环境".into()))?;
+                let mut clip_infos: Vec<MediaInfo> = Vec::with_capacity(p.clips.len());
+                for c in &p.clips {
+                    if c.path.trim().is_empty() {
+                        return Err(AppError("存在未指定源文件的片段".into()));
+                    }
+                    clip_infos.push(crate::media::probe_sync(env, &c.path)?);
                 }
-                clip_infos.push(crate::media::probe_sync(env, &c.path)?);
-            }
-            let windows: Vec<(f64, f64)> = p
-                .clips
-                .iter()
-                .zip(&clip_infos)
-                .map(|(c, inf)| roughcut_window(c, inf))
-                .collect::<Result<_>>()?;
-            if p.mode == "encode" {
-                let plan = plan_roughcut_encode(info, &p.clips, &windows, &clip_infos, &p)?;
-                Ok(PreparedJob::Run {
-                    args: roughcut_encode_args(&plan, info, &p, container, &out),
-                    out,
-                })
-            } else {
-                prepare_roughcut_copy(&p.clips, &windows, &clip_infos, container, out)
+                let windows: Vec<(f64, f64)> = p
+                    .clips
+                    .iter()
+                    .zip(&clip_infos)
+                    .map(|(c, inf)| roughcut_window(c, inf))
+                    .collect::<Result<_>>()?;
+                if p.mode == "encode" {
+                    let plan = plan_roughcut_encode(info, &p.clips, &windows, &clip_infos, &p)?;
+                    Ok(PreparedJob::Run {
+                        args: roughcut_encode_args(&plan, info, &p, container, &out),
+                        out,
+                    })
+                } else {
+                    prepare_roughcut_copy(&p.clips, &windows, &clip_infos, container, out)
+                }
+            })();
+            match prepared {
+                Ok(p) => Ok(p),
+                Err(e) => {
+                    let _ = std::fs::remove_file(&reserved_out);
+                    Err(e)
+                }
             }
         }
         "video-frames" => {
@@ -2439,15 +2512,24 @@ const MERGEABLE_TOOLS: [&str; 7] = [
 ];
 
 /// Precondition for merging. Rejects terminal tools and combinations that
-/// cannot be expressed as a single command (stream-copy trim, >1 watermark).
+/// cannot be expressed as a single command (stream-copy trim, >1 watermark,
+/// >1 trim).
 fn is_mergeable_chain(steps: &[WorkflowStepInput]) -> bool {
     let mut wm = 0usize;
+    let mut trims = 0usize;
     for s in steps {
         let id = norm_tool_id(&s.tool_id);
         if !MERGEABLE_TOOLS.contains(&id) {
             return false;
         }
         if id == "trim" {
+            // merged_chain keeps a single trim window; a second trim step
+            // would silently override the first, so fall back to running the
+            // steps sequentially instead.
+            trims += 1;
+            if trims > 1 {
+                return false;
+            }
             if let Ok(p) = parse_params::<TrimParams>(&s.params) {
                 if p.mode == "copy" {
                     return false;
@@ -2960,6 +3042,10 @@ pub(crate) fn merged_output_ext(info: &MediaInfo, steps: &[WorkflowStepInput]) -
 /// returned so the frontend runs the steps one after another.
 pub async fn start_workflow(ctx: Ctx, req: WorkflowRequest) -> Result<StartWorkflowResult> {
     let id = uuid();
+    // Fresh run: clear any stale cancel latch for this id. The id only becomes
+    // observable to the frontend when this command returns, so no cancel can
+    // be erased here — everything after this point must see a cancel stick.
+    ctx.jobs.begin(&id);
     let input = req.input.clone();
     // An empty chain cannot be merged; let the caller decide how to behave.
     if req.steps.is_empty() {
@@ -3096,13 +3182,27 @@ pub async fn start_workflow(ctx: Ctx, req: WorkflowRequest) -> Result<StartWorkf
         }
 
         let manager = ctx.jobs.clone();
+        // Reap via a poll loop, never a blocking wait(): wait() holds the
+        // child mutex until exit, which deadlocks cancel's kill() (same
+        // pattern as ytdlp.rs). finish() only runs once the process is
+        // confirmed dead, so a cancel can always still find its target.
+        let code = loop {
+            match child.lock().unwrap().try_wait() {
+                Ok(Some(status)) => break status.code().unwrap_or(-1),
+                Ok(None) => {}
+                Err(_) => break -1,
+            }
+            // Re-kill while the cancel flag is set: enforces a cancel whose
+            // first kill failed.
+            if manager.is_cancelled(&task_id) {
+                if let Err(e) = crate::state::kill_tree(&mut child.lock().unwrap()) {
+                    eprintln!("kill job {task_id}: {e}");
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        };
         let was_cancelled = manager.is_cancelled(&task_id);
         manager.finish(&task_id);
-
-        let code = match child.lock().unwrap().wait() {
-            Ok(status) => status.code().unwrap_or(-1),
-            Err(_) => -1,
-        };
 
         if was_cancelled || code != 0 {
             let err = if was_cancelled {
@@ -3175,6 +3275,12 @@ pub async fn start_workflow(ctx: Ctx, req: WorkflowRequest) -> Result<StartWorkf
 /// Start a conversion job. Spawns FFmpeg, streams progress, emits events.
 pub async fn start_job(ctx: Ctx, req: JobRequest) -> Result<StartJobResult> {
     let id = uuid();
+    // Fresh run: clear any stale cancel latch for this id. The id only becomes
+    // observable to the frontend when this command returns, so no cancel can
+    // be erased here — everything after this point must see a cancel stick
+    // (finish() no longer clears it, which is what keeps a multi-run job from
+    // losing a cancel that lands between two runs).
+    ctx.jobs.begin(&id);
     let input = req
         .inputs
         .first()
@@ -3283,6 +3389,20 @@ pub async fn start_job(ctx: Ctx, req: JobRequest) -> Result<StartJobResult> {
                     Err(e) => {
                         ok = false;
                         err_msg = Some(e.to_string());
+                        // Same scratch cleanup as a mid-run failure: the
+                        // reserved 0-byte outputs, the rough-cut segments and
+                        // the final concat target must not linger.
+                        if out.to_string_lossy().contains("%03d") {
+                            cleanup_pattern_outputs(out);
+                        } else {
+                            let _ = std::fs::remove_file(out);
+                        }
+                        for scratch in &cleanup {
+                            let _ = std::fs::remove_file(scratch);
+                        }
+                        if let Some(f) = &final_out {
+                            let _ = std::fs::remove_file(f);
+                        }
                         break 'runs;
                     }
                 };
@@ -3328,15 +3448,29 @@ pub async fn start_job(ctx: Ctx, req: JobRequest) -> Result<StartJobResult> {
                 }
             }
 
-            // Process finished; collect exit status.
+            // Process finished; collect exit status. Reap via a poll loop,
+            // never a blocking wait(): wait() holds the child mutex until
+            // exit, which deadlocks cancel's kill() (same pattern as
+            // ytdlp.rs). finish() only runs once the process is confirmed
+            // dead, so a cancel can always still find its target.
             let manager = ctx.jobs.clone();
+            let code = loop {
+                match child.lock().unwrap().try_wait() {
+                    Ok(Some(status)) => break status.code().unwrap_or(-1),
+                    Ok(None) => {}
+                    Err(_) => break -1,
+                }
+                // Re-kill while the cancel flag is set: enforces a cancel
+                // whose first kill failed.
+                if manager.is_cancelled(&task_id) {
+                    if let Err(e) = crate::state::kill_tree(&mut child.lock().unwrap()) {
+                        eprintln!("kill job {task_id}: {e}");
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            };
             let was_cancelled = manager.is_cancelled(&task_id);
             manager.finish(&task_id);
-
-            let code = match child.lock().unwrap().wait() {
-                Ok(status) => status.code().unwrap_or(-1),
-                Err(_) => -1,
-            };
 
             if was_cancelled || code != 0 {
                 cancelled = was_cancelled;
@@ -3368,6 +3502,12 @@ pub async fn start_job(ctx: Ctx, req: JobRequest) -> Result<StartJobResult> {
                 }
                 for scratch in &cleanup {
                     let _ = std::fs::remove_file(scratch);
+                }
+                if let Some(f) = &final_out {
+                    // The reserved placeholder (or a partially written concat
+                    // result) is garbage once the job fails — leaving it
+                    // would poison the next overwrite resolution.
+                    let _ = std::fs::remove_file(f);
                 }
                 break 'runs;
             }
@@ -3525,6 +3665,7 @@ pub async fn estimate_size(ctx: Ctx, req: EstimateRequest) -> Result<EstimateRes
     let mut base_args: Vec<String> = match req.media_type {
         MediaType::Video => {
             let p: VideoParams = parse_params(&req.params)?;
+            ensure_vaapi_device(&p)?;
             build_video_args(&info, &p, &tmp)
         }
         MediaType::Image | MediaType::Unknown => return Err(AppError("不支持的媒体类型".into())),
@@ -3549,11 +3690,21 @@ pub async fn estimate_size(ctx: Ctx, req: EstimateRequest) -> Result<EstimateRes
     final_args.push(format!("{:.3}", offset));
     final_args.extend(base_args);
 
-    let (child, _stdout, _stderr, _drain) = ffmpeg::spawn(&*ctx.env, "ffmpeg", &final_args)?;
+    // Nothing here ever reads the child's pipes: a piped stderr that fills
+    // its 64 KB buffer would block ffmpeg forever mid-estimate. Discard both.
+    let bin = ffmpeg::resolve(&*ctx.env, "ffmpeg").ok_or_else(|| {
+        AppError("找不到 ffmpeg：请将 FFmpeg 放在程序同目录，或安装到系统 PATH 中".into())
+    })?;
+    let mut cmd = std::process::Command::new(&bin);
+    cmd.args(&final_args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    ffmpeg::hide_console(&mut cmd);
+    let mut child = cmd.spawn().map_err(AppError::from)?;
     // Sample-encoding a real clip blocks for seconds — keep it off the async
     // runtime workers.
     let waited = tokio::task::spawn_blocking(move || {
-        let mut child = child;
         let code = child.wait().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
         let sampled_bytes = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
         let _ = std::fs::remove_file(&tmp);
@@ -3859,7 +4010,10 @@ mod tests {
         let args = build_strip_metadata_args(&info, &StripMetadataParams {}, Path::new("o.jpg"));
         assert!(args.contains(&"-q:v".to_string()));
         assert!(args.contains(&"2".to_string()));
-        assert!(args.contains(&"-map_metadata".to_string()) == false || true); // image path uses re-encode, metadata dropped implicitly
+        // Image path re-encodes, but container-level metadata is still
+        // dropped explicitly via -map_metadata -1 (EXIF/GPS must not survive
+        // the re-encode).
+        assert!(args.contains(&"-map_metadata".to_string()));
     }
 
     #[test]
@@ -4428,6 +4582,19 @@ mod tests {
     fn merge_rejects_multiple_watermarks() {
         let wm = || serde_json::json!({"imagePath":"w.png","position":"br","scalePercent":20});
         let steps = vec![step("watermark", wm()), step("watermark", wm())];
+        assert!(!is_mergeable_chain(&steps));
+        assert!(merged_output_ext(&sample_info(), &steps).is_none());
+    }
+
+    #[test]
+    fn merge_rejects_multiple_trims() {
+        // A merged command keeps a single trim window, so a second trim step
+        // must fall back to sequential execution instead of silently
+        // overriding the first.
+        let t = || {
+            serde_json::json!({"startTime": 1.0, "duration": 2.0, "mode": "encode"})
+        };
+        let steps = vec![step("trim", t()), step("trim", t())];
         assert!(!is_mergeable_chain(&steps));
         assert!(merged_output_ext(&sample_info(), &steps).is_none());
     }

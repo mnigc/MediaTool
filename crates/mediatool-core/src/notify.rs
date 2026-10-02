@@ -2,10 +2,12 @@
 //! generic JSON webhook. Both carry the same payload, so one config covers
 //! Telegram plus any JSON-speaking receiver (DingTalk, Feishu, Bark, …).
 //!
-//! Sending is fire-and-forget on a detached thread: a slow or dead endpoint
-//! must never stall the monitor loop or the recording it accompanies.
+//! Sending is fire-and-forget through a small worker pool: a slow or dead
+//! endpoint must never stall the monitor loop or the recording it accompanies,
+//! and a monitor storm must not be able to spawn unbounded threads.
 
 use serde::{Deserialize, Serialize};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::ctx::AppEnv;
@@ -18,10 +20,26 @@ pub fn load_targets(env: &dyn AppEnv) -> Vec<NotifyTarget> {
     let Some(dir) = env.app_data_dir() else {
         return vec![];
     };
-    let Ok(text) = std::fs::read_to_string(dir.join("notify_targets.json")) else {
+    let path = dir.join("notify_targets.json");
+    let Ok(text) = std::fs::read_to_string(&path) else {
         return vec![];
     };
-    serde_json::from_str(&text).unwrap_or_default()
+    match serde_json::from_str(&text) {
+        Ok(targets) => targets,
+        Err(e) => {
+            // An unreadable config must not be silently swallowed: the next
+            // save_targets would overwrite the user's only copy. Park the raw
+            // text next to it (best effort) and say so.
+            let backup = dir.join("notify_targets.json.corrupt");
+            let saved = std::fs::write(&backup, &text).is_ok();
+            eprintln!(
+                "通知配置解析失败: {e}（原文{}已备份到 {}）",
+                if saved { "" } else { "未能" },
+                backup.display()
+            );
+            vec![]
+        }
+    }
 }
 
 pub fn save_targets(env: &dyn AppEnv, targets: &[NotifyTarget]) -> Result<(), AppError> {
@@ -104,35 +122,77 @@ impl NotifyEvent {
     }
 }
 
-/// Queue `event` to every target on a detached thread, two tries each with a
-/// short pause between. Best-effort by design: failures are logged, never
-/// surfaced to the caller.
-pub fn push(targets: &[NotifyTarget], proxy: Option<&str>, event: &NotifyEvent) {
-    if targets.is_empty() {
-        return;
-    }
-    let targets = targets.to_vec();
-    let proxy = proxy.map(str::to_string);
-    let event = event.clone();
-    std::thread::spawn(move || {
-        for target in targets {
-            for attempt in 0..2 {
-                let result = match &target {
-                    NotifyTarget::Telegram { bot_token, chat_id } => {
-                        send_telegram(bot_token, chat_id, &event, proxy.as_deref())
-                    }
-                    NotifyTarget::Webhook { url } => send_webhook(url, &event, proxy.as_deref()),
+/// Queue one delivery per target. Every event used to spawn its own detached
+/// thread, so a monitor storm (many rooms going live in the same poll) ramped
+/// up unbounded threads against slow endpoints; a fixed pool keeps that in
+/// check while the unbounded channel guarantees no event is dropped or blocks
+/// the caller.
+fn push_queue() -> &'static mpsc::Sender<Delivery> {
+    static QUEUE: OnceLock<mpsc::Sender<Delivery>> = OnceLock::new();
+    QUEUE.get_or_init(|| {
+        const WORKERS: usize = 4;
+        let (tx, rx) = mpsc::channel::<Delivery>();
+        let rx = Arc::new(Mutex::new(rx));
+        for _ in 0..WORKERS {
+            let rx = Arc::clone(&rx);
+            // Workers live as long as the process: the static sender keeps the
+            // channel open, so recv() never errors here.
+            std::thread::spawn(move || loop {
+                let Ok(job) = rx.lock().unwrap().recv() else {
+                    return;
                 };
-                if result.is_ok() || attempt == 1 {
-                    if let Err(e) = result {
-                        eprintln!("notify {:?}: {e}", event.kind);
-                    }
-                    break;
-                }
-                std::thread::sleep(Duration::from_secs(2));
-            }
+                deliver(job);
+            });
         }
-    });
+        tx
+    })
+}
+
+/// One target to notify, plus everything the worker needs to reach it.
+struct Delivery {
+    target: NotifyTarget,
+    proxy: Option<String>,
+    event: NotifyEvent,
+}
+
+/// Two tries with a short pause between, per target. Best-effort by design:
+/// failures are logged, never surfaced to the caller. The 15s client timeout
+/// bounds each attempt.
+fn deliver(job: Delivery) {
+    let mut last = Ok(());
+    for attempt in 0..2 {
+        last = match &job.target {
+            NotifyTarget::Telegram { bot_token, chat_id } => {
+                send_telegram(bot_token, chat_id, &job.event, job.proxy.as_deref())
+            }
+            NotifyTarget::Webhook { url } => send_webhook(url, &job.event, job.proxy.as_deref()),
+        };
+        if last.is_ok() || attempt == 1 {
+            break;
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    if let Err(e) = last {
+        eprintln!("notify {:?}: {e}", job.event.kind);
+    }
+}
+
+/// Queue `event` to every target and return immediately. One job per target
+/// so a slow Telegram endpoint does not delay a webhook in the same batch.
+pub fn push(targets: &[NotifyTarget], proxy: Option<&str>, event: &NotifyEvent) {
+    for target in targets {
+        let job = Delivery {
+            target: target.clone(),
+            proxy: proxy.map(str::to_string),
+            event: event.clone(),
+        };
+        // Send only fails once every worker is gone, which cannot happen
+        // while the static sender holds the channel open — but say so loudly
+        // rather than dropping the event silently.
+        if push_queue().send(job).is_err() {
+            eprintln!("notify {:?}: worker queue unavailable, event dropped", event.kind);
+        }
+    }
 }
 
 fn client(proxy: Option<&str>, no_proxy: bool) -> std::result::Result<reqwest::blocking::Client, String> {
@@ -171,13 +231,19 @@ fn send_telegram(
         .post(format!("https://api.telegram.org/bot{token}/sendMessage"))
         .form(&[("chat_id", chat_id), ("text", &event.text())])
         .send()
-        .map_err(|e| format!("telegram sendMessage: {e}"))?;
+        // The error's Display would echo the URL, bot token included — log it
+        // sanitized instead.
+        .map_err(|e| format!("telegram sendMessage: {}", reqwest_err(&e)))?;
     let status = resp.status();
-    let body: serde_json::Value = resp.json().unwrap_or(serde_json::Value::Null);
-    if status.is_success() && body.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+    let body = resp.text().unwrap_or_default();
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+    if status.is_success() && parsed.get("ok").and_then(|v| v.as_bool()) == Some(true) {
         Ok(())
     } else {
-        Err(format!("telegram sendMessage: HTTP {status}: {body}"))
+        Err(format!(
+            "telegram sendMessage: HTTP {status}: {}",
+            head(&body, 200)
+        ))
     }
 }
 
@@ -194,13 +260,34 @@ fn send_webhook(
         .post(url)
         .json(event)
         .send()
-        .map_err(|e| format!("webhook POST: {e}"))?;
+        .map_err(|e| format!("webhook POST: {}", reqwest_err(&e)))?;
     let status = resp.status();
     if status.is_success() {
         Ok(())
     } else {
         Err(format!("webhook POST: HTTP {status}"))
     }
+}
+
+/// Sanitized reqwest error text for the log lines above: keeps
+/// `scheme://host` + status/kind, drops the URL path/query (the Telegram URL
+/// carries the bot token).
+fn reqwest_err(e: &reqwest::Error) -> String {
+    crate::error::sanitize_reqwest_error(e)
+}
+
+/// Keep the first `max_bytes` of `s` (char-boundary safe) so a failed JSON
+/// body can be quoted in an error without flooding the log.
+fn head(s: &str, max_bytes: usize) -> String {
+    let s = s.trim();
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+    let mut end = max_bytes;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_string()
 }
 
 #[cfg(test)]
